@@ -17,31 +17,26 @@ import GHC.Float (castDoubleToWord64, castWord64ToDouble)
 -- ==========
 
 -- Levels:
--- - 0: reduce nothing
+-- - 0: decorations
 -- - 1: reduce applications, eliminators, operators and primitives
 -- - 2: reduce Fixes and non-injective Refs in wnf position
 -- - 3: reduce everything
 
 -- Reduction
 whnf :: Int -> Int -> Book -> Subs -> Term -> Term
-whnf lv d book subs term =
-  case cut (whnfGo lv d book subs term) of
-    UniM v _   -> term
-    BitM v _ _ -> term
-    NatM v _ _ -> term
-    LstM v _ _ -> term
-    EnuM v _ _ -> term
-    SigM v _   -> term
-    EqlM v _   -> term
-    nf         -> nf
+whnf lv d book subs term
+  | ugly nf   = term
+  | otherwise = nf
+  where nf = whnfGo lv d book subs term
 
 whnfGo :: Int -> Int -> Book -> Subs -> Term -> Term
-whnfGo 0 d book subs term = case term of
-  Let v f -> whnfLet 0 d book subs v f
-  Ann x _ -> whnf 0 d book subs x
-  Chk x _ -> whnf 0 d book subs x
-  Loc _ t -> whnf 0 d book subs t
-  _       -> term
+whnfGo 0 d book subs term =
+  case term of
+    Let v f -> whnfLet 0 d book subs v f
+    Ann x _ -> whnf 0 d book subs x
+    Chk x _ -> whnf 0 d book subs x
+    Loc _ t -> whnf 0 d book subs t
+    _       -> term
 whnfGo lv d book subs term =
   case subst lv d book subs [] term of
     Just (s,t) -> whnf lv d book s t
@@ -298,26 +293,19 @@ subst lv d book []           rems x = Nothing
 subst 0  d book subs         rems x = Nothing
 subst lv d book ((k,v):subs) rems x
   -- | eql lv d book [] k x = trace ("sub " ++ show (normal lv d book [] k) ++ " → " ++ show (normal lv d book [] v)) $ Just (rems ++ subs , v)
-  | eql (lv-1) d book (rems++subs) k x = Just (rems ++ subs , v)
-  | otherwise                          = subst lv d book subs (rems ++ [(k,v)]) x
+  -- | eql (case lv of { 3 -> 2 ; 2 -> 0 ; 1 -> 0 ; 0 -> 0 }) d book (rems++subs) k x = Just (rems ++ subs , v)
+  | eql (down lv) d book (rems++subs) k x = Just (rems ++ subs , v)
+  | otherwise                             = subst lv d book subs (rems ++ [(k,v)]) x
 
 -- Equality
 -- ========
 
-equal :: Int -> Book -> Subs -> Term -> Term -> Bool
-equal d book subs a b =
-  trace (""
-    ++ "EQ: " ++ show (normal 3 d book []   a) ++ " == " ++ show (normal 3 d book []   b) ++ "\n"
-    ++ "~>: " ++ show (normal 3 d book subs a) ++ " == " ++ show (normal 3 d book subs b)
-    ++ concatMap (\ (a,b) -> "\n| " ++ show (normal 3 d book [] a) ++ " → " ++ show (normal 3 d book [] b)) subs) $
-  eql 3 d book subs a b
-
 eql :: Int -> Int -> Book -> Subs -> Term -> Term -> Bool
 -- eql 0  d book subs a b = cmp 0 d book subs (whnf 0 book subs a) (whnf 0 book subs b)
 eql 0  d book subs a b = cmp 0 d book subs a b
-eql lv d book subs a b = lo_equal || hi_equal where
-  lo_equal = eql (lv-1) d book subs a b
-  hi_equal = cmp lv d book subs (whnf lv d book subs a) (whnf lv d book subs b)
+eql lv d book subs a b = identical || nf_equal where
+  identical = eql 0 d book subs a b
+  nf_equal  = cmp lv d book subs (whnf lv d book subs a) (whnf lv d book subs b)
 
 cmp :: Int -> Int -> Book -> Subs -> Term -> Term -> Bool
 cmp lv d book subs a b =
@@ -448,6 +436,17 @@ normalCtx lv d book subs (Ctx ctx) = Ctx (map normalAnn ctx)
 -- Utils
 -- =====
 
+-- Shapes that are rolled back for pretty printing
+ugly :: Term -> Bool
+ugly (cut -> UniM _ _  ) = True
+ugly (cut -> BitM _ _ _) = True
+ugly (cut -> NatM _ _ _) = True
+ugly (cut -> LstM _ _ _) = True
+ugly (cut -> EnuM _ _ _) = True
+ugly (cut -> SigM _ _  ) = True
+ugly (cut -> EqlM _ _  ) = True
+ugly _                   = False
+
 -- Forces evaluation
 force :: Int -> Book -> Subs -> Term -> Term
 force d book subs t =
@@ -455,3 +454,24 @@ force d book subs t =
     Ind t -> force d book subs t
     Frz t -> force d book subs t
     t     -> t
+
+equal :: Int -> Book -> Subs -> Term -> Term -> Bool
+equal d book subs a b =
+  -- trace (""
+    -- ++ "EQ: " ++ show (normal 3 d book []   a) ++ " == " ++ show (normal 3 d book []   b) ++ "\n"
+    -- ++ "~>: " ++ show (normal 3 d book subs a) ++ " == " ++ show (normal 3 d book subs b)
+    -- ++ concatMap (\ (a,b) -> "\n| " ++ show (normal 3 d book [] a) ++ " → " ++ show (normal 3 d book [] b)) subs) $
+  eql 3 d book subs a b
+
+normalize :: Int -> Book -> Subs -> Term -> Term
+normalize = normal 3
+
+normalizeCtx :: Int -> Book -> Subs -> Ctx -> Ctx
+normalizeCtx = normalCtx 3
+
+down :: Int -> Int
+down 3 = 2
+down 2 = 0
+down 1 = 0
+down 0 = 0
+down n = n - 1

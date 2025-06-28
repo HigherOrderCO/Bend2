@@ -115,9 +115,8 @@ def is_even_ab_theo(n: Nat) -> Bool{(is_even_a n) == (is_even_b n)}:
     case 1n:
       finally
     case 2n + p:
-      #rewrite double_neg_theo(is_even_b(p))
-      #is_even_ab_theo(p)
-      ()
+      rewrite double_neg_theo(is_even_b(p))
+      is_even_ab_theo(p)
 
 ## List Map
 #def map<A,B>(f: A -> B, xs: A[]) -> B[]:
