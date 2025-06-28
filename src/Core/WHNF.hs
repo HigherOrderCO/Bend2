@@ -24,9 +24,26 @@ import GHC.Float (castDoubleToWord64, castWord64ToDouble)
 
 -- Reduction
 whnf :: Int -> Int -> Book -> Subs -> Term -> Term
-whnf 0  d book subs term = term
-whnf lv d book subs term = ret where
-  nf = case subst lv d book subs [] term of
+whnf lv d book subs term =
+  case cut (whnfGo lv d book subs term) of
+    UniM v _   -> term
+    BitM v _ _ -> term
+    NatM v _ _ -> term
+    LstM v _ _ -> term
+    EnuM v _ _ -> term
+    SigM v _   -> term
+    EqlM v _   -> term
+    nf         -> nf
+
+whnfGo :: Int -> Int -> Book -> Subs -> Term -> Term
+whnfGo 0 d book subs term = case term of
+  Let v f -> whnfLet 0 d book subs v f
+  Ann x _ -> whnf 0 d book subs x
+  Chk x _ -> whnf 0 d book subs x
+  Loc _ t -> whnf 0 d book subs t
+  _       -> term
+whnfGo lv d book subs term =
+  case subst lv d book subs [] term of
     Just (s,t) -> whnf lv d book s t
     Nothing    -> 
       case term of
@@ -48,25 +65,6 @@ whnf lv d book subs term = ret where
         SigM x f   -> whnfSigM lv d book subs term x f
         EqlM x f   -> whnfEqlM lv d book subs term x f
         _          -> term
-  -- When a term reduces to an ugly stuck form, such as
-  -- `~x{...}`, we will undo this reduction, for pretty
-  -- printing purposes. This is harmless, because such
-  -- stuck form can't further reduce or cause progress.
-  ret = case cut nf of
-    UniM v _   -> undo v term nf
-    BitM v _ _ -> undo v term nf
-    NatM v _ _ -> undo v term nf
-    LstM v _ _ -> undo v term nf
-    EnuM v _ _ -> undo v term nf
-    SigM v _   -> undo v term nf
-    EqlM v _   -> undo v term nf
-    _          -> nf
-    where
-      undo s tm nf = case whnf lv d book subs s of
-        Var _ _ -> tm
-        App _ _ -> tm
-        Ref _   -> tm
-        _       -> nf
 
 -- Normalizes a let binding
 whnfLet :: Int -> Int -> Book -> Subs -> Term -> Term -> Term
@@ -296,13 +294,12 @@ whnfOp1 lv d book subs op a =
 -- ============
 
 subst :: Int -> Int -> Book -> Subs -> Subs -> Term -> Maybe (Subs, Term)
-subst 0 d book subs rems x
-  = Nothing
+subst lv d book []           rems x = Nothing
+subst 0  d book subs         rems x = Nothing
 subst lv d book ((k,v):subs) rems x
-  | eql (lv-1) d book [] k x = trace ("sub " ++ show (normal lv d book [] k) ++ " → " ++ show (normal lv d book [] v)) $ Just (rems ++ subs , v)
-  -- | eql lv d book [] k x = Just (rems ++ ((k,v):subs) , v)
-  | otherwise            = subst lv d book subs (rems ++ [(k,v)]) x
-subst lv d book [] rems x = Nothing
+  -- | eql lv d book [] k x = trace ("sub " ++ show (normal lv d book [] k) ++ " → " ++ show (normal lv d book [] v)) $ Just (rems ++ subs , v)
+  | eql (lv-1) d book (rems++subs) k x = Just (rems ++ subs , v)
+  | otherwise                          = subst lv d book subs (rems ++ [(k,v)]) x
 
 -- Equality
 -- ========
@@ -326,65 +323,65 @@ cmp :: Int -> Int -> Book -> Subs -> Term -> Term -> Bool
 cmp lv d book subs a b =
   -- trace ("E" ++ show lv ++ " " ++ show a ++ "\n== " ++ show b) $
   case (a , b) of
-    (Fix ka fa    , Fix kb fb    ) -> eql lv d book subs (fa (fb (Var ka d))) (fb (fa (Var kb d)))
-    (Fix ka fa    , b            ) -> eql lv d book subs (fa b) b
-    (a            , Fix kb fb    ) -> eql lv d book subs a (fb (Fix kb fb))
-    (Ref ka       , Ref kb       ) -> ka == kb
-    (Ref ka       , b            ) -> case deref book ka of { Just (_, term, _) -> eql lv d book subs term b ; Nothing -> False }
-    (a            , Ref kb       ) -> case deref book kb of { Just (_, term, _) -> eql lv d book subs a term ; Nothing -> False }
-    (Var ka ia    , Var kb ib    ) -> ia == ib
-    (Sub ta       , Sub tb       ) -> eql lv d book subs ta tb
-    (Let va fa    , Let vb fb    ) -> eql lv d book subs va vb && eql lv d book subs fa fb
-    (Set          , Set          ) -> True
-    (Ann xa ta    , Ann xb tb    ) -> eql lv d book subs xa xb && eql lv d book subs ta tb
-    (Chk xa ta    , Chk xb tb    ) -> eql lv d book subs xa xb && eql lv d book subs ta tb
-    (Emp          , Emp          ) -> True
-    (Efq          , Efq          ) -> True
-    (Uni          , Uni          ) -> True
-    (One          , One          ) -> True
-    (UniM xa fa   , UniM xb fb   ) -> eql lv d book subs xa xb && eql lv d book subs fa fb
-    (Bit          , Bit          ) -> True
-    (Bt0          , Bt0          ) -> True
-    (Bt1          , Bt1          ) -> True
-    (BitM xa fa ta, BitM xb fb tb) -> eql lv d book subs xa xb && eql lv d book subs fa fb && eql lv d book subs ta tb
-    (Nat          , Nat          ) -> True
-    (Zer          , Zer          ) -> True
-    (Suc na       , Suc nb       ) -> eql lv d book subs na nb
-    (NatM xa za sa, NatM xb zb sb) -> eql lv d book subs xa xb && eql lv d book subs za zb && eql lv d book subs sa sb
-    (Lst ta       , Lst tb       ) -> eql lv d book subs ta tb
-    (Nil          , Nil          ) -> True
-    (Con ha ta    , Con hb tb    ) -> eql lv d book subs ha hb && eql lv d book subs ta tb
-    (LstM xa na ca, LstM xb nb cb) -> eql lv d book subs xa xb && eql lv d book subs na nb && eql lv d book subs ca cb
-    (Enu sa       , Enu sb       ) -> sa == sb
-    (Sym sa       , Sym sb       ) -> sa == sb
-    (EnuM xa ca da, EnuM xb cb db) -> eql lv d book subs xa xb && length ca == length cb && all (\ ((s1,t1), (s2,t2)) -> s1 == s2 && eql lv d book subs t1 t2) (zip ca cb) && eql lv d book subs da db
-    (Sig aa ba    , Sig ab bb    ) -> eql lv d book subs aa ab && eql lv d book subs ba bb
-    (Tup aa ba    , Tup ab bb    ) -> eql lv d book subs aa ab && eql lv d book subs ba bb
-    (SigM xa fa   , SigM xb fb   ) -> eql lv d book subs xa xb && eql lv d book subs fa fb
-    (All aa ba    , All ab bb    ) -> eql lv d book subs aa ab && eql lv d book subs ba bb
-    (Lam ka fa    , Lam kb fb    ) -> eql lv (d+1) book subs (fa (Var ka d)) (fb (Var kb d))
-    (App fa xa    , App fb xb    ) -> eql lv d book subs fa fb && eql lv d book subs xa xb
-    (Eql ta aa ba , Eql tb ab bb ) -> eql lv d book subs ta tb && eql lv d book subs aa ab && eql lv d book subs ba bb
-    (Rfl          , Rfl          ) -> True
-    (EqlM xa fa   , EqlM xb fb   ) -> eql lv d book subs xa xb && eql lv d book subs fa fb
-    (Ind ta       , b            ) -> eql lv d book subs ta b
-    (a            , Ind tb       ) -> eql lv d book subs a tb
-    (Frz ta       , b            ) -> eql lv d book subs ta b
-    (a            , Frz tb       ) -> eql lv d book subs a tb
-    (Loc _ ta     , b            ) -> eql lv d book subs ta b
-    (a            , Loc _ tb     ) -> eql lv d book subs a tb
-    (Rwt _ _ xa   , _            ) -> eql lv d book subs xa b
-    (_            , Rwt _ _ xb   ) -> eql lv d book subs a xb
-    (Era          , Era          ) -> True
-    (Sup la aa ba , Sup lb ab bb ) -> la == lb && eql lv d book subs aa ab && eql lv d book subs ba bb
-    (Num ta       , Num tb       ) -> ta == tb
-    (Val va       , Val vb       ) -> va == vb
-    (Op2 oa aa ba , Op2 ob ab bb ) -> oa == ob && eql lv d book subs aa ab && eql lv d book subs ba bb
-    (Op1 oa aa    , Op1 ob ab    ) -> oa == ob && eql lv d book subs aa ab
-    (Pri pa       , Pri pb       ) -> pa == pb
-    (Met _  _  _  , Met _  _  _  ) -> error "not-supported"
-    (Pat _  _  _  , Pat _  _  _  ) -> error "not-supported"
-    (_            , _            ) -> False
+    (Fix ka fa     , Fix kb fb    ) -> eql lv d book subs (fa (fb (Var ka d))) (fb (fa (Var kb d)))
+    (Fix ka fa     , b            ) -> eql lv d book subs (fa b) b
+    (a             , Fix kb fb    ) -> eql lv d book subs a (fb (Fix kb fb))
+    (Ref ka        , Ref kb       ) -> ka == kb
+    (Ref ka        , b            ) -> case deref book ka of { Just (_, term, _) -> eql lv d book subs term b ; Nothing -> False }
+    (a             , Ref kb       ) -> case deref book kb of { Just (_, term, _) -> eql lv d book subs a term ; Nothing -> False }
+    (Var ka ia     , Var kb ib    ) -> ia == ib
+    (Sub ta        , Sub tb       ) -> eql lv d book subs ta tb
+    (Let va fa     , Let vb fb    ) -> eql lv d book subs va vb && eql lv d book subs fa fb
+    (Set           , Set          ) -> True
+    (Ann xa ta     , Ann xb tb    ) -> eql lv d book subs xa xb && eql lv d book subs ta tb
+    (Chk xa ta     , Chk xb tb    ) -> eql lv d book subs xa xb && eql lv d book subs ta tb
+    (Emp           , Emp          ) -> True
+    (Efq           , Efq          ) -> True
+    (Uni           , Uni          ) -> True
+    (One           , One          ) -> True
+    (UniM xa fa    , UniM xb fb   ) -> eql lv d book subs xa xb && eql lv d book subs fa fb
+    (Bit           , Bit          ) -> True
+    (Bt0           , Bt0          ) -> True
+    (Bt1           , Bt1          ) -> True
+    (BitM xa fa ta , BitM xb fb tb) -> eql lv d book subs xa xb && eql lv d book subs fa fb && eql lv d book subs ta tb
+    (Nat           , Nat          ) -> True
+    (Zer           , Zer          ) -> True
+    (Suc na        , Suc nb       ) -> eql lv d book subs na nb
+    (NatM xa za sa , NatM xb zb sb) -> eql lv d book subs xa xb && eql lv d book subs za zb && eql lv d book subs sa sb
+    (Lst ta        , Lst tb       ) -> eql lv d book subs ta tb
+    (Nil           , Nil          ) -> True
+    (Con ha ta     , Con hb tb    ) -> eql lv d book subs ha hb && eql lv d book subs ta tb
+    (LstM xa na ca , LstM xb nb cb) -> eql lv d book subs xa xb && eql lv d book subs na nb && eql lv d book subs ca cb
+    (Enu sa        , Enu sb       ) -> sa == sb
+    (Sym sa        , Sym sb       ) -> sa == sb
+    (EnuM xa ca da , EnuM xb cb db) -> eql lv d book subs xa xb && length ca == length cb && all (\ ((s1,t1), (s2,t2)) -> s1 == s2 && eql lv d book subs t1 t2) (zip ca cb) && eql lv d book subs da db
+    (Sig aa ba     , Sig ab bb    ) -> eql lv d book subs aa ab && eql lv d book subs ba bb
+    (Tup aa ba     , Tup ab bb    ) -> eql lv d book subs aa ab && eql lv d book subs ba bb
+    (SigM xa fa    , SigM xb fb   ) -> eql lv d book subs xa xb && eql lv d book subs fa fb
+    (All aa ba     , All ab bb    ) -> eql lv d book subs aa ab && eql lv d book subs ba bb
+    (Lam ka fa     , Lam kb fb    ) -> eql lv (d+1) book subs (fa (Var ka d)) (fb (Var kb d))
+    (App fa xa     , App fb xb    ) -> eql lv d book subs fa fb && eql lv d book subs xa xb
+    (Eql ta aa ba  , Eql tb ab bb ) -> eql lv d book subs ta tb && eql lv d book subs aa ab && eql lv d book subs ba bb
+    (Rfl           , Rfl          ) -> True
+    (EqlM xa fa    , EqlM xb fb   ) -> eql lv d book subs xa xb && eql lv d book subs fa fb
+    (Ind ta        , b            ) -> eql lv d book subs ta b
+    (a             , Ind tb       ) -> eql lv d book subs a tb
+    (Frz ta        , b            ) -> eql lv d book subs ta b
+    (a             , Frz tb       ) -> eql lv d book subs a tb
+    (Loc _ ta      , b            ) -> eql lv d book subs ta b
+    (a             , Loc _ tb     ) -> eql lv d book subs a tb
+    (Rwt _ _ xa    , _            ) -> eql lv d book subs xa b
+    (_             , Rwt _ _ xb   ) -> eql lv d book subs a xb
+    (Era           , Era          ) -> True
+    (Sup la aa ba  , Sup lb ab bb ) -> la == lb && eql lv d book subs aa ab && eql lv d book subs ba bb
+    (Num ta        , Num tb       ) -> ta == tb
+    (Val va        , Val vb       ) -> va == vb
+    (Op2 oa aa ba  , Op2 ob ab bb ) -> oa == ob && eql lv d book subs aa ab && eql lv d book subs ba bb
+    (Op1 oa aa     , Op1 ob ab    ) -> oa == ob && eql lv d book subs aa ab
+    (Pri pa        , Pri pb       ) -> pa == pb
+    (Met _  _  _   , Met _  _  _  ) -> error "not-supported"
+    (Pat _  _  _   , Pat _  _  _  ) -> error "not-supported"
+    (_             , _            ) -> False
 
 -- Normalization
 -- =============
