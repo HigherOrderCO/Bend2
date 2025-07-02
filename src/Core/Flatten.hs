@@ -39,6 +39,7 @@ import System.Exit
 import Debug.Trace
 
 import Core.Type
+import Core.WHNF
 
 -- Flattener
 -- =========
@@ -50,96 +51,96 @@ import Core.Type
 -- - 1 default case
 -- Outer scrutinees will be moved inside via 'with'.
 
-flatten :: Int -> Term -> Term
-flatten d (Var n i)    = Var n i
-flatten d (Ref n)      = Ref n
-flatten d (Sub t)      = Sub (flatten d t)
-flatten d (Fix n f)    = Fix n (\x -> flatten (d+1) (f x))
-flatten d (Let v f)    = Let (flatten d v) (flatten d f)
-flatten d Set          = Set
-flatten d (Chk x t)    = Chk (flatten d x) (flatten d t)
-flatten d Emp          = Emp
-flatten d (EmpM x)     = EmpM (flatten d x)
-flatten d Uni          = Uni
-flatten d One          = One
-flatten d (UniM x f)   = UniM (flatten d x) (flatten d f)
-flatten d Bit          = Bit
-flatten d Bt0          = Bt0
-flatten d Bt1          = Bt1
-flatten d (BitM x f t) = BitM (flatten d x) (flatten d f) (flatten d t)
-flatten d Nat          = Nat
-flatten d Zer          = Zer
-flatten d (Suc n)      = Suc (flatten d n)
-flatten d (NatM x z s) = NatM (flatten d x) (flatten d z) (flatten d s)
-flatten d (Lst t)      = Lst (flatten d t)
-flatten d Nil          = Nil
-flatten d (Con h t)    = Con (flatten d h) (flatten d t)
-flatten d (LstM x n c) = LstM (flatten d x) (flatten d n) (flatten d c)
-flatten d (Enu s)      = Enu s
-flatten d (Sym s)      = Sym s
-flatten d (EnuM x c e) = EnuM (flatten d x) [(s, flatten d t) | (s, t) <- c] (flatten d e)
-flatten d (Sig a b)    = Sig (flatten d a) (flatten d b)
-flatten d (Tup a b)    = Tup (flatten d a) (flatten d b)
-flatten d (SigM x f)   = SigM (flatten d x) (flatten d f)
-flatten d (All a b)    = All (flatten d a) (flatten d b)
-flatten d (Lam n f)    = Lam n (\x -> flatten (d+1) (f x))
-flatten d (App f x)    = App (flatten d f) (flatten d x)
-flatten d (Eql t a b)  = Eql (flatten d t) (flatten d a) (flatten d b)
-flatten d Rfl          = Rfl
-flatten d (EqlM x f)   = EqlM (flatten d x) (flatten d f)
-flatten d (Met i t x)  = Met i (flatten d t) (map (flatten d) x)
-flatten d (Ind t)      = Ind (flatten d t)
-flatten d (Frz t)      = Frz (flatten d t)
-flatten d Era          = Era
-flatten d (Sup l a b)  = Sup l (flatten d a) (flatten d b)
-flatten d (Num t)      = Num t
-flatten d (Val v)      = Val v
-flatten d (Op2 o a b)  = Op2 o (flatten d a) (flatten d b)
-flatten d (Op1 o a)    = Op1 o (flatten d a)
-flatten d (Pri p)      = Pri p
-flatten d (Loc s t)    = Loc s (flatten d t)
-flatten d (Rwt a b x)  = Rwt (flatten d a) (flatten d b) (flatten d x)
-flatten d (Pat s m c)  = simplify d $ flattenPat d (Pat s m c)
+flatten :: Int -> Book -> Term -> Term
+flatten d book (Var n i)    = Var n i
+flatten d book (Ref n)      = Ref n
+flatten d book (Sub t)      = Sub (flatten d book t)
+flatten d book (Fix n f)    = Fix n (\x -> flatten (d+1) book (f x))
+flatten d book (Let v f)    = Let (flatten d book v) (flatten d book f)
+flatten d book Set          = Set
+flatten d book (Chk x t)    = Chk (flatten d book x) (flatten d book t)
+flatten d book Emp          = Emp
+flatten d book (EmpM x)     = EmpM (flatten d book x)
+flatten d book Uni          = Uni
+flatten d book One          = One
+flatten d book (UniM x f)   = UniM (flatten d book x) (flatten d book f)
+flatten d book Bit          = Bit
+flatten d book Bt0          = Bt0
+flatten d book Bt1          = Bt1
+flatten d book (BitM x f t) = BitM (flatten d book x) (flatten d book f) (flatten d book t)
+flatten d book Nat          = Nat
+flatten d book Zer          = Zer
+flatten d book (Suc n)      = Suc (flatten d book n)
+flatten d book (NatM x z s) = NatM (flatten d book x) (flatten d book z) (flatten d book s)
+flatten d book (Lst t)      = Lst (flatten d book t)
+flatten d book Nil          = Nil
+flatten d book (Con h t)    = Con (flatten d book h) (flatten d book t)
+flatten d book (LstM x n c) = LstM (flatten d book x) (flatten d book n) (flatten d book c)
+flatten d book (Enu s)      = Enu s
+flatten d book (Sym s)      = Sym s
+flatten d book (EnuM x c e) = EnuM (flatten d book x) [(s, flatten d book t) | (s, t) <- c] (flatten d book e)
+flatten d book (Sig a b)    = Sig (flatten d book a) (flatten d book b)
+flatten d book (Tup a b)    = Tup (flatten d book a) (flatten d book b)
+flatten d book (SigM x f)   = SigM (flatten d book x) (flatten d book f)
+flatten d book (All a b)    = All (flatten d book a) (flatten d book b)
+flatten d book (Lam n f)    = Lam n (\x -> flatten (d+1) book (f x))
+flatten d book (App f x)    = App (flatten d book f) (flatten d book x)
+flatten d book (Eql t a b)  = Eql (flatten d book t) (flatten d book a) (flatten d book b)
+flatten d book Rfl          = Rfl
+flatten d book (EqlM x f)   = EqlM (flatten d book x) (flatten d book f)
+flatten d book (Met i t x)  = Met i (flatten d book t) (map (flatten d book) x)
+flatten d book (Ind t)      = Ind (flatten d book t)
+flatten d book (Frz t)      = Frz (flatten d book t)
+flatten d book Era          = Era
+flatten d book (Sup l a b)  = Sup l (flatten d book a) (flatten d book b)
+flatten d book (Num t)      = Num t
+flatten d book (Val v)      = Val v
+flatten d book (Op2 o a b)  = Op2 o (flatten d book a) (flatten d book b)
+flatten d book (Op1 o a)    = Op1 o (flatten d book a)
+flatten d book (Pri p)      = Pri p
+flatten d book (Loc s t)    = Loc s (flatten d book t)
+flatten d book (Rwt a b x)  = Rwt (flatten d book a) (flatten d book b) (flatten d book x)
+flatten d book (Pat s m c)  = simplify d $ flattenPat d book (Pat s m c)
 
 isVarCol :: [Case] -> Bool
 isVarCol []                        = True
 isVarCol (((cut->Var _ _):_,_):cs) = isVarCol cs
 isVarCol _                         = False
 
-flattenPat :: Int -> Term -> Term
-flattenPat d pat =
+flattenPat :: Int -> Book -> Term -> Term
+flattenPat d book pat =
   -- trace ("FLATTEN: " ++ show pat) $
-  flattenPatGo d pat where
-    flattenPatGo d pat@(Pat (s:ss) ms css@((((cut->Var k i):ps),rhs):cs)) | isVarCol css =
+  flattenPatGo d book pat where
+    flattenPatGo d book pat@(Pat (s:ss) ms css@((((cut->Var k i):ps),rhs):cs)) | isVarCol css =
       -- trace (">> var: " ++ show pat) $
-      flatten d $ Pat ss ms (joinVarCol (d+1) s (((Var k i:ps),rhs):cs))
-      -- flatten d $ Pat ss (ms++[(k,s)]) (joinVarCol (d+1) (Var k 0) (((Var k i:ps),rhs):cs))
-    flattenPatGo d pat@(Pat (s:ss) ms cs@((((cut->p):_),_):_)) =
+      flatten d book $ Pat ss ms (joinVarCol (d+1) book s (((Var k i:ps),rhs):cs))
+      -- flatten d book $ Pat ss (ms++[(k,s)]) (joinVarCol (d+1) (Var k 0) (((Var k i:ps),rhs):cs))
+    flattenPatGo d book pat@(Pat (s:ss) ms cs@((((cut->p):_),_):_)) =
       -- trace (">> ctr: " ++ show p ++ " " ++ show pat
           -- ++ "\n>> - picks: " ++ show picks
           -- ++ "\n>> - drops: " ++ show drops) $
-      Pat [s] moves [([ct], flatten (d+length fs) picks), ([var d], flatten (d+1) drops)] where
+      Pat [s] moves [([ct], flatten (d+length fs) book picks), ([var d], flatten (d+1) book drops)] where
         (ct,fs) = ctrOf d p
-        (ps,ds) = peelCtrCol ct cs
+        (ps,ds) = peelCtrCol d book ct cs
         moves   = ms
         -- moves   = ms ++ map (\ (s,i) -> (patOf (d+i) s, s)) (zip ss [0..])
         picks   = Pat (fs   ++ ss) ms ps
         drops   = Pat (var d : ss) ms ds
-    flattenPatGo d pat@(Pat [] ms (([],rhs):cs)) =
-      flattenPat d rhs
-    flattenPatGo d (Loc l t) =
-      Loc l (flattenPat d t)
-    flattenPatGo d pat =
+    flattenPatGo d book pat@(Pat [] ms (([],rhs):cs)) =
+      flattenPat d book rhs
+    flattenPatGo d book (Loc l t) =
+      Loc l (flattenPat d book t)
+    flattenPatGo d book pat =
       pat
 
 -- Converts an all-variable column to a 'with' statement
 -- match x y { case x0 @A: F(x0) ; case x1 @B: F(x1) }
 -- --------------------------------------------------- joinVarCol k
 -- match y { with k=x case @A: F(k) ; case @B: F(k) }
-joinVarCol :: Int -> Term -> [Case] -> [Case]
-joinVarCol d k ((((cut->Var j _):ps),rhs):cs) = (ps, subst j k rhs) : joinVarCol d k cs
-joinVarCol d k ((((cut->ctr    ):ps),rhs):cs) = error "redundant pattern"
-joinVarCol d k cs                             = cs
+joinVarCol :: Int -> Book -> Term -> [Case] -> [Case]
+joinVarCol d book k ((((cut->Var j _):ps),rhs):cs) = (ps, subst j k rhs) : joinVarCol d book k cs
+joinVarCol d book k ((((cut->ctr    ):ps),rhs):cs) = error "redundant pattern"
+joinVarCol d book k cs                             = cs
 
 -- Peels a constructor layer from a column
 -- match x y:
@@ -156,8 +157,8 @@ joinVarCol d k cs                             = cs
 --     match k y:
 --       case @Z    @B: B
 --       case @S{p} @C: C(p)
-peelCtrCol :: Term -> [Case] -> ([Case],[Case])
-peelCtrCol (cut->k) ((((cut->p):ps),rhs):cs) = 
+peelCtrCol :: Int -> Book -> Term -> [Case] -> ([Case],[Case])
+peelCtrCol d book (cut->k) ((((cut->p):ps),rhs):cs) = 
   -- trace (">> peel " ++ show k ++ " ~ " ++ show p) $
   case (k,p) of
     (Zer    , Zer    ) -> ((ps, rhs) : picks , drops)
@@ -182,18 +183,27 @@ peelCtrCol (cut->k) ((((cut->p):ps),rhs):cs) =
     (Rfl    , Rfl    ) -> ((ps, rhs) : picks , drops)
     (Rfl    , Var k _) -> ((ps, subst k Rfl rhs) : picks , ((p:ps),rhs) : drops)
     (Var _ _, p      ) -> unsupported
+    (k      , App f x) -> callPatternSugar d book k f x p ps rhs cs
     x                  -> (picks , ((p:ps),rhs) : drops)
-  where (picks, drops) = peelCtrCol k cs
-peelCtrCol k cs = (cs,cs)
+  where (picks, drops) = peelCtrCol d book k cs
+peelCtrCol d book k cs = (cs,cs)
 
-flattenBook :: Book -> Book
-flattenBook (Book defs) = Book (M.map flattenDefn defs)
-  where flattenDefn (i, x, t) = (i, flatten 0 x, flatten 0 t)
+-- Allows using a function call in a pattern. Example:
+--   case Foo(p): return 1n + add(p,b)
+--   (where 'Foo' is a user-defined function)
+callPatternSugar :: Int -> Book -> Term -> Term -> Term -> Term -> [Term] -> Term -> [Case] -> ([Case],[Case])
+callPatternSugar d book k f x p ps rhs cs =
+  peelCtrCol d book k (((exp:ps),rhs):cs)
+  where (fn,xs) = collectApps (App f x)  []
+        exp     = normal d book $ foldl App ref xs
+        ref     = case fn of
+          Ref k     -> Ref k
+          Var k _   -> Ref k
+          otherwise -> error $ "invalid-call-pattern:" ++ show (App f x)
 
 -- Simplify
 -- ========
 -- Removes redundant matches, adjusts form
-
 
 -- >> match _x7 M{ case (False): () case (_x8): match _x8 M{ } }
 
@@ -223,15 +233,12 @@ merge d (([Var x _], (Pat [Var x' _] ms cs')) : cs)
 merge d ((p,rhs):cs) = (p, rhs) : merge d cs
 merge d []           = []
 
-
 -- match { with x=A ... case: F(x,...) ... }
 -- ----------------------------------------- simplify-decay
 -- F(A,...)
 decay :: Int -> Term -> Term
 decay d (Pat [] ms (([],rhs):cs)) = simplify d (shove d ms rhs)
 decay d pat                       = pat
-
-
 
 -- UnPat
 -- =====
@@ -453,13 +460,6 @@ lamsTerm d ks (EnuM x c e) = EnuM x [(s, lams d ks t) | (s,t) <- c] (lams d ks e
 lamsTerm d ks (EqlM x r)   = EqlM x (lams d ks r)
 lamsTerm d ks (EmpM x)     = EmpM x
 lamsTerm d ks other        = error $ "lamsTerm: unexpected term: " ++ show other
-
-unpatBook :: Book -> Book
-unpatBook (Book defs) = Book (M.map unpatDefn defs) where
-  unpatDefn (i, x, t) =
-    -- trace ("unpat: " ++ show x) $
-    (i, unpat 0 x, unpat 0 t)
-    -- (i, x, t)
 
 -- Helpers
 -- -------

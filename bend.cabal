@@ -21,9 +21,11 @@ common warnings
 library
     import:           warnings
     exposed-modules:  Core.Type,
+                      Core.Adjust,
                       Core.Bind,
                       Core.CLI,
                       Core.Check,
+                      Core.Deps,
                       Core.Equal,
                       Core.Flatten,
                       Core.Import,

@@ -3,15 +3,15 @@
 module Core.Bind where
 
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
+
+import Debug.Trace
 
 import Core.Type
 
 bind :: Term -> Term
-bind term = binder 0 term [] M.empty
-
-bindBook :: Book -> Book
-bindBook (Book defs) = Book (M.map bindDefn defs)
-  where bindDefn (inj, term, typ) = (inj, bind term, bind typ)
+bind term = bound where
+  bound = binder 0 term [] M.empty
 
 binder :: Int -> Term -> [Term] -> M.Map Name Term -> Term
 binder lv term ctx vars = case term of
@@ -63,4 +63,4 @@ binder lv term ctx vars = case term of
   Op1 o a    -> Op1 o (binder lv a ctx vars)
   Pri p      -> Pri p
   Met k t c  -> Met k (binder lv t ctx vars) (map (\x -> binder lv x ctx vars) c)
-  Pat s m c  -> Pat (map (\x -> binder lv x ctx vars) s) (map (\(k, x) -> (k, binder lv x ctx vars)) m) (map (\(p, x) -> (map (\y -> binder lv y ctx vars) p, binder lv x ctx vars)) c)
+  Pat s m c  -> error "not-supported"

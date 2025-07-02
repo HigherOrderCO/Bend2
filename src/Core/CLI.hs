@@ -18,7 +18,8 @@ import Control.Exception (catch, IOException)
 
 import Core.Bind
 import Core.Check
-import Core.Import (autoImport, collectRefs)
+import Core.Deps
+import Core.Import (autoImport)
 import Core.Parse.Book (doParseBook)
 import Core.Type
 import Core.WHNF
@@ -42,10 +43,8 @@ parseFile file = do
 
 -- | Type-check all definitions in a book
 checkDefinitions :: Book -> IO ()
-checkDefinitions book = do
-  let boundBook = bindBook book
-  let (Book defs) = boundBook
-  success <- checkAll boundBook (M.toList defs)
+checkDefinitions book@(Book defs) = do
+  success <- checkAll book (M.toList defs)
   unless success exitFailure
   where
     checkDef book term typ = do
@@ -72,14 +71,13 @@ runMain book = do
     Nothing -> do
       return ()
     Just _ -> do
-      let boundBook = bindBook book
       let mainCall = Ref "main"
-      case infer 0 noSpan boundBook (Ctx []) mainCall of
+      case infer 0 noSpan book (Ctx []) mainCall of
         Fail e -> do
           putStrLn $ show e
           exitFailure
         Done typ -> do
-          let result = normal 0 boundBook mainCall
+          let result = normal 0 book mainCall
           putStrLn ""
           putStrLn $ show result
 
@@ -110,8 +108,7 @@ formatJavaScript jsCode = do
 processFileToJS :: FilePath -> IO ()
 processFileToJS file = do
   book <- parseFile file
-  let boundBook = bindBook book
-  let jsCode = JS.compile boundBook
+  let jsCode = JS.compile book
   formattedJS <- formatJavaScript jsCode
   putStrLn formattedJS
 
@@ -130,4 +127,4 @@ collectAllRefs :: Book -> S.Set Name
 collectAllRefs (Book defs) = 
   S.unions $ map collectRefsFromDefn (M.elems defs)
   where
-    collectRefsFromDefn (_, term, typ) = S.union (collectRefs term) (collectRefs typ)
+    collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)

@@ -182,8 +182,8 @@ instance Monad Result where
   Fail e >>= _ = Fail e
 
 instance Show Term where
-  show (Var k i)      = k -- ++ "^" ++ show i
-  show (Ref k)        = k
+  show (Var k i)      = "^" ++ k -- ++ "^" ++ show i
+  show (Ref k)        = "$" ++ k
   show (Sub t)        = show t
   show (Fix k f)      = "μ" ++ k ++ ". " ++ show (f (Var k 0))
   show (Let v f)      = "!" ++ show v ++ ";" ++ show f
@@ -230,8 +230,8 @@ instance Show Term where
   show app@(App _ _)  = fnStr ++ "(" ++ intercalate "," (map show args) ++ ")" where
            (fn, args) = collectApps app []
            fnStr      = case cut fn of
-              Var k _ -> k
-              Ref k   -> k
+              Var k i -> show (Var k i)
+              Ref k   -> show (Ref k)
               fn      -> "(" ++ show fn ++ ")"
   show (Eql t a b)     = show t ++ "{" ++ show a ++ "==" ++ show b ++ "}"
   show (Rfl)           = "{==}"

@@ -18,8 +18,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 
 import Debug.Trace
 
-import Core.Bind (bindBook)
-import Core.Flatten (flattenBook, unpatBook)
+import Core.Adjust
 import Core.Parse
 import Core.Parse.Term (parseTerm, parseExpr)
 import Core.Type
@@ -171,9 +170,7 @@ doParseBook :: FilePath -> String -> Either String Book
 doParseBook file input =
   case evalState (runParserT p file input) (ParserState True input M.empty) of
     Left err  -> Left (formatError input err)
-    Right res -> 
-      let book = bindBook (unpatBook (flattenBook res))
-      in Right book
+    Right res -> Right (adjustBook res)
       -- in Right (trace (show book) book)
   where
     p = do

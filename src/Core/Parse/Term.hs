@@ -24,8 +24,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 
 import Debug.Trace
 
-import Core.Bind
-import Core.Flatten
+import Core.Adjust
 import Core.Parse
 import Core.Type
 
@@ -935,7 +934,7 @@ doParseTerm :: FilePath -> String -> Either String Term
 doParseTerm file input =
   case evalState (runParserT p file input) (ParserState True input M.empty) of
     Left err  -> Left (formatError input err)
-    Right res -> Right (bind (unpat 0 (flatten 0 res)))
+    Right res -> Right (adjust (Book M.empty) res)
   where
     p = do
       skip
