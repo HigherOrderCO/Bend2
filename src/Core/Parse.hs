@@ -107,6 +107,7 @@ isNameChar :: Char -> Bool
 isNameChar c = isAsciiLower c || isAsciiUpper c || isDigit c || c == '_' || c == '/'
 
 reserved :: [Name]
+-- The 'lambda' keyword is removed as part of the refactoring to expression-based matches.
 reserved = ["match","case","else","if","end","all","any","finally","import","as"]
 
 -- | Parse a raw name without import resolution
@@ -169,6 +170,10 @@ located p = do
   (sp, t) <- withSpan p
   return (Loc sp t)
 
+-- | Main entry points
+-- These are moved to separate modules to avoid circular dependencies
+-- Use Core.Parse.Term for doParseTerm/doReadTerm
+-- Use Core.Parse.Book for doParseBook/doReadBook
 formatError :: String -> ParseErrorBundle String Void -> String
 formatError input bundle = do
   let errorPos = NE.head $ fst $ attachSourcePos errorOffset (bundleErrors bundle) (bundlePosState bundle)
