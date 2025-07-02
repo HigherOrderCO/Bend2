@@ -19,7 +19,7 @@ import Core.Bind (bindBook)
 -- Auto-import unbound references in a Book
 autoImport :: FilePath -> Book -> IO Book
 autoImport _ book = do
-  let unboundRefs = collectUnboundRefs book 
+  let unboundRefs = collectUnboundRefs book
   result <- autoImportRefs book unboundRefs S.empty
   case result of
     Left err -> do
