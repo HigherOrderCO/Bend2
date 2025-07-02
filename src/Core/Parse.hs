@@ -1,4 +1,4 @@
-{-./Type.hs-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Core.Parse
   ( -- * Types
@@ -8,6 +8,7 @@ module Core.Parse
   -- * Basic parsers
   , skip
   , lexeme
+  , lexemeNoSpace
   , symbol
   , parens
   , angles
@@ -52,7 +53,6 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Core.Bind
 import Core.Flatten
 import Core.Type
-import qualified Core.Parse.WithSpan as WithSpan
 
 -- Parser state
 data ParserState = ParserState
@@ -67,8 +67,7 @@ type Parser = ParsecT Void String (Control.Monad.State.Strict.State ParserState)
 skip :: Parser ()
 skip = L.space space1 (L.skipLineComment "#") (L.skipBlockComment "{-" "-}")
 
--- Custom lexeme that tracks whether trailing whitespace was consumed.
--- Allows us to distinguish `foo[]` (postfix) from `(foo [])` (application)
+-- | Lexeme that consumes trailing whitespace and tracks tightness
 lexeme :: Parser a -> Parser a
 lexeme p = do
   skip
@@ -79,6 +78,12 @@ lexeme p = do
   st <- get
   put st { tight = o1 == o2 }
   pure x
+
+-- | Lexeme that doesn't consume trailing whitespace (precise spans)
+lexemeNoSpace :: Parser a -> Parser a
+lexemeNoSpace p = do
+  skip  -- Still consume leading whitespace
+  p     -- But don't consume trailing
 
 symbol :: String -> Parser String
 symbol s = lexeme (string s)
@@ -102,7 +107,6 @@ isNameChar :: Char -> Bool
 isNameChar c = isAsciiLower c || isAsciiUpper c || isDigit c || c == '_' || c == '/'
 
 reserved :: [Name]
--- The 'lambda' keyword is removed as part of the refactoring to expression-based matches.
 reserved = ["match","case","else","if","end","all","any","finally","import","as"]
 
 -- | Parse a raw name without import resolution
@@ -144,19 +148,26 @@ name = lexeme $ do
 parseSemi :: Parser ()
 parseSemi = optional (symbol ";") >> return ()
 
--- Wrapper for withSpan from Core.Parse.WithSpan
+-- | Clean withSpan impl using lexemeNoSpace
 withSpan :: Parser a -> Parser (Span, a)
-withSpan = WithSpan.withSpan source
+withSpan p = do
+  begPos <- getSourcePos
+  x      <- lexemeNoSpace p
+  endPos <- getSourcePos
+  st     <- get
+  
+  let begLine = unPos (sourceLine begPos)
+      begCol  = unPos (sourceColumn begPos)
+      endLine = unPos (sourceLine endPos)
+      endCol  = unPos (sourceColumn endPos)
+      src     = source st
+  
+  return (Span (begLine, begCol) (endLine, endCol) src, x)
 
 located :: Parser Term -> Parser Term
 located p = do
   (sp, t) <- withSpan p
   return (Loc sp t)
-
--- | Main entry points
--- These are moved to separate modules to avoid circular dependencies
--- Use Core.Parse.Term for doParseTerm/doReadTerm
--- Use Core.Parse.Book for doParseBook/doReadBook
 
 formatError :: String -> ParseErrorBundle String Void -> String
 formatError input bundle = do
