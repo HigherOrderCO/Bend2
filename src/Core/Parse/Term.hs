@@ -148,7 +148,7 @@ parseSig = label "dependent pair type" $ do
     [] -> parseSigSimple
     _  -> do
       _ <- symbol "."
-      b <- parseTerm
+      b <- parseExpr
       return $ foldr (\(x, t) acc -> Sig t (Lam x (\v -> acc))) b bindings
   where
     parseBinding = try $ do
@@ -163,7 +163,7 @@ parseSigSimple :: Parser Term
 parseSigSimple = do
   a <- parseTerm
   _ <- symbol "."
-  b <- parseTerm
+  b <- parseExpr
   return (Sig a b)
 
 -- | Syntax: ∀ x: Type. body | all x: Type. body | ∀ Type. Type | all Type. Type
@@ -175,7 +175,7 @@ parseAll = label "dependent function type" $ do
     [] -> parseAllSimple
     _  -> do
       _ <- symbol "."
-      b <- parseTerm
+      b <- parseExpr
       return $ foldr (\(x, t) acc -> All t (Lam x (\v -> acc))) b bindings
   where
     parseBinding = try $ do
@@ -190,7 +190,7 @@ parseAllSimple :: Parser Term
 parseAllSimple = do
   a <- parseTerm
   _ <- symbol "."
-  b <- parseTerm
+  b <- parseExpr
   return (All a b)
 
 -- Enum Type Parsers

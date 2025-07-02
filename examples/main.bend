@@ -215,7 +215,7 @@ def VecInd
   ( A: Set
   , P: all n:Nat xs:Vec(A,n). Set
   , N: P(0,@Nil{finally})
-  , C: all s:Nat x:A xs:Vec(A,s) . P(s,xs) -> P(1n+s,@Cons{s,x,xs,finally})
+  , C: all s:Nat x:A xs:Vec(A,s) p:P(s,xs). P(1n+s,@Cons{s,x,xs,finally})
   , n: Nat
   , x: Vec(A,n)
   ) -> P(n,x):
