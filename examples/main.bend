@@ -204,7 +204,7 @@ def succ_inj(n: Nat, m: Nat, e: Nat{(1n+n)==(1n+m)}) -> Nat{n==m}:
 #   cons : ∀ {n} → A → Vec A n → Vec A (suc n)
 type Vec<A: Set>(N: Nat) -> Set:
   case @Nil:
-    e: Nat{N == 0}
+    e: Nat{N == 0n}
   case @Cons:
     n: Nat
     h: A
@@ -214,7 +214,7 @@ type Vec<A: Set>(N: Nat) -> Set:
 def VecInd
   ( A: Set
   , P: all n:Nat xs:Vec(A,n). Set
-  , N: P(0,@Nil{finally})
+  , N: P(0n,@Nil{finally})
   , C: all s:Nat x:A xs:Vec(A,s) p:P(s,xs). P(1n+s,@Cons{s,x,xs,finally})
   , n: Nat
   , x: Vec(A,n)

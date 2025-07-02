@@ -48,10 +48,14 @@ checkDefinitions book = do
   success <- checkAll boundBook (M.toList defs)
   unless success exitFailure
   where
+    checkDef book term typ = do
+      check 0 noSpan book (Ctx []) typ Set
+      check 0 noSpan book (Ctx []) term typ
+      return ()
     checkAll :: Book -> [(Name, Defn)] -> IO Bool
     checkAll _ [] = return True
     checkAll bBook ((name, (_, term, typ)):rest) = do
-      case check 0 noSpan bBook (Ctx []) term typ of
+      case checkDef bBook term typ of
         Done () -> do
           putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
           checkAll bBook rest
