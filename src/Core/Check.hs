@@ -205,18 +205,18 @@ inferOp2Type d span book ctx op a b ta tb = do
   where
     numericOp ta tb = case (force book ta, force book tb) of
       (Num t1, Num t2) | t1 == t2 -> Done (Num t1)
-      _ -> Fail $ TypeMismatch span (formatCtx d book ctx) (format d book ta) (format d book tb)
+      _ -> Fail $ TypeMismatch span (formatCtx d book ctx) (format d book (Ref "Num")) (format d book ta)
     
     comparisonOp ta tb = case (force book ta, force book tb) of
       (Num t1, Num t2) | t1 == t2 -> Done Bit
-      _ -> Fail $ TypeMismatch span (formatCtx d book ctx) (format d book ta) (format d book tb)
+      _ -> Fail $ TypeMismatch span (formatCtx d book ctx) (format d book (Ref "Num")) (format d book ta)
     
     integerOp ta tb = case (force book ta, force book tb) of
       (Num U64_T, Num U64_T) -> Done (Num U64_T)
       (Num I64_T, Num I64_T) -> Done (Num U64_T)  -- Bitwise on I64 returns U64
       (Num F64_T, Num F64_T) -> Done (Num U64_T)  -- Bitwise on F64 returns U64
-      (Num CHR_T, Num CHR_T) -> Fail $ TypeMismatch span (formatCtx d book ctx) (format d book ta) (format d book tb)  -- Bitwise not supported for CHR
-      _ -> Fail $ TypeMismatch span (formatCtx d book ctx) (format d book ta) (format d book tb)
+      (Num CHR_T, Num CHR_T) -> Fail $ TypeMismatch span (formatCtx d book ctx) (format d book (Ref "Num")) (format d book ta)  -- Bitwise not supported for CHR
+      _ -> Fail $ TypeMismatch span (formatCtx d book ctx) (format d book (Ref "Num")) (format d book ta)
 
 -- Infer the result type of a unary numeric operation
 inferOp1Type :: Int -> Span -> Book -> Ctx -> NOp1 -> Term -> Term -> Result Term
