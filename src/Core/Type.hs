@@ -301,13 +301,13 @@ instance Show Error where
     "\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++
     show span
   show (TypeMismatch span ctx goal typ) = 
-    "\x1b[1mType Missmatch:\x1b[0m" ++
+    "\x1b[1mType Mismatch:\x1b[0m" ++
     "\n- Goal: " ++ show goal ++ 
     "\n- Type: " ++ show typ ++
     "\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++
     show span
   show (TermMismatch span ctx a b) = 
-    "\x1b[1mTerm Missmatch:\x1b[0m" ++
+    "\x1b[1mTerm Mismatch:\x1b[0m" ++
     "\n- " ++ show a ++ 
     "\n- " ++ show b ++
     "\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++
