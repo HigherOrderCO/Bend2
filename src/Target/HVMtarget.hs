@@ -29,7 +29,8 @@ prelude = unlines [
   " // Translated from Bend",
   "data nat { #S{n} #Z}",
   "data list { #Nil #Cons{h t}}",
-  "data pair { #P{a b}}"
+  "data pair { #P{a b}}",
+  "data bool { #B0 #B1}"
   ]
 
 strToHVM :: String -> HVM.Core
