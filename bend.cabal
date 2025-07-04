@@ -35,7 +35,8 @@ library
                       Core.Parse.WithSpan,
                       Core.Rewrite,
                       Core.WHNF,
-                      Target.JavaScript
+                      Target.JavaScript,
+                      Target.HVMtarget
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
                       containers == 0.7,
