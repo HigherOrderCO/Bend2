@@ -115,47 +115,14 @@ toNative ctx tm = case tm of
 
 
 
-
-
-
--- linearize :: HVM.Core -> (HVM.Core, [Name])
--- linearize hvm =
---   case hvm of
---     HVM.Var n -> (hvm, [n])
-
---     HVM.Lam n t ->
---       (HVM.Lam n t, xs)
---       where
---         (t, xs) = linearize t
-
---     _         -> (hvm, [])
-
-
-
 compileTerm :: Term -> String
-compileTerm tm =
-
-  let
-    hvm = toNative M.empty tm
-  in HVM.showCore hvm
+compileTerm tm = HVM.showCore $ toNative M.empty tm
 
 
-
-
--- -- Compile book to HVM
+-- Compile book to HVM
 compile :: Book -> String
 compile (Book defs) =
-
-  -- let ctDefs = map (\(name, (_, term, _)) -> (name, termToCT (Book defs) term 0)) (M.toList defs)
-  --     ctBook = M.fromList ctDefs
-  --     jsFns = concatMap (generateJS ctBook) ctDefs
-  -- in prelude ++ jsFns
-  -- "[done]"
-  -- compileTerm $ M.keys defs
-
-  let
-    hvmFns = map (\(name, (_inf, term, _typ)) -> "\n // " ++(show term) ++ "\n@" ++ name ++ " = " ++ compileTerm term) (M.toList defs)
-
+  let hvmFns = map (\(name, (_inf, term, _typ)) -> "\n // " ++(show term) ++ "\n@" ++ name ++ " = " ++ compileTerm term) (M.toList defs)
   in prelude ++ unlines hvmFns
 
 
