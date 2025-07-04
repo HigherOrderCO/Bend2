@@ -69,7 +69,7 @@ toNative ctx tm = case tm of
   Val (U64_V v) -> HVM.U32 (fromIntegral v)
   Val (I64_V v) -> error "TODO: toNative I64_V"
   Val (F64_V v) -> error "TODO: toNative F64_V"
-  Val (CHR_V c) -> error "TODO: toNative CHR_V"
+  Val (CHR_V c) -> HVM.Chr c
   Op2 o a b  -> op2ToNative o a b
   Op1 o a    -> op1ToNative o a
   Tup x y    -> HVM.Ctr "#P" [toNative ctx x, toNative ctx y]
