@@ -28,7 +28,8 @@ prelude :: String
 prelude = unlines [
   " // Translated from Bend",
   "data nat { #S{n} #Z}",
-  "data list { #Nil #Cons{h t}}"
+  "data list { #Nil #Cons{h t}}",
+  "data pair { #P{a b}}"
   ]
 
 strToHVM :: String -> HVM.Core
@@ -41,8 +42,8 @@ toNative ctx tm = case tm of
 
   Var n i   ->
     case M.lookup n ctx of
-      Just n -> HVM.Var $ "&" ++ n
-      Nothing -> HVM.Var $ "&" ++ n
+      Just n -> HVM.Var $ n
+      Nothing -> HVM.Var $ n
   Ref k      -> HVM.Var $ "@" ++ k
   Sub t      -> undefined
   Lam n f    -> HVM.Lam ('&':n) (toNative (M.insert n n ctx) (f (Var n 0)))
