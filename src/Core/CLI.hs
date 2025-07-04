@@ -4,6 +4,7 @@ module Core.CLI
   , runMain
   , processFile
   , processFileToJS
+  , processFileToHVM
   , listDependencies
   ) where
 
@@ -25,6 +26,9 @@ import Core.Type
 import Core.WHNF
 
 import qualified Target.JavaScript as JS
+-- import qualified HVM.Compile as HVM
+
+import qualified Target.HVMtarget as HVM
 
 -- | Parse a Bend file into a Book
 parseFile :: FilePath -> IO Book
@@ -111,6 +115,13 @@ processFileToJS file = do
   let jsCode = JS.compile book
   formattedJS <- formatJavaScript jsCode
   putStrLn formattedJS
+
+
+processFileToHVM :: FilePath -> IO ()
+processFileToHVM file = do
+  book <- parseFile file
+  putStrLn (HVM.compile book)
+
 
 -- | List all dependencies of a Bend file (including transitive dependencies)
 listDependencies :: FilePath -> IO ()
