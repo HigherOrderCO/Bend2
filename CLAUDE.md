@@ -6,7 +6,7 @@ It is structured as follows:
 
 - bend.cabal: the cabal file. Bend doesn't use stack.
   - Build this project with `cabal build`.
-  - Run with `bend file.bend`.
+  - Run with `cabal run bend file.bend`.
 
 - src/Core/Type.hs: most important file, always read. Includes every type used in
   this repo, including the Term type for Bend's core language.
