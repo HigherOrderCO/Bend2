@@ -23,7 +23,6 @@ import Data.Text (pack, unpack, replace)
 import qualified HVM.Type as HVM
 
 
-
 prelude :: String
 prelude = unlines [
   " // Translated from Bend",
@@ -44,15 +43,21 @@ strToHVM :: String -> HVM.Core
 strToHVM [] = HVM.Ctr "#Nil" []
 strToHVM (c:cs) = HVM.Ctr "#Cons"  $ HVM.Chr c : [strToHVM cs]
 
+encodeName :: String -> String
+encodeName ('_':x) = ("__"++encodeName x)
+encodeName ('/':x) = ("_"++encodeName x)
+encodeName (c:cs) = c:encodeName cs
+encodeName [] = ""
+
 
 toNative :: (M.Map String String) -> Term -> HVM.Core
 toNative ctx tm = case tm of
 
   Var n i   ->
     case M.lookup n ctx of
-      Just n -> HVM.Var $ n
-      Nothing -> HVM.Var $ n
-  Ref k      -> HVM.Var $ "@" ++ k
+      Just n -> HVM.Var n
+      Nothing -> HVM.Var n
+  Ref k      -> HVM.Var $ "@" ++ encodeName k
   Sub t      -> undefined
   Lam n f    -> HVM.Lam ('&':n) (toNative (M.insert n n ctx) (f (Var n 0)))
   App f x    -> HVM.App (toNative ctx f) (toNative ctx x)
@@ -125,8 +130,8 @@ toNative ctx tm = case tm of
     op2ToNative SHL a b = HVM.Op2 HVM.OP_LSH (toNative ctx a) (toNative ctx b)
     op2ToNative SHR a b = HVM.Op2 HVM.OP_RSH (toNative ctx a) (toNative ctx b)
 
-    op1ToNative NOT = error "TODO"
-    op1ToNative NEG = error "TODO"
+    op1ToNative NOT x = HVM.Op2 HVM.OP_SUB (HVM.U32 1) (toNative ctx x)
+    op1ToNative NEG x = HVM.Op2 HVM.OP_SUB (HVM.U32 0) (toNative ctx x)
 
 
 
@@ -148,7 +153,7 @@ prettyHVM code indent =
 -- Compile book to HVM
 compile :: Book -> String
 compile (Book defs) =
-  let hvmFns = map (\(name, (_inf, term, _typ)) -> "\n // " ++(show term) ++ "\n@" ++ name ++ " = " ++ prettyHVM (compileTerm term) 0) (M.toList defs)
+  let hvmFns = map (\(name, (_inf, term, _typ)) -> "\n // " ++(show term) ++ "\n@" ++ (encodeName name) ++ " = " ++ prettyHVM (compileTerm term) 0) (M.toList defs)
   in prelude ++ unlines hvmFns
 
 
