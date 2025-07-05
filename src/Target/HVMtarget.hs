@@ -30,7 +30,14 @@ prelude = unlines [
   "data nat { #S{n} #Z}",
   "data list { #Nil #Cons{h t}}",
   -- "data bool { #B0 #B1}",
-  "data pair { #P{a b}}"
+  "",
+  "data pair { #P{a b}}",
+  "",
+  "@str_equal = λ&a λ&b (",
+  "~a {#Nil:( ~b {",
+  "#Nil:1 #Cons:λ&b λ&bb 0}) #Cons:λ&a λ&aa (~b {",
+  "#Nil:0 #Cons:λ&b λ&bb (& (== a b) ((@str_equal aa) bb))})})"
+
   ]
 
 strToHVM :: String -> HVM.Core
