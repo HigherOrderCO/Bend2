@@ -29,8 +29,8 @@ prelude = unlines [
   " // Translated from Bend",
   "data nat { #S{n} #Z}",
   "data list { #Nil #Cons{h t}}",
-  "data pair { #P{a b}}",
-  "data bool { #B0 #B1}"
+  -- "data bool { #B0 #B1}",
+  "data pair { #P{a b}}"
   ]
 
 strToHVM :: String -> HVM.Core
@@ -55,8 +55,10 @@ toNative ctx tm = case tm of
   EmpM x     -> HVM.Era
   One        -> HVM.U32 1
   UniM x f   -> toNative ctx f
-  Bt0        -> HVM.Ctr "#B0" []
-  Bt1        -> HVM.Ctr "#B1" []
+  -- Bt0        -> HVM.Ctr "#B0" []
+  -- Bt1        -> HVM.Ctr "#B1" []
+  Bt0        -> HVM.U32 0
+  Bt1        -> HVM.U32 1
   BitM x f t -> HVM.Mat (HVM.MAT 0) (toNative ctx x) [] [("#B0", [], toNative ctx f), ("#B1", [], toNative ctx t)]
   Zer        -> HVM.Ctr "#Z" []
   Suc p      -> HVM.Ctr "#S" [toNative ctx p]
@@ -89,7 +91,13 @@ toNative ctx tm = case tm of
 
   where
     -- if x == y then f else (enumToNative ctx x t d)
-    enumToNative ctx x ((y,f):t) d = HVM.Mat HVM.SWI (HVM.Ref "str_equal" 0 [x, strToHVM y]) [] [("0", [], enumToNative ctx x t d), ("_", [], toNative ctx f)]
+    -- enumToNative ctx x ((y,f):t) d = HVM.Mat HVM.SWI (HVM.Ref "str_equal" 0 [x, strToHVM y]) [] [("0", [], enumToNative ctx x t d), ("_", [], toNative ctx f)]
+    enumToNative ctx x ((y,f):t) d = HVM.Mat HVM.SWI
+      (
+        (HVM.App (HVM.App (HVM.Ref "str_equal" 0 []) x) $ strToHVM y)
+
+      ) [] [("0", [], enumToNative ctx x t d), ("_", [], toNative ctx f)]
+
     enumToNative ctx x []        d = toNative ctx d
 
     op2ToNative ADD a b = HVM.Op2 HVM.OP_ADD (toNative ctx a) (toNative ctx b)
@@ -118,11 +126,22 @@ toNative ctx tm = case tm of
 compileTerm :: Term -> String
 compileTerm tm = HVM.showCore $ toNative M.empty tm
 
+prettyHVM :: [Char] -> Int -> [Char]
+prettyHVM code indent =
+  case code of
+    '{':'}':rest -> "{}"++              prettyHVM rest indent
+    '{':rest -> "{\n" ++ space ++       prettyHVM rest (indent + 1)
+    '}':'}':rest -> "}"  ++             prettyHVM ('}':rest) (indent - 1)
+    '}':rest -> '\n':replicate (indent * 2 - 2) ' ' ++ '}': prettyHVM rest (indent - 1)
+    '~':rest -> '\n':space ++ '~':      prettyHVM rest indent
+    c:rest    -> c:                     prettyHVM rest indent
+    []        -> []
+  where space = replicate (indent * 2) ' '
 
 -- Compile book to HVM
 compile :: Book -> String
 compile (Book defs) =
-  let hvmFns = map (\(name, (_inf, term, _typ)) -> "\n // " ++(show term) ++ "\n@" ++ name ++ " = " ++ compileTerm term) (M.toList defs)
+  let hvmFns = map (\(name, (_inf, term, _typ)) -> "\n // " ++(show term) ++ "\n@" ++ name ++ " = " ++ prettyHVM (compileTerm term) 0) (M.toList defs)
   in prelude ++ unlines hvmFns
 
 

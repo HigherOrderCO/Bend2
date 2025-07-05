@@ -4,7 +4,7 @@ import Control.Monad (unless)
 import qualified Data.Map as M
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, parseFile)
+import Core.CLI (processFile, processFileToJS, processFileToHVM, processFileToHVMRun, listDependencies, parseFile)
 
 -- | Show usage information
 showUsage :: IO ()
@@ -24,6 +24,7 @@ main = do
     [file, "--to-javascript"]     | isbend file -> processFileToJS file
     [file, "--to-hvm"]            | isbend file -> processFileToHVM file
     ["--to-hvm", file]            | isbend file -> processFileToHVM file
+    ["--run-hvm", file]           | isbend file -> processFileToHVMRun file
     [file, "--list-dependencies"] | isbend file -> listDependencies file
     [file] | isbend file -> processFile file
     otherwise                             -> showUsage

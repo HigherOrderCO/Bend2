@@ -5,6 +5,7 @@ module Core.CLI
   , processFile
   , processFileToJS
   , processFileToHVM
+  , processFileToHVMRun
   , listDependencies
   ) where
 
@@ -29,6 +30,11 @@ import qualified Target.JavaScript as JS
 -- import qualified HVM.Compile as HVM
 
 import qualified Target.HVMtarget as HVM
+import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import HVM.API (runHVM, RunMode (Collapse, Normalize))
+import qualified HVM.Type as HVM
+import Debug.Trace (trace)
+
 
 -- | Parse a Bend file into a Book
 parseFile :: FilePath -> IO Book
@@ -122,6 +128,18 @@ processFileToHVM file = do
   book <- parseFile file
   putStrLn (HVM.compile book)
 
+processFileToHVMRun :: FilePath -> IO ()
+processFileToHVMRun file = do
+  book <- parseFile file
+  let hvmOutput = HVM.compile book
+  homedir <- getHomeDirectory
+  let outputDir = homedir ++ "/.bend"
+  let outputFile = trace ("outputDir:"++outputDir) (outputDir ++ "/out.hvm")
+  createDirectoryIfMissing True outputDir
+  writeFile outputFile hvmOutput
+  (res,stats) <- runHVM outputFile (HVM.Ref "main" 0 []) HVM.API.Normalize
+  putStrLn $ unlines $ map show res
+  
 
 -- | List all dependencies of a Bend file (including transitive dependencies)
 listDependencies :: FilePath -> IO ()

@@ -348,3 +348,6 @@ def sum_wtree_fold(w: WTree) -> Nat:
         value
       case @WNode:
         add(f(&lft), f(&rgt)))
+
+def main()->Char[]:
+  "OK"
