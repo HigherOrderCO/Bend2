@@ -21,6 +21,7 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
+
     [file, "--to-javascript"]     | isbend file -> processFileToJS file
     [file, "--to-hvm"]            | isbend file -> processFileToHVM file
     [file, "--run-hvm"]           | isbend file -> processFileToHVMRun file
@@ -30,3 +31,4 @@ main = do
   where
     isbend file = ".bend" `isSuffixOf` file || ".bend.py" `isSuffixOf` file
     isSuffixOf suffix str = reverse suffix == take (length suffix) (reverse str)
+

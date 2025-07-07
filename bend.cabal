@@ -25,6 +25,7 @@ library
                       Core.Bind,
                       Core.CLI,
                       Core.Check,
+                      Core.Collapse,
                       Core.Deps,
                       Core.Equal,
                       Core.Flatten,
@@ -35,8 +36,10 @@ library
                       Core.Parse.WithSpan,
                       Core.Rewrite,
                       Core.WHNF,
-                      Target.JavaScript,
                       Target.HVMtarget
+                      Target.HVM,
+                      Target.JavaScript
+
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
                       containers == 0.7,

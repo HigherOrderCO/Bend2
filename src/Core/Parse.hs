@@ -60,8 +60,9 @@ import qualified Core.Parse.WithSpan as WithSpan
 
 -- Parser state
 data ParserState = ParserState
-  { tight  :: Bool                   -- ^ tracks whether previous token ended with no trailing space
-  , source :: String                 -- ^ original file source, for error reporting
+  { tight   :: Bool                  -- ^ tracks whether previous token ended with no trailing space
+  , source  :: String                -- ^ original file source, for error reporting
+  , blocked :: [String]              -- ^ list of blocked operators
   , imports :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/"
   }
 
@@ -110,7 +111,7 @@ isNameChar c = isAsciiLower c || isAsciiUpper c || isDigit c || c == '_' || c ==
 
 reserved :: [Name]
 -- The 'lambda' keyword is removed as part of the refactoring to expression-based matches.
-reserved = ["match","case","else","if","end","all","any","finally","import","as","and","or","def"]
+reserved = ["match","case","else","if","end","all","any","finally","import","as","and","or","def","log"]
 
 -- | Parse a raw name without import resolution
 parseRawName :: Parser Name

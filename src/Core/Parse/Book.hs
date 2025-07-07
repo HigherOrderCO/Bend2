@@ -20,7 +20,7 @@ import Debug.Trace
 
 import Core.Adjust
 import Core.Parse
-import Core.Parse.Term (parseTerm, parseExpr)
+import Core.Parse.Term (parseTerm, parseTermBefore)
 import Core.Type
 
 -- | Book parsing
@@ -44,7 +44,7 @@ parseDef = do
 parseDefSimple :: Name -> Parser (Name, Defn)
 parseDefSimple defName = do
   _ <- symbol ":"
-  t <- parseExpr
+  t <- parseTermBefore "="
   _ <- symbol "="
   x <- parseTerm
   return (defName, (False, x, t))
@@ -160,7 +160,7 @@ parseArg :: Bool -> Parser (Name, Term)
 parseArg expr = do
   k <- name
   _ <- symbol ":"
-  t <- if expr then parseExpr else parseTerm
+  t <- if expr then parseTerm else parseTerm
   return (k, t)
 
 -- | Main entry points
@@ -168,7 +168,7 @@ parseArg expr = do
 -- | Parse a book from a string, returning an error message on failure
 doParseBook :: FilePath -> String -> Either String Book
 doParseBook file input =
-  case evalState (runParserT p file input) (ParserState True input M.empty) of
+  case evalState (runParserT p file input) (ParserState True input [] M.empty) of
     Left err  -> Left (formatError input err)
     Right res -> Right (adjustBook res)
       -- in Right (trace (show book) book)

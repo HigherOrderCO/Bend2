@@ -101,7 +101,7 @@ def eql(a: Nat, b: Nat) -> Bool:
     case 1n+a 1n+b: eql(a, b)
 
 # Proof: n*2/2 = n (simpler method)
-def div2_mul2_theo_2(n: Nat) -> Nat{(div2 (mul2 n)) == n}:
+def div2_mul2_theo_2(n: Nat) -> Nat{div2(mul2(n)) == n}:
   match n:
     case 0n:
       finally
@@ -136,7 +136,7 @@ def is_even_b(n: Nat) -> Bool:
 
 # Proof that both is_even implementations are identical
 # (Can we have FunExt?)
-def is_even_ab_theo(n: Nat) -> Bool{(is_even_a n) == (is_even_b n)}:
+def is_even_ab_theo(n: Nat) -> Bool{is_even_a(n) == is_even_b(n)}:
   match n:
     case 0n:
       finally
@@ -185,7 +185,7 @@ def succ_neq_zero(n: Nat) -> Nat{0n != (1n+n)}:
   lambda e. match e {}
 
 # 1n+n = 1n+m implies n = m
-def succ_inj(n: Nat, m: Nat, e: Nat{(1n+n)==(1n+m)}) -> Nat{n==m}:
+def succ_inj(n: Nat, m: Nat, e: Nat{1n+n==1n+m}) -> Nat{n==m}:
   match n m e:
     case 0n 0n e:
       finally

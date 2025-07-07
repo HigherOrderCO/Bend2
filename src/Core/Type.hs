@@ -126,18 +126,31 @@ data Term
   | Frz Type -- ∅T
 
   -- Supperpositions
-  | Era               -- *
-  | Sup Int Term Term -- &L{a,b}
+  | Era                 -- *
+  | Sup Term Term Term  -- &L{a,b}
+  | SupM Term Term Term -- ~x{&L{,}:f}
 
   -- Errors
   | Loc Span Term -- x
   | Rwt Term Term Term -- a → b ; x
 
+  -- Logging
+  -- NOTE: THIS IS A NEW PRIMITIVE (WIP)
+  -- when the user writes:
+  -- `log "foo" 123`
+  -- the evaluator (whnf) will log "foo" to the screen, and return 123
+  -- it will do so from Haskell-side by using Debug.Trace
+  -- the first term must be a Char[]. the whnfLog function will normalize the
+  -- Bend string layer by layer to convert to a Haskell string, and then print.
+  -- if this fails (say, if ill-typed, or stuck), nothing will be printed.
+  | Log Term Term -- log s ; x
+
   -- Primitive
   | Pri PriF -- SOME_FUNC
 
-  -- Pattern-Match
+  -- Sugars
   | Pat [Term] [Move] [Case] -- match x ... { with k=v ... ; case @A ...: F ; ... }
+  | Frk Term Term Term       -- fork L:a else:b
 
 -- Book of Definitions
 type Inj  = Bool -- "is injective" flag. improves pretty printing
@@ -242,7 +255,10 @@ instance Show Term where
   show (Rwt a b x)     = show a ++ " ⇒ " ++ show b ++ "; " ++ show x
   show (Era)           = "*"
   show (Sup l a b)     = "&" ++ show l ++ "{" ++ show a ++ "," ++ show b ++ "}"
+  show (SupM x l f)    = "~ " ++ show x ++ " { &" ++ show l ++ "{,}:" ++ show f ++ " }"
+  show (Frk l a b)     = "fork " ++ show l ++ ":" ++ show a ++ " else:" ++ show b
   show (Met _ _ _)     = "?"
+  show (Log s x)       = "log " ++ show s ++ " " ++ show x
   show (Pri p)         = pri p where
     pri U64_TO_CHAR    = "U64_TO_CHAR"
   show (Num U64_T)     = "U64"
@@ -356,12 +372,6 @@ collectArgs = go [] where
 collectApps :: Term -> [Term] -> (Term, [Term])
 collectApps (cut -> App f x) args = collectApps f (x:args)
 collectApps f                args = (f, args)
-
-natToInt :: Term -> Maybe Int
-natToInt Zer       = Just 0
-natToInt (Suc n)   = fmap (+1) (natToInt n)
-natToInt (Loc _ t) = natToInt t
-natToInt _         = Nothing
 
 noSpan :: Span
 noSpan = Span (0,0) (0,0) ""

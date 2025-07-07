@@ -56,11 +56,14 @@ binder lv term ctx vars = case term of
   Loc s t    -> Loc s (binder lv t ctx vars)
   Rwt a b x  -> Rwt (binder lv a ctx vars) (binder lv b ctx vars) (binder lv x ctx vars)
   Era        -> Era
-  Sup l a b  -> Sup l (binder lv a ctx vars) (binder lv b ctx vars)
+  Sup l a b  -> Sup (binder lv l ctx vars) (binder lv a ctx vars) (binder lv b ctx vars)
+  SupM x l f -> SupM (binder lv x ctx vars) (binder lv l ctx vars) (binder lv f ctx vars)
+  Frk l a b  -> Frk (binder lv l ctx vars) (binder lv a ctx vars) (binder lv b ctx vars)
   Num t      -> Num t
   Val v      -> Val v
   Op2 o a b  -> Op2 o (binder lv a ctx vars) (binder lv b ctx vars)
   Op1 o a    -> Op1 o (binder lv a ctx vars)
   Pri p      -> Pri p
+  Log s x    -> Log (binder lv s ctx vars) (binder lv x ctx vars)
   Met k t c  -> Met k (binder lv t ctx vars) (map (\x -> binder lv x ctx vars) c)
   Pat s m c  -> error "not-supported"

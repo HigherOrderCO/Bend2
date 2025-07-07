@@ -20,7 +20,7 @@ adjust :: Book -> Term -> Term
 adjust book term =
   -- trace (">> parsed: " ++ show ret) $
   ret
-  where ret = bind (unpat 0 (flatten 0 book term))
+  where ret = bind (unfrk 0 (unpat 0 (flatten 0 book term)))
 
 -- The state for the adjustment process. It holds:
 -- 1. The book of already-adjusted definitions.

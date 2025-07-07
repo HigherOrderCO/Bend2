@@ -15,9 +15,9 @@ getBookDeps (Book defs) = S.unions $ map getDefnDeps (M.toList defs) where
   getDefnDeps :: (Name, Defn) -> S.Set Name
   getDefnDeps (name, (_, term, typ)) = S.union (getDeps term) (getDeps typ)
 
--- | Collects all external references from a term, handling variable binding.
--- This is a specialized version of `collectRefs` that also handles `Pat` constructors
--- by treating the head of a pattern application as a reference.
+-- -- | Collects all external references from a term, handling variable binding.
+-- -- This is a specialized version of `collectRefs` that also handles `Pat` constructors
+-- -- by treating the head of a pattern application as a reference.
 collectDeps :: S.Set Name -> Term -> S.Set Name
 collectDeps bound term = case term of
   Var k _     -> if k `S.member` bound then S.empty else S.singleton k
@@ -25,16 +25,32 @@ collectDeps bound term = case term of
   Sub t       -> collectDeps bound t
   Fix k f     -> collectDeps (S.insert k bound) (f (Var k 0))
   Let v f     -> S.union (collectDeps bound v) (collectDeps bound f)
+  Set         -> S.empty
   Chk x t     -> S.union (collectDeps bound x) (collectDeps bound t)
+  Emp         -> S.empty
   EmpM x      -> collectDeps bound x
+  Uni         -> S.empty
+  One         -> S.empty
   UniM x f    -> S.union (collectDeps bound x) (collectDeps bound f)
+  Bit         -> S.empty
+  Bt0         -> S.empty
+  Bt1         -> S.empty
   BitM x f t  -> S.unions [collectDeps bound x, collectDeps bound f, collectDeps bound t]
+  Nat         -> S.empty
+  Zer         -> S.empty
   Suc n       -> collectDeps bound n
   NatM x z s  -> S.unions [collectDeps bound x, collectDeps bound z, collectDeps bound s]
   Lst t       -> collectDeps bound t
+  Nil         -> S.empty
   Con h t     -> S.union (collectDeps bound h) (collectDeps bound t)
   LstM x n c  -> S.unions [collectDeps bound x, collectDeps bound n, collectDeps bound c]
+  Enu _       -> S.empty
+  Sym _       -> S.empty
   EnuM x cs d -> S.unions [collectDeps bound x, S.unions (map (collectDeps bound . snd) cs), collectDeps bound d]
+  Num _       -> S.empty
+  Val _       -> S.empty
+  Op2 _ a b   -> S.union (collectDeps bound a) (collectDeps bound b)
+  Op1 _ a     -> collectDeps bound a
   Sig a b     -> S.union (collectDeps bound a) (collectDeps bound b)
   Tup a b     -> S.union (collectDeps bound a) (collectDeps bound b)
   SigM x f    -> S.union (collectDeps bound x) (collectDeps bound f)
@@ -42,17 +58,20 @@ collectDeps bound term = case term of
   Lam k f     -> collectDeps (S.insert k bound) (f (Var k 0))
   App f x     -> S.union (collectDeps bound f) (collectDeps bound x)
   Eql t a b   -> S.unions [collectDeps bound t, collectDeps bound a, collectDeps bound b]
+  Rfl         -> S.empty
   EqlM x f    -> S.union (collectDeps bound x) (collectDeps bound f)
   Met _ t ctx -> S.unions (collectDeps bound t : map (collectDeps bound) ctx)
   Ind t       -> collectDeps bound t
   Frz t       -> collectDeps bound t
+  Era         -> S.empty
+  Sup _ a b   -> S.union (collectDeps bound a) (collectDeps bound b)
+  SupM x l f  -> S.unions [collectDeps bound x, collectDeps bound l, collectDeps bound f]
   Loc _ t     -> collectDeps bound t
   Rwt a b x   -> S.unions [collectDeps bound a, collectDeps bound b, collectDeps bound x]
-  Sup _ a b   -> S.union (collectDeps bound a) (collectDeps bound b)
-  Op2 _ a b   -> S.union (collectDeps bound a) (collectDeps bound b)
-  Op1 _ a     -> collectDeps bound a
+  Log s x     -> S.union (collectDeps bound s) (collectDeps bound x)
+  Pri _       -> S.empty
   Pat s m c   -> S.unions $ map (collectDeps bound) s ++ map (collectDeps bound . snd) m ++ concatMap (collectCaseDeps bound) c
-  _           -> S.empty
+  Frk l a b   -> S.unions [collectDeps bound l, collectDeps bound a, collectDeps bound b]
 
 -- | Helper for `collectDeps` to handle dependencies in pattern-match cases.
 collectCaseDeps :: S.Set Name -> Case -> [S.Set Name]

@@ -48,7 +48,9 @@ data CT
   | COp1 NOp1 CT
   -- Others
   | CEra
-  | CSup Int CT CT
+  | CSup CT CT CT
+  | CSupM CT CT CT
+  | CFrk CT CT CT
   | CPri PriF
 
 type CTBook = M.Map String CT
@@ -107,10 +109,13 @@ termToCT book term dep = case term of
   EqlM x f   -> CApp (CEql (termToCT book f dep)) (termToCT book x dep)
   Op2 o a b  -> COp2 o (termToCT book a dep) (termToCT book b dep)
   Op1 o a    -> COp1 o (termToCT book a dep)
+  Log s x    -> termToCT book x dep  -- For JavaScript, just return the result expression
   Pri p      -> CPri p
   Rfl        -> CEra
   Era        -> CEra
-  Sup l a b  -> CSup l (termToCT book a dep) (termToCT book b dep)
+  Sup l a b  -> CSup (termToCT book l dep) (termToCT book a dep) (termToCT book b dep)
+  SupM x l f -> CSupM (termToCT book x dep) (termToCT book l dep) (termToCT book f dep)
+  Frk l a b  -> CFrk (termToCT book l dep) (termToCT book a dep) (termToCT book b dep)
   Pat _ _ _  -> error "unreachable"
 
 -- JavaScript State Monad
@@ -511,6 +516,8 @@ ctToJS book fnName fnArgs isTail var term dep = case term of
   CEql _      -> set var "(x => null)"
   CEra        -> set var "null"
   CSup _ _ _  -> error "Superpositions not supported in JavaScript backend"
+  CSupM _ _ _ -> error "Superpositions not supported in JavaScript backend"
+  CFrk _ _ _  -> error "Superpositions not supported in JavaScript backend"
   CPri p      -> compilePri p
   where
 

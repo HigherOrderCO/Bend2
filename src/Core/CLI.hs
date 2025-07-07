@@ -9,7 +9,7 @@ module Core.CLI
   , listDependencies
   ) where
 
-import Control.Monad (unless)
+import Control.Monad (unless, forM_)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import System.Environment (getArgs)
@@ -20,6 +20,7 @@ import Control.Exception (catch, IOException)
 
 import Core.Bind
 import Core.Check
+import Core.Collapse
 import Core.Deps
 import Core.Import (autoImport)
 import Core.Parse.Book (doParseBook)
@@ -27,14 +28,15 @@ import Core.Type
 import Core.WHNF
 
 import qualified Target.JavaScript as JS
+
 -- import qualified HVM.Compile as HVM
 
-import qualified Target.HVMtarget as HVM
+import qualified Target.HVMtarget as HVMTarget
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import HVM.API (runHVM, RunMode (Collapse, Normalize))
 import qualified HVM.Type as HVM
 import Debug.Trace (trace)
-
+import qualified Target.HVM as HVM
 
 -- | Parse a Bend file into a Book
 parseFile :: FilePath -> IO Book
@@ -87,9 +89,10 @@ runMain book = do
           putStrLn $ show e
           exitFailure
         Done typ -> do
-          let result = normal 0 book mainCall
+          let results = flatten $ collapse 0 book $ normal 0 book mainCall
           putStrLn ""
-          putStrLn $ show result
+          forM_ results $ \ term -> do
+            print term
 
 -- | Process a Bend file: parse, check, and run
 processFile :: FilePath -> IO ()
@@ -123,8 +126,9 @@ processFileToJS file = do
   putStrLn formattedJS
 
 
-processFileToHVM :: FilePath -> IO ()
-processFileToHVM file = do
+
+processFileToHVMT :: FilePath -> IO ()
+processFileToHVMT file = do
   book <- parseFile file
   putStrLn (HVM.compile book)
 
@@ -140,6 +144,13 @@ processFileToHVMRun file = do
   (res,stats) <- runHVM outputFile (HVM.Ref "main" 0 []) HVM.API.Normalize
   putStrLn $ unlines $ map show res
   
+-- | Process a Bend file and compile to HVM
+processFileToHVM :: FilePath -> IO ()
+processFileToHVM file = do
+  book <- parseFile file
+  let hvmCode = HVM.compile book
+  putStrLn hvmCode
+
 
 -- | List all dependencies of a Bend file (including transitive dependencies)
 listDependencies :: FilePath -> IO ()

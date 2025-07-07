@@ -165,7 +165,7 @@ def Nat/add/comm(a: Nat, b: Nat) -> Nat{Nat/add(a,b) == Nat/add(b,a)}:
       finally
 
 # 1n + n = 1n + m → n = m
-def Nat/succ_inj(n: Nat, m: Nat, e: Nat{(1n+n)==(1n+m)}) -> Nat{n==m}:
+def Nat/succ_inj(n: Nat, m: Nat, e: Nat{1n+n==1n+m}) -> Nat{n==m}:
   match n m e:
     case 0n 0n e:
       # Nat{0n==0n}

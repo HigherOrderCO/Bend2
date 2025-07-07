@@ -1,3 +1,5 @@
+{-./Type.hs-}
+
 module Core.Rewrite where
 
 import System.IO.Unsafe
@@ -60,7 +62,7 @@ rewriteGo lv d book old neo val = case val of
   Tup a b    -> Tup (rewrite lv d book old neo a) (rewrite lv d book old neo b)
   SigM x f   -> SigM (rewrite lv d book old neo x) (rewrite lv d book old neo f)
   All a b    -> All (rewrite lv d book old neo a) (rewrite lv d book old neo b)
-  Lam k f    -> Lam k f
+  Lam k f    -> Lam k (\v -> rewrite lv d book old neo (f v))
   App f x    -> foldl (\ f x -> App f (rewrite lv d book old neo x)) fn xs
           where (fn,xs) = collectApps (App f x) []
   Eql t a b  -> Eql (rewrite lv d book old neo t) (rewrite lv d book old neo a) (rewrite lv d book old neo b)
@@ -71,8 +73,11 @@ rewriteGo lv d book old neo val = case val of
   Frz t      -> Frz (rewrite lv d book old neo t)
   Era        -> Era
   Sup l a b  -> Sup l (rewrite lv d book old neo a) (rewrite lv d book old neo b)
+  SupM x l f -> SupM (rewrite lv d book old neo x) (rewrite lv d book old neo l) (rewrite lv d book old neo f)
+  Frk l a b  -> Frk (rewrite lv d book old neo l) (rewrite lv d book old neo a) (rewrite lv d book old neo b)
   Loc s t    -> Loc s (rewrite lv d book old neo t)
   Rwt a b x  -> Rwt (rewrite lv d book old neo a) (rewrite lv d book old neo b) (rewrite lv d book old neo x)
+  Log s x    -> Log (rewrite lv d book old neo s) (rewrite lv d book old neo x)
   Pri p      -> Pri p
   Pat t m c  -> Pat (map (rewrite lv d book old neo) t) (map (\(k,v) -> (k, rewrite lv d book old neo v)) m) (map (\(ps,v) -> (map (rewrite lv d book old neo) ps, rewrite lv d book old neo v)) c)
 

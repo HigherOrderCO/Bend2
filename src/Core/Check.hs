@@ -5,6 +5,7 @@
 module Core.Check where
 
 import qualified Data.Map as M
+import Data.List (find)
 
 import Debug.Trace
 
@@ -32,7 +33,7 @@ formatCtx d book (Ctx ctx) = Ctx (map formatAnn ctx)
 
 -- Infer the type of a term
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
-infer d span book ctx term =
+infer d span book@(Book defs) ctx term =
   -- trace ("- infer: " ++ show (format d book term)) $
   case term of
     Var _ i -> do
@@ -101,7 +102,13 @@ infer d span book ctx term =
     Enu s -> do
       Done Set
     Sym s -> do
-      Fail $ CantInfer span (formatCtx d book ctx)
+      let bookEnums = [ Enu tags | (k, (_, (Sig (Enu tags) _), Set)) <- M.toList defs ]
+      case find isEnuWithTag bookEnums of
+        Just t  -> Done t
+        Nothing -> Fail $ CantInfer span (formatCtx d book ctx)
+        where
+          isEnuWithTag (Enu tags) = s `elem` tags
+          isEnuWithTag _ = False
     EnuM _ _ _ -> do
       Fail $ CantInfer span (formatCtx d book ctx)
     Sig a b -> do
@@ -154,6 +161,10 @@ infer d span book ctx term =
       Fail $ CantInfer span (formatCtx d book ctx)
     Sup l a b -> do
       Fail $ CantInfer span (formatCtx d book ctx)
+    SupM x l f -> do
+      Fail $ CantInfer span (formatCtx d book ctx)
+    Frk l a b -> do
+      Fail $ CantInfer span (formatCtx d book ctx)
     Met _ _ _ -> do
       Fail $ CantInfer span (formatCtx d book ctx)
     Num _ -> do
@@ -175,6 +186,9 @@ infer d span book ctx term =
       inferOp1Type d span book ctx op a ta
     Pri U64_TO_CHAR -> do
       Done (All (Num U64_T) (Lam "x" (\_ -> Num CHR_T)))
+    Log s x -> do
+      check d span book ctx s (Lst (Num CHR_T))
+      infer d span book ctx x
     Pat _ _ _ -> do
       error "Pat not supported in infer"
 
@@ -254,6 +268,8 @@ check d span book ctx term goal =
         -- "- ctx : " ++ show (normalCtx d book ctx) ++ " → " ++ show (normalCtx d book new_ctx) ++ "\n" ++
         -- "- goal: " ++ show (normal d book goal) ++ " → " ++ show (normal d book new_goal)) $
       check d span book new_ctx term new_goal
+    (Era, _) -> do
+      Done ()
     (Let v f, _) -> do
       check d span book ctx (App f v) goal
     (One, Uni) -> do
@@ -386,6 +402,17 @@ check d span book ctx term goal =
       if equal d book tr goal
         then Done ()
         else Fail $ TypeMismatch span (formatCtx d book ctx) (format d book goal) (format d book tr)
+    (Sup l a b, _) -> do
+      check d span book ctx a goal
+      check d span book ctx b goal
+    (SupM x l f, _) -> do
+      check d span book ctx l (Num U64_T)
+      xT <- infer d span book ctx x
+      check d span book ctx f (All xT (Lam "p" (\p -> All xT (Lam "q" (\q -> Rwt x (Sup l p q) goal)))))
+    (Frk l a b, _) -> do
+      check d span book ctx l (Num U64_T)
+      check d span book ctx a goal
+      check d span book ctx b goal
     (Pat _ _ _, _) -> do
       error "not-supported"
     -- (f x) :: G
@@ -394,10 +421,17 @@ check d span book ctx term goal =
     (App f x, _) ->
       if isLamApp f
         then do
-          xt <- infer d span book ctx x
-          check d span book ctx f $ All xt $ Lam "_" $ \v -> goal
+          case f of
+            Lam k b -> do
+              check d span book ctx (b x) goal
+            f  -> do
+              xt <- infer d span book ctx x
+              check d span book ctx f $ All xt $ Lam "_" $ \v -> goal
         else do
           verify d span book ctx term goal
+    (Log s x, _) -> do
+      check d span book ctx s (Lst (Num CHR_T))
+      check d span book ctx x goal
     (_, _) -> do
       verify d span book ctx term goal
 
