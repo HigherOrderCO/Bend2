@@ -23,11 +23,10 @@ main = do
   case args of
     [file, "--to-javascript"]     | isbend file -> processFileToJS file
     [file, "--to-hvm"]            | isbend file -> processFileToHVM file
-    ["--to-hvm", file]            | isbend file -> processFileToHVM file
-    ["--run-hvm", file]           | isbend file -> processFileToHVMRun file
+    [file, "--run-hvm"]           | isbend file -> processFileToHVMRun file
     [file, "--list-dependencies"] | isbend file -> listDependencies file
-    [file] | isbend file -> processFile file
-    otherwise                             -> showUsage
+    [file]                        | isbend file -> processFile file
+    otherwise                                   -> showUsage
   where
     isbend file = ".bend" `isSuffixOf` file || ".bend.py" `isSuffixOf` file
     isSuffixOf suffix str = reverse suffix == take (length suffix) (reverse str)
