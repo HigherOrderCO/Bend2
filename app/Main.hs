@@ -4,7 +4,7 @@ import Control.Monad (unless)
 import qualified Data.Map as M
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies)
+import Core.CLI (processFile, processFileToJS, processFileToHVM, processFileToHVMRun, listDependencies, parseFile)
 
 -- | Show usage information
 showUsage :: IO ()
@@ -21,13 +21,14 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    [file, "--to-javascript"] | ".bend"    `isSuffixOf` file -> processFileToJS file
-    [file, "--to-javascript"] | ".bend.py" `isSuffixOf` file -> processFileToJS file
-    [file, "--to-hvm"] | ".bend"    `isSuffixOf` file -> processFileToHVM file
-    [file, "--to-hvm"] | ".bend.py" `isSuffixOf` file -> processFileToHVM file
-    [file, "--list-dependencies"] | ".bend"    `isSuffixOf` file -> listDependencies file
-    [file, "--list-dependencies"] | ".bend.py" `isSuffixOf` file -> listDependencies file
-    [file] | ".bend"    `isSuffixOf` file -> processFile file
-    [file] | ".bend.py" `isSuffixOf` file -> processFile file
-    otherwise                             -> showUsage
-  where isSuffixOf suffix str = reverse suffix == take (length suffix) (reverse str)
+
+    [file, "--to-javascript"]     | isbend file -> processFileToJS file
+    [file, "--to-hvm"]            | isbend file -> processFileToHVM file
+    [file, "--run-hvm"]           | isbend file -> processFileToHVMRun file
+    [file, "--list-dependencies"] | isbend file -> listDependencies file
+    [file]                        | isbend file -> processFile file
+    otherwise                                   -> showUsage
+  where
+    isbend file = ".bend" `isSuffixOf` file || ".bend.py" `isSuffixOf` file
+    isSuffixOf suffix str = reverse suffix == take (length suffix) (reverse str)
+
