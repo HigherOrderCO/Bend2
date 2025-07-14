@@ -1,0 +1,13 @@
+{
+  "name": "Haskell DevContainer (GHCup)",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "settings": {
+    "haskell.manageHLS": "GHCup"
+  },
+  "extensions": [
+    "haskell.haskell"
+  ],
+  "remoteUser": "vscode"
+}
