@@ -273,7 +273,7 @@ instance Show Term where
   show (Sup l a b)     = "&" ++ show l ++ "{" ++ show a ++ "," ++ show b ++ "}"
   show (SupM x l f)    = "~ " ++ show x ++ " { &" ++ show l ++ "{,}:" ++ show f ++ " }"
   show (Frk l a b)     = "fork " ++ show l ++ ":" ++ show a ++ " else:" ++ show b
-  show (Met _ _ _)     = "?"
+  show (Met n t ctx)   = "?" ++ n ++ ":" ++ show t ++ "{" ++ intercalate "," (map show ctx) ++ "}"
   show (Log s x)       = "log " ++ show s ++ " " ++ show x
   show (Pri p)         = pri p where
     pri U64_TO_CHAR    = "U64_TO_CHAR"
@@ -458,3 +458,42 @@ freeVars ctx tm = case tm of
   Rwt a b x  -> S.unions [freeVars ctx a, freeVars ctx b, freeVars ctx x]
   Pat s m c  -> S.unions ((map (freeVars ctx) s) ++ (map (\(_,m) -> freeVars ctx m) m) ++ (map (\(_,c) -> freeVars ctx c) c))
   _          -> S.empty
+
+-- | Check if a term contains a Metavar
+hasMet :: Term -> Bool
+hasMet term = case term of
+  Met {} -> True
+  Sub t -> hasMet t
+  Fix _ f -> hasMet (f (Var "" 0))
+  Let v f -> hasMet v || hasMet f
+  Chk x t -> hasMet x || hasMet t
+  EmpM x -> hasMet x
+  UniM x f -> hasMet x || hasMet f
+  BitM x f t -> hasMet x || hasMet f || hasMet t
+  Suc n -> hasMet n
+  NatM x z s -> hasMet x || hasMet z || hasMet s
+  Lst t -> hasMet t
+  Con h t -> hasMet h || hasMet t
+  LstM x n c -> hasMet x || hasMet n || hasMet c
+  EnuM x cs e -> hasMet x || any (hasMet . snd) cs || hasMet e
+  Op2 _ a b -> hasMet a || hasMet b
+  Op1 _ a -> hasMet a
+  Sig a b -> hasMet a || hasMet b
+  Tup a b -> hasMet a || hasMet b
+  SigM x f -> hasMet x || hasMet f
+  All a b -> hasMet a || hasMet b
+  Lam _ t f -> maybe False hasMet t || hasMet (f (Var "" 0))
+  App f x -> hasMet f || hasMet x
+  Eql t a b -> hasMet t || hasMet a || hasMet b
+  EqlM x f -> hasMet x || hasMet f
+  Ind t -> hasMet t
+  Frz t -> hasMet t
+  Sup _ a b -> hasMet a || hasMet b
+  SupM x l f -> hasMet x || hasMet l || hasMet f
+  Loc _ t -> hasMet t
+  Rwt a b x -> hasMet a || hasMet b || hasMet x
+  Log s x -> hasMet s || hasMet x
+  Pat s m c -> any hasMet s || any (hasMet . snd) m || any (\(p,b) -> any hasMet p || hasMet b) c
+  Frk l a b -> hasMet l || hasMet a || hasMet b
+  _ -> False
+
