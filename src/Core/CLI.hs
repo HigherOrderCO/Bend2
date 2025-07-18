@@ -6,6 +6,7 @@ module Core.CLI
   , processFileToJS
   , processFileToHVM
   , listDependencies
+  , getGenDeps
   ) where
 
 import Control.Monad (unless, forM_)
@@ -140,9 +141,39 @@ listDependencies file = do
   -- Print all refs (these are all the dependencies)
   mapM_ putStrLn (S.toList allRefs)
 
+-- | Get all dependencies needed for one or more Met statements.
+getGenDeps :: FilePath -> IO ()
+getGenDeps file = do
+  book <- parseFile file
+  let bookAdj@(Book defs) = adjustBook book
+  
+  -- Find all definitions that are `try` definitions (i.e., contain a Met)
+  let tryDefs = M.filter (\(_, term, _) -> hasMet term) defs
+  let tryNames = M.keysSet tryDefs
+
+  -- Find all reverse dependencies (examples)
+  let allDefs = M.toList defs
+  let reverseDeps = S.fromList [ name | (name, (_, term, typ)) <- allDefs, not (name `S.member` tryNames), not (S.null (S.intersection tryNames (S.union (getDeps term) (getDeps typ)))) ]
+
+  -- Get all dependencies of the `try` definitions and the reverse dependencies
+  let targetDefs = M.filterWithKey (\k _ -> k `S.member` tryNames || k `S.member` reverseDeps) defs
+  let allDeps = S.unions $ map (\(_, term, typ) -> S.union (getDeps term) (getDeps typ)) (M.elems targetDefs)
+
+  -- Also include the names of the try defs and reverse deps themselves
+  let allNames = S.union tryNames reverseDeps
+  let finalDepNames = S.union allNames allDeps
+
+  -- Filter the book to get the definitions we want to print
+  let finalDefs = M.filterWithKey (\k _ -> k `S.member` finalDepNames) defs
+  
+  -- Print the resulting book
+  print $ Book finalDefs
+
+
 -- | Collect all refs from a Book
 collectAllRefs :: Book -> S.Set Name
 collectAllRefs (Book defs) = 
   S.unions $ map collectRefsFromDefn (M.elems defs)
   where
     collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)
+
