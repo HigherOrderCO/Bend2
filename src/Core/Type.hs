@@ -57,8 +57,8 @@ data Term
   | Sub Term     -- x
 
   -- Definitions
-  | Fix Name Body -- μx. f
-  | Let Term Term -- !v; f
+  | Fix Name Body                   -- μx. f
+  | Let Name (Maybe Term) Term Body -- !x : T = v; f
 
   -- Universe
   | Set -- Set
@@ -201,7 +201,9 @@ instance Show Term where
   show (Ref k)        = k
   show (Sub t)        = show t
   show (Fix k f)      = "μ" ++ k ++ ". " ++ show (f (Var k 0))
-  show (Let v f)      = "!" ++ show v ++ ";" ++ show f
+  show (Let k t v f)  = case t of
+    Just t  -> "!" ++ k ++ " : " ++ show t ++ " = " ++ show v ++ ";" ++ show (f (Var k 0))
+    Nothing -> "!" ++ k ++                    " = " ++ show v ++ ";" ++ show (f (Var k 0))
   show (Set)          = "Set"
   show (Chk x t)      = "(" ++ show x ++ "::" ++ show t ++ ")"
   show (Emp)          = "Empty"
@@ -234,7 +236,7 @@ instance Show Term where
           Sig{} -> "(" ++ show t ++ ")"
           _     -> show t
       showCodomain t = case t of
-          Sig _ (Lam k t _) | k /= "_" -> "(" ++ show t ++ ")"
+          Sig _ (Lam k _ _) | k /= "_" -> "(" ++ show t ++ ")"
           _                           -> show t
   show tup@(Tup _ _)  = fromMaybe ("(" ++ intercalate "," (map show (flattenTup tup)) ++ ")") (prettyCtr tup)
   show (SigM x f)     = "~ " ++ show x ++ " { (,):" ++ show f ++ " }"
@@ -248,7 +250,7 @@ instance Show Term where
           Sig{} -> "(" ++ show t ++ ")"
           _     -> show t
       showCodomain t = case t of
-          All _ (Lam k t _) | k /= "_"  -> "(" ++ show t ++ ")"
+          All _ (Lam k _ _) | k /= "_"  -> "(" ++ show t ++ ")"
           _                           -> show t
   show (Lam k t f)      = case t of
     Just t  -> "λ" ++ k ++ " : " ++ show t ++ " . " ++ show (f (Var k 0))
@@ -423,41 +425,41 @@ prettyStr = go [] where
 -- | Returns the free variables in a term by name.
 freeVars :: S.Set Name -> Term -> S.Set Name
 freeVars ctx tm = case tm of
-  Var n _    -> if n `S.member` ctx then S.empty else S.singleton n
-  Sub t      -> freeVars ctx t
-  Fix n f    -> freeVars (S.insert n ctx) (f (Var n 0))
-  Let v f    -> S.union (freeVars ctx v) (freeVars ctx f)
-  Chk v t    -> S.union (freeVars ctx v) (freeVars ctx t)
-  EmpM x     -> freeVars ctx x
-  UniM x f   -> S.union (freeVars ctx x) (freeVars ctx f)
-  BitM x f t -> S.unions [freeVars ctx x, freeVars ctx f, freeVars ctx t]
-  Suc n      -> freeVars ctx n
-  NatM x z s -> S.unions [freeVars ctx x, freeVars ctx z, freeVars ctx s]
-  Lst t      -> freeVars ctx t
-  Con h t    -> S.union (freeVars ctx h) (freeVars ctx t)
-  LstM x n c -> S.unions [freeVars ctx x, freeVars ctx n, freeVars ctx c]
-  EnuM x c e -> S.unions [freeVars ctx x, S.unions (map (freeVars ctx . snd) c), freeVars ctx e]
-  Op2 _ a b  -> S.union (freeVars ctx a) (freeVars ctx b)
-  Op1 _ a    -> freeVars ctx a
-  Sig a b    -> S.union (freeVars ctx a) (freeVars ctx b)
-  Tup a b    -> S.union (freeVars ctx a) (freeVars ctx b)
-  SigM x f   -> S.union (freeVars ctx x) (freeVars ctx f)
-  All a b    -> S.union (freeVars ctx a) (freeVars ctx b)
-  Lam n t f  -> S.union (freeVars (S.insert n ctx) (f (Var n 0))) (foldMap (freeVars ctx) t)
-  App f x    -> S.union (freeVars ctx f) (freeVars ctx x)
-  Eql t a b  -> S.unions [freeVars ctx t, freeVars ctx a, freeVars ctx b]
-  EqlM x f   -> S.union (freeVars ctx x) (freeVars ctx f)
-  Met _ t c  -> S.unions (freeVars ctx t : map (freeVars ctx) c)
-  Ind t      -> freeVars ctx t
-  Frz t      -> freeVars ctx t
-  Sup _ a b  -> S.union (freeVars ctx a) (freeVars ctx b)
-  SupM x l f -> S.unions [freeVars ctx x, freeVars ctx l, freeVars ctx f]
-  Frk l a b  -> S.unions [freeVars ctx l, freeVars ctx a, freeVars ctx b]
-  Log s x    -> S.union (freeVars ctx s) (freeVars ctx x)
-  Loc _ t    -> freeVars ctx t
-  Rwt a b x  -> S.unions [freeVars ctx a, freeVars ctx b, freeVars ctx x]
-  Pat s m c  -> S.unions ((map (freeVars ctx) s) ++ (map (\(_,m) -> freeVars ctx m) m) ++ (map (\(_,c) -> freeVars ctx c) c))
-  _          -> S.empty
+  Var n _     -> if n `S.member` ctx then S.empty else S.singleton n
+  Sub t       -> freeVars ctx t
+  Fix n f     -> freeVars (S.insert n ctx) (f (Var n 0))
+  Let k t v f -> S.unions [foldMap (freeVars ctx) t, freeVars ctx v, freeVars (S.insert k ctx) (f (Var k 0))]
+  Chk v t     -> S.union (freeVars ctx v) (freeVars ctx t)
+  EmpM x      -> freeVars ctx x
+  UniM x f    -> S.union (freeVars ctx x) (freeVars ctx f)
+  BitM x f t  -> S.unions [freeVars ctx x, freeVars ctx f, freeVars ctx t]
+  Suc n       -> freeVars ctx n
+  NatM x z s  -> S.unions [freeVars ctx x, freeVars ctx z, freeVars ctx s]
+  Lst t       -> freeVars ctx t
+  Con h t     -> S.union (freeVars ctx h) (freeVars ctx t)
+  LstM x n c  -> S.unions [freeVars ctx x, freeVars ctx n, freeVars ctx c]
+  EnuM x c e  -> S.unions [freeVars ctx x, S.unions (map (freeVars ctx . snd) c), freeVars ctx e]
+  Op2 _ a b   -> S.union (freeVars ctx a) (freeVars ctx b)
+  Op1 _ a     -> freeVars ctx a
+  Sig a b     -> S.union (freeVars ctx a) (freeVars ctx b)
+  Tup a b     -> S.union (freeVars ctx a) (freeVars ctx b)
+  SigM x f    -> S.union (freeVars ctx x) (freeVars ctx f)
+  All a b     -> S.union (freeVars ctx a) (freeVars ctx b)
+  Lam n t f   -> S.union (freeVars (S.insert n ctx) (f (Var n 0))) (foldMap (freeVars ctx) t)
+  App f x     -> S.union (freeVars ctx f) (freeVars ctx x)
+  Eql t a b   -> S.unions [freeVars ctx t, freeVars ctx a, freeVars ctx b]
+  EqlM x f    -> S.union (freeVars ctx x) (freeVars ctx f)
+  Met _ t c   -> S.unions (freeVars ctx t : map (freeVars ctx) c)
+  Ind t       -> freeVars ctx t
+  Frz t       -> freeVars ctx t
+  Sup _ a b   -> S.union (freeVars ctx a) (freeVars ctx b)
+  SupM x l f  -> S.unions [freeVars ctx x, freeVars ctx l, freeVars ctx f]
+  Frk l a b   -> S.unions [freeVars ctx l, freeVars ctx a, freeVars ctx b]
+  Log s x     -> S.union (freeVars ctx s) (freeVars ctx x)
+  Loc _ t     -> freeVars ctx t
+  Rwt a b x   -> S.unions [freeVars ctx a, freeVars ctx b, freeVars ctx x]
+  Pat s m c   -> S.unions ((map (freeVars ctx) s) ++ (map (\(_,m) -> freeVars ctx m) m) ++ (map (\(_,c) -> freeVars ctx c) c))
+  _           -> S.empty
 
 -- | Check if a term contains a Metavar
 hasMet :: Term -> Bool
@@ -496,4 +498,3 @@ hasMet term = case term of
   Pat s m c -> any hasMet s || any (hasMet . snd) m || any (\(p,b) -> any hasMet p || hasMet b) c
   Frk l a b -> hasMet l || hasMet a || hasMet b
   _ -> False
-

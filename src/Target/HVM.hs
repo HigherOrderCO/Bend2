@@ -74,7 +74,7 @@ compileFn book nam tm ty =
       SigM _ (Lam l _ (subst l -> (Lam r _ (subst r -> f)))) -> alwaysMat x f
       Pat _ _ c                                              -> all (\(p,f) -> alwaysMat x f) c
       -- Pass through terms that just bind
-      Let _ (Lam k _ (subst k -> f))                         -> alwaysMat x f
+      Let k t v f                                            -> alwaysMat x (f (Var k 0))
       SupM _ _ (Lam a _ (subst a -> Lam b _ (subst b -> f))) -> alwaysMat x f
       _ -> False
 
@@ -112,13 +112,10 @@ termToHVM book ctx term = go term where
     case MS.lookup n ctx of
       Just n  -> HVM.Var n
       Nothing -> HVM.Var n
-  go (Ref k)      = fromJust (refAppToHVM book ctx (Ref k))
-  go (Sub t)      = termToHVM book ctx t
-  go (Fix n f)    = HVM.Ref "fix" 0 [HVM.Lam (bindNam n) (termToHVM book (MS.insert n n ctx) (f (Var n 0)))]
-  go (Let v f)    =
-    case f of
-      (Lam n _ (subst n -> f)) -> HVM.Let HVM.LAZY (bindNam n) (termToHVM book ctx v) (termToHVM book ctx f)
-      _                        -> HVM.App (termToHVM book ctx f) (termToHVM book ctx v)
+  go (Ref k)       = fromJust (refAppToHVM book ctx (Ref k))
+  go (Sub t)       = termToHVM book ctx t
+  go (Fix n f)     = HVM.Ref "fix" 0 [HVM.Lam (bindNam n) (termToHVM book (MS.insert n n ctx) (f (Var n 0)))]
+  go (Let k t v f) = HVM.Let HVM.LAZY (bindNam k) (termToHVM book ctx v) (termToHVM book (MS.insert k k ctx) (f (Var k 0)))
   go Set          = HVM.Era
   go (Chk v t)    = termToHVM book ctx v
   go Emp          = HVM.Era

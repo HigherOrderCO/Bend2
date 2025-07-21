@@ -1,5 +1,7 @@
 # FIXME
 
+# fixed by using Let with HOAS binding
+
 ###
 
 # can't infer type of pair projection in assigment

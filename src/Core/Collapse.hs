@@ -94,13 +94,14 @@ collapse dep book term = case term of
     return $ Sub t'
 
   -- Definitions
-  Fix k f -> do
+  Fix k f     -> do
     f' <- collapse (dep+1) book (f (Var k dep))
     return $ Fix k (\_ -> f')
-  Let v f -> do
+  Let k t v f -> do
+    t' <- traverse (collapse dep book) t
     v' <- collapse dep book v
-    f' <- collapse dep book f
-    return $ Let v' f'
+    f' <- collapse (dep+1) book (f (Var k dep))
+    return $ Let k t' v' (\_ -> f')
 
   -- Universe
   Set -> return Set

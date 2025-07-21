@@ -314,7 +314,7 @@ parsePat :: Parser Term
 parsePat = label "pattern match" $ do
   srcPos  <- getSourcePos
   _       <- try $ keyword "match"
-  scruts  <- some parseTerm
+  scruts  <- some $ parseTermBefore ":"
   delim   <- choice [ ':' <$ symbol ":", '{' <$ symbol "{" ]
   moves   <- many parseWith
   clauses <- case delim of
@@ -769,14 +769,19 @@ parseAdd t = label "addition" $ do
 -- Interprets as let if t is a variable, otherwise as pattern match
 parseAss :: Term -> Parser Term
 parseAss t = label "location binding" $ do
-  _ <- try $ do
+  mtyp <- try $ do
+    mtyp <- optional $ do
+      _ <- symbol ":"
+      parseTermBefore "="
     _ <- symbol "="
     notFollowedBy (char '=')
+    return mtyp
   v <- parseTerm
   _ <- parseSemi
   b <- expectBody "assignment" parseTerm
   case t of
-    Var x _ -> return $ Let v (Lam x Nothing (\_ -> b))
+    -- Var x _ -> return $ Let v (Lam x Nothing (\_ -> b))
+    Var x _ -> return $ Let x mtyp v (\_ -> b)
     _       -> return $ Pat [v] [] [([t], b)]
 
 -- | HOAS‐style binders

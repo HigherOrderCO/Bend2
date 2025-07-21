@@ -1,9 +1,16 @@
 # FIXME
 
+# fixed by using Let with HOAS binding
+
+###
+
 # an unused variable causes a type mismatch by rewriting goal:
 
+
 def thm(A:Set, B:Set) -> (∀C:Set. (A->B->C) -> C) -> Σa:A.B:
-  unused_but_in_goal = Σa:A.B
+  x = A
+  unused_but_in_goal_1 = Σa:A.B
+  unused_but_in_goal_2 = Σa:A.B
   λI.I(Σa:A.B, λa1.λb1.(a1,b1))
 
   # ✗ thm

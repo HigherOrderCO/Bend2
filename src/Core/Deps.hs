@@ -24,7 +24,7 @@ collectDeps bound term = case term of
   Ref k       -> S.singleton k
   Sub t       -> collectDeps bound t
   Fix k f     -> collectDeps (S.insert k bound) (f (Var k 0))
-  Let v f     -> S.union (collectDeps bound v) (collectDeps bound f)
+  Let k t v f -> S.unions [foldMap (collectDeps bound) t ,collectDeps bound v, collectDeps (S.insert k bound) (f (Var k 0))]
   Set         -> S.empty
   Chk x t     -> S.union (collectDeps bound x) (collectDeps bound t)
   Emp         -> S.empty

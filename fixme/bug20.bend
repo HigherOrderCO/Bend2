@@ -1,6 +1,7 @@
 # FIXME
 
 # Fixed. Now use annotated lambdas to help infer
+# Update: Let with HOAS made old error check too.
 
 def thm_fixed(A:Set, B:Set) -> (∀C:Set. (A->B->C) -> C) -> Σa:A.B:
   make_pair = λa1:A . λb1:B . (a1,b1)

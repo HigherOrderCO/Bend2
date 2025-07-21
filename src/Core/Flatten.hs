@@ -52,58 +52,58 @@ import Core.WHNF
 
 flatten :: Int -> Book -> Term -> Term
 flatten d book term = case term of
-  (Var n i)    -> Var n i
-  (Ref n)      -> Ref n
-  (Sub t)      -> Sub (flatten d book t)
-  (Fix n f)    -> Fix n (\x -> flatten (d+1) book (f x))
-  (Let v f)    -> Let (flatten d book v) (flatten d book f)
-  Set          -> Set
-  (Chk x t)    -> Chk (flatten d book x) (flatten d book t)
-  Emp          -> Emp
-  (EmpM x)     -> EmpM (flatten d book x)
-  Uni          -> Uni
-  One          -> One
-  (UniM x f)   -> UniM (flatten d book x) (flatten d book f)
-  Bit          -> Bit
-  Bt0          -> Bt0
-  Bt1          -> Bt1
-  (BitM x f t) -> BitM (flatten d book x) (flatten d book f) (flatten d book t)
-  Nat          -> Nat
-  Zer          -> Zer
-  (Suc n)      -> Suc (flatten d book n)
-  (NatM x z s) -> NatM (flatten d book x) (flatten d book z) (flatten d book s)
-  (Lst t)      -> Lst (flatten d book t)
-  Nil          -> Nil
-  (Con h t)    -> Con (flatten d book h) (flatten d book t)
-  (LstM x n c) -> LstM (flatten d book x) (flatten d book n) (flatten d book c)
-  (Enu s)      -> Enu s
-  (Sym s)      -> Sym s
-  (EnuM x c e) -> EnuM (flatten d book x) [(s, flatten d book t) | (s, t) <- c] (flatten d book e)
-  (Sig a b)    -> Sig (flatten d book a) (flatten d book b)
-  (Tup a b)    -> Tup (flatten d book a) (flatten d book b)
-  (SigM x f)   -> SigM (flatten d book x) (flatten d book f)
-  (All a b)    -> All (flatten d book a) (flatten d book b)
-  (Lam n t f)  -> Lam n (fmap (flatten d book) t) (\x -> flatten (d+1) book (f x))
-  (App f x)    -> App (flatten d book f) (flatten d book x)
-  (Eql t a b)  -> Eql (flatten d book t) (flatten d book a) (flatten d book b)
-  Rfl          -> Rfl
-  (EqlM x f)   -> EqlM (flatten d book x) (flatten d book f)
-  (Met i t x)  -> Met i (flatten d book t) (map (flatten d book) x)
-  (Ind t)      -> Ind (flatten d book t)
-  (Frz t)      -> Frz (flatten d book t)
-  Era          -> Era
-  (Sup l a b)  -> Sup (flatten d book l) (flatten d book a) (flatten d book b)
-  (SupM x l f) -> SupM (flatten d book x) (flatten d book l) (flatten d book f)
-  (Frk l a b)  -> Frk (flatten d book l) (flatten d book a) (flatten d book b)
-  (Num t)      -> Num t
-  (Val v)      -> Val v
-  (Op2 o a b)  -> Op2 o (flatten d book a) (flatten d book b)
-  (Op1 o a)    -> Op1 o (flatten d book a)
-  (Pri p)      -> Pri p
-  (Log s x)    -> Log (flatten d book s) (flatten d book x)
-  (Loc s t)    -> Loc s (flatten d book t)
-  (Rwt a b x)  -> Rwt (flatten d book a) (flatten d book b) (flatten d book x)
-  (Pat s m c)  -> simplify d $ flattenPat d book (Pat s m c)
+  (Var n i)     -> Var n i
+  (Ref n)       -> Ref n
+  (Sub t)       -> Sub (flatten d book t)
+  (Fix n f)     -> Fix n (\x -> flatten (d+1) book (f x))
+  (Let k t v f) -> Let k (fmap (flatten d book) t) (flatten d book v) (\x -> flatten (d+1) book (f x))
+  Set           -> Set
+  (Chk x t)     -> Chk (flatten d book x) (flatten d book t)
+  Emp           -> Emp
+  (EmpM x)      -> EmpM (flatten d book x)
+  Uni           -> Uni
+  One           -> One
+  (UniM x f)    -> UniM (flatten d book x) (flatten d book f)
+  Bit           -> Bit
+  Bt0           -> Bt0
+  Bt1           -> Bt1
+  (BitM x f t)  -> BitM (flatten d book x) (flatten d book f) (flatten d book t)
+  Nat           -> Nat
+  Zer           -> Zer
+  (Suc n)       -> Suc (flatten d book n)
+  (NatM x z s)  -> NatM (flatten d book x) (flatten d book z) (flatten d book s)
+  (Lst t)       -> Lst (flatten d book t)
+  Nil           -> Nil
+  (Con h t)     -> Con (flatten d book h) (flatten d book t)
+  (LstM x n c)  -> LstM (flatten d book x) (flatten d book n) (flatten d book c)
+  (Enu s)       -> Enu s
+  (Sym s)       -> Sym s
+  (EnuM x c e)  -> EnuM (flatten d book x) [(s, flatten d book t) | (s, t) <- c] (flatten d book e)
+  (Sig a b)     -> Sig (flatten d book a) (flatten d book b)
+  (Tup a b)     -> Tup (flatten d book a) (flatten d book b)
+  (SigM x f)    -> SigM (flatten d book x) (flatten d book f)
+  (All a b)     -> All (flatten d book a) (flatten d book b)
+  (Lam n t f)   -> Lam n (fmap (flatten d book) t) (\x -> flatten (d+1) book (f x))
+  (App f x)     -> App (flatten d book f) (flatten d book x)
+  (Eql t a b)   -> Eql (flatten d book t) (flatten d book a) (flatten d book b)
+  Rfl           -> Rfl
+  (EqlM x f)    -> EqlM (flatten d book x) (flatten d book f)
+  (Met i t x)   -> Met i (flatten d book t) (map (flatten d book) x)
+  (Ind t)       -> Ind (flatten d book t)
+  (Frz t)       -> Frz (flatten d book t)
+  Era           -> Era
+  (Sup l a b)   -> Sup (flatten d book l) (flatten d book a) (flatten d book b)
+  (SupM x l f)  -> SupM (flatten d book x) (flatten d book l) (flatten d book f)
+  (Frk l a b)   -> Frk (flatten d book l) (flatten d book a) (flatten d book b)
+  (Num t)       -> Num t
+  (Val v)       -> Val v
+  (Op2 o a b)   -> Op2 o (flatten d book a) (flatten d book b)
+  (Op1 o a)     -> Op1 o (flatten d book a)
+  (Pri p)       -> Pri p
+  (Log s x)     -> Log (flatten d book s) (flatten d book x)
+  (Loc s t)     -> Loc s (flatten d book t)
+  (Rwt a b x)   -> Rwt (flatten d book a) (flatten d book b) (flatten d book x)
+  (Pat s m c)   -> simplify d $ flattenPat d book (Pat s m c)
 
 isVarCol :: [Case] -> Bool
 isVarCol []                        = True
@@ -253,7 +253,7 @@ unpat d (Var n i)       = Var n i
 unpat d (Ref n)         = Ref n
 unpat d (Sub t)         = Sub (unpat d t)
 unpat d (Fix n f)       = Fix n (\x -> unpat (d+1) (f x))
-unpat d (Let v f)       = Let (unpat d v) (unpat d f)
+unpat d (Let k t v f)   = Let k (fmap (unpat d) t) (unpat d v) (\x -> unpat (d+1) (f x))
 unpat d Set             = Set
 unpat d (Chk x t)       = Chk (unpat d x) (unpat d t)
 unpat d Emp             = Emp
@@ -474,58 +474,58 @@ unfrk :: Int -> Term -> Term
 unfrk d term = unfrkGo d [] term
 
 unfrkGo :: Int -> [(Name, Int)] -> Term -> Term
-unfrkGo d ctx (Var n i)    = Var n i
-unfrkGo d ctx (Ref n)      = Ref n
-unfrkGo d ctx (Sub t)      = Sub (unfrkGo d ctx t)
-unfrkGo d ctx (Fix n f)    = Fix n (\x -> unfrkGo (d+1) ((n,d):ctx) (f x))
-unfrkGo d ctx (Let v f)    = Let (unfrkGo d ctx v) (unfrkGo d ctx f)
-unfrkGo d ctx Set          = Set
-unfrkGo d ctx (Chk x t)    = Chk (unfrkGo d ctx x) (unfrkGo d ctx t)
-unfrkGo d ctx Emp          = Emp
-unfrkGo d ctx (EmpM x)     = EmpM (unfrkGo d ctx x)
-unfrkGo d ctx Uni          = Uni
-unfrkGo d ctx One          = One
-unfrkGo d ctx (UniM x f)   = UniM (unfrkGo d ctx x) (unfrkGo d ctx f)
-unfrkGo d ctx Bit          = Bit
-unfrkGo d ctx Bt0          = Bt0
-unfrkGo d ctx Bt1          = Bt1
-unfrkGo d ctx (BitM x f t) = BitM (unfrkGo d ctx x) (unfrkGo d ctx f) (unfrkGo d ctx t)
-unfrkGo d ctx Nat          = Nat
-unfrkGo d ctx Zer          = Zer
-unfrkGo d ctx (Suc n)      = Suc (unfrkGo d ctx n)
-unfrkGo d ctx (NatM x z s) = NatM (unfrkGo d ctx x) (unfrkGo d ctx z) (unfrkGo d ctx s)
-unfrkGo d ctx (Lst t)      = Lst (unfrkGo d ctx t)
-unfrkGo d ctx Nil          = Nil
-unfrkGo d ctx (Con h t)    = Con (unfrkGo d ctx h) (unfrkGo d ctx t)
-unfrkGo d ctx (LstM x n c) = LstM (unfrkGo d ctx x) (unfrkGo d ctx n) (unfrkGo d ctx c)
-unfrkGo d ctx (Enu s)      = Enu s
-unfrkGo d ctx (Sym s)      = Sym s
-unfrkGo d ctx (EnuM x c e) = EnuM (unfrkGo d ctx x) [(s, unfrkGo d ctx t) | (s, t) <- c] (unfrkGo d ctx e)
-unfrkGo d ctx (Sig a b)    = Sig (unfrkGo d ctx a) (unfrkGo d ctx b)
-unfrkGo d ctx (Tup a b)    = Tup (unfrkGo d ctx a) (unfrkGo d ctx b)
-unfrkGo d ctx (SigM x f)   = SigM (unfrkGo d ctx x) (unfrkGo d ctx f)
-unfrkGo d ctx (All a b)    = All (unfrkGo d ctx a) (unfrkGo d ctx b)
-unfrkGo d ctx (Lam n t f)  = Lam n (fmap (unfrkGo d ctx) t) (\x -> unfrkGo (d+1) ((n,d):ctx) (f x))
-unfrkGo d ctx (App f x)    = App (unfrkGo d ctx f) (unfrkGo d ctx x)
-unfrkGo d ctx (Eql t a b)  = Eql (unfrkGo d ctx t) (unfrkGo d ctx a) (unfrkGo d ctx b)
-unfrkGo d ctx Rfl          = Rfl
-unfrkGo d ctx (EqlM x f)   = EqlM (unfrkGo d ctx x) (unfrkGo d ctx f)
-unfrkGo d ctx (Met i t x)  = Met i (unfrkGo d ctx t) (map (unfrkGo d ctx) x)
-unfrkGo d ctx (Ind t)      = Ind (unfrkGo d ctx t)
-unfrkGo d ctx (Frz t)      = Frz (unfrkGo d ctx t)
-unfrkGo d ctx Era          = Era
-unfrkGo d ctx (Sup l a b)  = Sup (unfrkGo d ctx l) (unfrkGo d ctx a) (unfrkGo d ctx b)
-unfrkGo d ctx (SupM x l f) = SupM (unfrkGo d ctx x) (unfrkGo d ctx l) (unfrkGo d ctx f)
-unfrkGo d ctx (Frk l a b)  = unfrkFrk d ctx l a b
-unfrkGo d ctx (Num t)      = Num t
-unfrkGo d ctx (Val v)      = Val v
-unfrkGo d ctx (Op2 o a b)  = Op2 o (unfrkGo d ctx a) (unfrkGo d ctx b)
-unfrkGo d ctx (Op1 o a)    = Op1 o (unfrkGo d ctx a)
-unfrkGo d ctx (Pri p)      = Pri p
-unfrkGo d ctx (Log s x)    = Log (unfrkGo d ctx s) (unfrkGo d ctx x)
-unfrkGo d ctx (Loc s t)    = Loc s (unfrkGo d ctx t)
-unfrkGo d ctx (Rwt a b x)  = Rwt (unfrkGo d ctx a) (unfrkGo d ctx b) (unfrkGo d ctx x)
-unfrkGo d ctx (Pat s m c)  = Pat (map (unfrkGo d ctx) s) [(k, unfrkGo d ctx v) | (k,v) <- m] [(p, unfrkGo d (ctxCs p) f) | (p, f) <- c]
+unfrkGo d ctx (Var n i)     = Var n i
+unfrkGo d ctx (Ref n)       = Ref n
+unfrkGo d ctx (Sub t)       = Sub (unfrkGo d ctx t)
+unfrkGo d ctx (Fix n f)     = Fix n (\x -> unfrkGo (d+1) ((n,d):ctx) (f x))
+unfrkGo d ctx (Let k t v f) = Let k (fmap (unfrkGo d ctx) t) (unfrkGo d ctx v) (\x -> unfrkGo (d+1) ((k,d):ctx) (f x))
+unfrkGo d ctx Set           = Set
+unfrkGo d ctx (Chk x t)     = Chk (unfrkGo d ctx x) (unfrkGo d ctx t)
+unfrkGo d ctx Emp           = Emp
+unfrkGo d ctx (EmpM x)      = EmpM (unfrkGo d ctx x)
+unfrkGo d ctx Uni           = Uni
+unfrkGo d ctx One           = One
+unfrkGo d ctx (UniM x f)    = UniM (unfrkGo d ctx x) (unfrkGo d ctx f)
+unfrkGo d ctx Bit           = Bit
+unfrkGo d ctx Bt0           = Bt0
+unfrkGo d ctx Bt1           = Bt1
+unfrkGo d ctx (BitM x f t)  = BitM (unfrkGo d ctx x) (unfrkGo d ctx f) (unfrkGo d ctx t)
+unfrkGo d ctx Nat           = Nat
+unfrkGo d ctx Zer           = Zer
+unfrkGo d ctx (Suc n)       = Suc (unfrkGo d ctx n)
+unfrkGo d ctx (NatM x z s)  = NatM (unfrkGo d ctx x) (unfrkGo d ctx z) (unfrkGo d ctx s)
+unfrkGo d ctx (Lst t)       = Lst (unfrkGo d ctx t)
+unfrkGo d ctx Nil           = Nil
+unfrkGo d ctx (Con h t)     = Con (unfrkGo d ctx h) (unfrkGo d ctx t)
+unfrkGo d ctx (LstM x n c)  = LstM (unfrkGo d ctx x) (unfrkGo d ctx n) (unfrkGo d ctx c)
+unfrkGo d ctx (Enu s)       = Enu s
+unfrkGo d ctx (Sym s)       = Sym s
+unfrkGo d ctx (EnuM x c e)  = EnuM (unfrkGo d ctx x) [(s, unfrkGo d ctx t) | (s, t) <- c] (unfrkGo d ctx e)
+unfrkGo d ctx (Sig a b)     = Sig (unfrkGo d ctx a) (unfrkGo d ctx b)
+unfrkGo d ctx (Tup a b)     = Tup (unfrkGo d ctx a) (unfrkGo d ctx b)
+unfrkGo d ctx (SigM x f)    = SigM (unfrkGo d ctx x) (unfrkGo d ctx f)
+unfrkGo d ctx (All a b)     = All (unfrkGo d ctx a) (unfrkGo d ctx b)
+unfrkGo d ctx (Lam n t f)   = Lam n (fmap (unfrkGo d ctx) t) (\x -> unfrkGo (d+1) ((n,d):ctx) (f x))
+unfrkGo d ctx (App f x)     = App (unfrkGo d ctx f) (unfrkGo d ctx x)
+unfrkGo d ctx (Eql t a b)   = Eql (unfrkGo d ctx t) (unfrkGo d ctx a) (unfrkGo d ctx b)
+unfrkGo d ctx Rfl           = Rfl
+unfrkGo d ctx (EqlM x f)    = EqlM (unfrkGo d ctx x) (unfrkGo d ctx f)
+unfrkGo d ctx (Met i t x)   = Met i (unfrkGo d ctx t) (map (unfrkGo d ctx) x)
+unfrkGo d ctx (Ind t)       = Ind (unfrkGo d ctx t)
+unfrkGo d ctx (Frz t)       = Frz (unfrkGo d ctx t)
+unfrkGo d ctx Era           = Era
+unfrkGo d ctx (Sup l a b)   = Sup (unfrkGo d ctx l) (unfrkGo d ctx a) (unfrkGo d ctx b)
+unfrkGo d ctx (SupM x l f)  = SupM (unfrkGo d ctx x) (unfrkGo d ctx l) (unfrkGo d ctx f)
+unfrkGo d ctx (Frk l a b)   = unfrkFrk d ctx l a b
+unfrkGo d ctx (Num t)       = Num t
+unfrkGo d ctx (Val v)       = Val v
+unfrkGo d ctx (Op2 o a b)   = Op2 o (unfrkGo d ctx a) (unfrkGo d ctx b)
+unfrkGo d ctx (Op1 o a)     = Op1 o (unfrkGo d ctx a)
+unfrkGo d ctx (Pri p)       = Pri p
+unfrkGo d ctx (Log s x)     = Log (unfrkGo d ctx s) (unfrkGo d ctx x)
+unfrkGo d ctx (Loc s t)     = Loc s (unfrkGo d ctx t)
+unfrkGo d ctx (Rwt a b x)   = Rwt (unfrkGo d ctx a) (unfrkGo d ctx b) (unfrkGo d ctx x)
+unfrkGo d ctx (Pat s m c)   = Pat (map (unfrkGo d ctx) s) [(k, unfrkGo d ctx v) | (k,v) <- m] [(p, unfrkGo d (ctxCs p) f) | (p, f) <- c]
   where
     ctxCs  p = ctx ++ map (\(k,v) -> (k, d)) m ++ ctxPat p
     ctxPat p = map (\k -> (k, d)) (S.toList (S.unions (map (freeVars S.empty) p)))
@@ -605,58 +605,58 @@ ctrOf d x           = (var d , [var d])
 subst :: Name -> Term -> Term -> Term
 subst name val term = go name val term where
   go name val term = case term of
-    Var k _    -> if k == name then val else term
-    Ref k      -> Ref k
-    Sub t      -> Sub (go name val t)
-    Fix k f    -> if k == name then term else Fix k (\x -> go name val (f x))
-    Let v f    -> Let (go name val v) (go name val f)
-    Chk x t    -> Chk (go name val x) (go name val t)
-    Set        -> Set
-    Emp        -> Emp
-    EmpM x     -> EmpM (go name val x)
-    Uni        -> Uni
-    One        -> One
-    UniM x f   -> UniM (go name val x) (go name val f)
-    Bit        -> Bit
-    Bt0        -> Bt0
-    Bt1        -> Bt1
-    BitM x f t -> BitM (go name val x) (go name val f) (go name val t)
-    Nat        -> Nat
-    Zer        -> Zer
-    Suc n      -> Suc (go name val n)
-    NatM x z s -> NatM (go name val x) (go name val z) (go name val s)
-    Lst t      -> Lst (go name val t)
-    Nil        -> Nil
-    Con h t    -> Con (go name val h) (go name val t)
-    LstM x n c -> LstM (go name val x) (go name val n) (go name val c)
-    Enu s      -> Enu s
-    Sym s      -> Sym s
-    EnuM x c e -> EnuM (go name val x) [(s, go name val t) | (s, t) <- c] (go name val e)
-    Sig a b    -> Sig (go name val a) (go name val b)
-    Tup a b    -> Tup (go name val a) (go name val b)
-    SigM x f   -> SigM (go name val x) (go name val f)
-    All a b    -> All (go name val a) (go name val b)
-    Lam k t f  -> if k == name then term else Lam k (fmap (go name val) t) (\x -> go name val (f x))
-    App f x    -> App (go name val f) (go name val x)
-    Eql t a b  -> Eql (go name val t) (go name val a) (go name val b)
-    Rfl        -> Rfl
-    EqlM x f   -> EqlM (go name val x) (go name val f)
-    Met i t x  -> Met i (go name val t) (map (go name val) x)
-    Ind t      -> Ind (go name val t)
-    Frz t      -> Frz (go name val t)
-    Era        -> Era
-    Sup l a b  -> Sup (go name val l) (go name val a) (go name val b)
-    SupM x l f -> SupM (go name val x) (go name val l) (go name val f)
-    Frk l a b  -> Frk (go name val l) (go name val a) (go name val b)
-    Num t      -> Num t
-    Val v      -> Val v
-    Op2 o a b  -> Op2 o (go name val a) (go name val b)
-    Op1 o a    -> Op1 o (go name val a)
-    Pri p      -> Pri p
-    Log s x    -> Log (go name val s) (go name val x)
-    Loc s t    -> Loc s (go name val t)
-    Rwt a b x  -> Rwt (go name val a) (go name val b) (go name val x)
-    Pat s m c  -> Pat (map (go name val) s) m (map cse c)
+    Var k _     -> if k == name then val else term
+    Ref k       -> Ref k
+    Sub t       -> Sub (go name val t)
+    Fix k f     -> if k == name then term else Fix k (\x -> go name val (f x))
+    Let k t v f -> if k == name then term else Let k (fmap (go name val) t) (go name val v) (\x -> go name val (f x))
+    Chk x t     -> Chk (go name val x) (go name val t)
+    Set         -> Set
+    Emp         -> Emp
+    EmpM x      -> EmpM (go name val x)
+    Uni         -> Uni
+    One         -> One
+    UniM x f    -> UniM (go name val x) (go name val f)
+    Bit         -> Bit
+    Bt0         -> Bt0
+    Bt1         -> Bt1
+    BitM x f t  -> BitM (go name val x) (go name val f) (go name val t)
+    Nat         -> Nat
+    Zer         -> Zer
+    Suc n       -> Suc (go name val n)
+    NatM x z s  -> NatM (go name val x) (go name val z) (go name val s)
+    Lst t       -> Lst (go name val t)
+    Nil         -> Nil
+    Con h t     -> Con (go name val h) (go name val t)
+    LstM x n c  -> LstM (go name val x) (go name val n) (go name val c)
+    Enu s       -> Enu s
+    Sym s       -> Sym s
+    EnuM x c e  -> EnuM (go name val x) [(s, go name val t) | (s, t) <- c] (go name val e)
+    Sig a b     -> Sig (go name val a) (go name val b)
+    Tup a b     -> Tup (go name val a) (go name val b)
+    SigM x f    -> SigM (go name val x) (go name val f)
+    All a b     -> All (go name val a) (go name val b)
+    Lam k t f   -> if k == name then term else Lam k (fmap (go name val) t) (\x -> go name val (f x))
+    App f x     -> App (go name val f) (go name val x)
+    Eql t a b   -> Eql (go name val t) (go name val a) (go name val b)
+    Rfl         -> Rfl
+    EqlM x f    -> EqlM (go name val x) (go name val f)
+    Met i t x   -> Met i (go name val t) (map (go name val) x)
+    Ind t       -> Ind (go name val t)
+    Frz t       -> Frz (go name val t)
+    Era         -> Era
+    Sup l a b   -> Sup (go name val l) (go name val a) (go name val b)
+    SupM x l f  -> SupM (go name val x) (go name val l) (go name val f)
+    Frk l a b   -> Frk (go name val l) (go name val a) (go name val b)
+    Num t       -> Num t
+    Val v       -> Val v
+    Op2 o a b   -> Op2 o (go name val a) (go name val b)
+    Op1 o a     -> Op1 o (go name val a)
+    Pri p       -> Pri p
+    Log s x     -> Log (go name val s) (go name val x)
+    Loc s t     -> Loc s (go name val t)
+    Rwt a b x   -> Rwt (go name val a) (go name val b) (go name val x)
+    Pat s m c   -> Pat (map (go name val) s) m (map cse c)
       where cse (pats, rhs) = (map (go name val) pats, go name val rhs)
 
 -- Helper to substitute multiple variables at once

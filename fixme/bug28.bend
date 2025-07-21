@@ -2,7 +2,7 @@
 
 ###
 
-# incorrect annotation of variable causes it to check (compare to bug27)
+# incorrect annotation of doesn't stop the check from passing
 
 def proj(p:Σa:Nat.Nat) -> Nat:
   (m :: Bool) = ~p{(,):λx.λy.x}

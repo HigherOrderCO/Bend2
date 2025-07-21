@@ -62,7 +62,7 @@ parseDefFunction f = label "function definition" $ do
   -- Combine type params (as Set-typed args) with regular args
   let args = typeArgs ++ regularArgs
   _ <- symbol "->"
-  returnType <- parseTerm
+  returnType <- parseTermBefore ":"
   _ <- symbol ":"
   body <- expectBody ("type signature for '" ++ f ++ "()'") parseTerm
   let (typ, bod) = foldr nestTypeBod (returnType, body) args
