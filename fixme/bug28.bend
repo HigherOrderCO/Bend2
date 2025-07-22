@@ -5,7 +5,7 @@
 # incorrect annotation of doesn't stop the check from passing
 
 def proj(p:Σa:Nat.Nat) -> Nat:
-  (m :: Bool) = ~p{(,):λx.λy.x}
+  (m :: Bool) : Nat = ~p{(,):λx.λy.x}
   m
 
 def main() -> Nat:

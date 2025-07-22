@@ -135,10 +135,12 @@ parseTermBefore op = do
   let wasBlocked = blocked st
   let newBlocked = op : wasBlocked
   put st { blocked = newBlocked }
-  term <- parseTerm
+  term <- observing parseTerm
   st'  <- get
   put st' { blocked = wasBlocked }
-  return term
+  case term of
+    Right term -> return term
+    Left err   -> parseError err
 
 -- | Syntax: x, foo, bar_123, Type<A,B>, Nat/add
 parseVar :: Parser Term
@@ -344,7 +346,7 @@ parseIndentClauses col arity = many clause where
         guard (unPos (sourceColumn pos) >= col)
         _    <- symbol "case"
         return pos
-      pats <- replicateM arity parseTerm
+      pats <- replicateM arity (parseTermBefore ":")
       _    <- symbol ":"
       body <- parseTerm
       pure (pats, body)
@@ -355,7 +357,7 @@ parseBraceClauses :: Int -> Parser [Case]
 parseBraceClauses arity = manyTill singleClause (lookAhead (symbol "}")) where
   singleClause = label "case clause" $ do
     _    <- symbol "case"
-    pats <- replicateM arity parseTerm
+    pats <- replicateM arity (parseTermBefore ":")
     _    <- symbol ":"
     body <- parseTerm
     pure (pats, body)
@@ -796,7 +798,7 @@ parseLam = label "lambda abstraction" $ do
   -- Parse terms instead of just names to support patterns
   -- pats <- some parseTerm
   binders <- some $ do
-    pat <- parseTerm
+    pat <- parseTermBefore ":"
     mtyp <- optional $ do
       _ <- symbol ":"
       parseTerm

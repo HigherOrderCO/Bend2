@@ -1,5 +1,9 @@
 # FIXME
 
+# fixed. parseTermBefore should restore the blocked ops always
+# even when its internal parseTerm fails. with this, additional
+# parseTermBefore have to be used e.g. in parsing 'case ...:`
+
 ###
 
 # when used under the combinator 'some',

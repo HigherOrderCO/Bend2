@@ -1,7 +1,5 @@
 # FIXME
 
-# fixed by using Let with HOAS binding
-
 ###
 
 # can't infer the type of a String
