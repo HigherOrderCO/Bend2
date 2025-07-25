@@ -127,6 +127,7 @@ processFileToHVM :: FilePath -> IO ()
 processFileToHVM file = do
   book <- parseFile file
   let bookAdj = adjustBookWithPats book
+  -- putStrLn $ show bookAdj
   let hvmCode = HVM.compile bookAdj
   putStrLn hvmCode
 

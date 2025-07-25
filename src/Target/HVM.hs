@@ -289,7 +289,8 @@ patToHVM book ctx [x] m c@(([p], f) : _) =
         (Nil)                     -> ("#Nil", [], termToHVM book ctx x)
         (Con (Var h _) (Var t _)) -> ("#Cons", [bindNam h, bindNam t], termToHVM book ctx x)
         (Tup (Var a _) (Var b _)) -> ("#P", [bindNam a, bindNam b], termToHVM book ctx x)
-        _                         -> ("_", [], termToHVM book ctx x)
+        (Var k _)                 -> (bindNam k, [], termToHVM book ctx x)
+        _                         -> ("_", [], HVM.Era)
       ) goodCs
     goodCs = filter (not . badPatCase) c
     bitMat = case c of
