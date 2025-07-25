@@ -318,7 +318,7 @@ parsePat = label "pattern match" $ do
   _       <- try $ keyword "match"
   scruts  <- some $ parseTermBefore ":"
   delim   <- choice [ ':' <$ symbol ":", '{' <$ symbol "{" ]
-  moves   <- many parseWith
+  moves   <- concat <$> many parseWith
   clauses <- case delim of
     ':' -> parseIndentClauses (unPos (sourceColumn srcPos)) (length scruts)
     '{' -> parseBraceClauses  (length scruts)
@@ -331,9 +331,10 @@ parsePat = label "pattern match" $ do
     -- Parse 'with' statements
     parseWith = try $ do
       _ <- symbol "with"
-      x <- name
-      v <- option (Var x 0) (try (symbol "=" >> parseTerm))
-      return (x, v)
+      sepEndBy (do
+        x <- name
+        v <- option (Var x 0) (try (symbol "=" >> parseTerm))
+        return (x, v)) (symbol ",")
 
 -- | Syntax: case pattern1 pattern2: body
 -- Indentation-sensitive clause list (stops when out-dented)
