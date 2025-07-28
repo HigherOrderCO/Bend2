@@ -267,7 +267,7 @@ collapse dep book term = case term of
     return $ Log s' x'
 
   -- Primitive
-  Pri p       -> return $ Pri p
+  Pri p       -> return $ Pri p -- TODO: Inc/Dec
 
   -- Sugars
   Pat ts ms cs -> error "unreachable"

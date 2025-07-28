@@ -35,6 +35,8 @@ prelude = unlines [
     "@fix(&f) = (f @fix(f))",
     "@CHAR_TO_U64(x) = (+ x 0)",
     "@U64_TO_CHAR(x) = (+ (& x 0xFFFFFFFF) '\\0')",
+    "@HVM_INC(x) = ↑x",
+    "@HVM_DEC(x) = ↓x",
     "",
     "// Bend to HVM Compiler Output"
   ]
@@ -238,6 +240,8 @@ refAppToHVM book ctx term =
     (Pri p, args) -> case p of
       U64_TO_CHAR -> return $ wrapRef "U64_TO_CHAR" (map (termToHVM book ctx) args) (length args) 1
       CHAR_TO_U64 -> return $ wrapRef "CHAR_TO_U64" (map (termToHVM book ctx) args) (length args) 1
+      HVM_INC     -> return $ wrapRef "HVM_INC" (map (termToHVM book ctx) args) (length args) 1
+      HVM_DEC     -> return $ wrapRef "HVM_DEC" (map (termToHVM book ctx) args) (length args) 1
     _ -> Nothing
   where
     -- Eta expand the Ref if less args than needed and rebuild the Apps if more args than needed

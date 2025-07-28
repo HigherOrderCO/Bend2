@@ -198,6 +198,10 @@ infer d span book@(Book defs) ctx term =
       Done (All (Num U64_T) (Lam "x" Nothing (\_ -> Num CHR_T)))
     Pri CHAR_TO_U64 -> do
       Done (All (Num CHR_T) (Lam "x" Nothing (\_ -> Num U64_T)))
+    Pri HVM_INC -> do
+      Fail $ CantInfer span (formatCtx d book ctx)
+    Pri HVM_DEC -> do
+      Fail $ CantInfer span (formatCtx d book ctx)
     Log s x -> do
       check d span book ctx s (Lst (Num CHR_T))
       infer d span book ctx x
@@ -435,6 +439,10 @@ check d span book ctx term goal =
       check d span book ctx b goal
     (Pat _ _ _, _) -> do
       error "not-supported"
+    (App (Pri HVM_INC) x, _) ->
+      check d span book ctx x goal
+    (App (Pri HVM_DEC) x, _) ->
+      check d span book ctx x goal
     -- (f x) :: G
     -- --------------------------------------------------- specialize
     -- f :: ∀(v : typeof x). (G where x is rewritten by v)

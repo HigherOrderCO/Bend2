@@ -194,6 +194,8 @@ whnfAppPri lv book p x =
     x' -> case (p, x') of
       (U64_TO_CHAR, Val (U64_V n)) -> Val (CHR_V (toEnum (fromIntegral n)))
       (CHAR_TO_U64, Val (CHR_V c)) -> Val (U64_V (fromIntegral (fromEnum c)))
+      (HVM_INC    , t)             -> t
+      (HVM_DEC    , t)             -> t
       _                            -> App (Pri p) x'
 
 -- Numeric operations
