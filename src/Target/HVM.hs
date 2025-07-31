@@ -31,7 +31,6 @@ prelude = unlines [
     "// Prelude",
     "data List { #Nil #Cons{head tail} }",
     "data Nat { #Z #S{n} }",
-    "data Pair { #P{fst snd} }",
     "@fix(&f) = (f @fix(f))",
     "@CHAR_TO_U64(x) = (+ x 0)",
     "@U64_TO_CHAR(x) = (+ (& x 0xFFFFFFFF) '\\0')",
@@ -159,13 +158,13 @@ termToHVM book ctx term = go term where
   go (Tup x y)    =
     case ctrToHVM book ctx x y of
       Just hvm -> hvm
-      Nothing -> HVM.Ctr "#P" [termToHVM book ctx x, termToHVM book ctx y]
+      Nothing -> HVM.Sup 0 (termToHVM book ctx x) (termToHVM book ctx y)
   go (SigM x f)   =
     case f of
       (Lam l _ (subst l -> (Lam r _ (subst r -> f)))) ->
-        HVM.Mat (HVM.MAT 0) (termToHVM book ctx x) [] [("#P", [l, r], termToHVM book ctx f)]
+        HVM.Dup 0 l r (termToHVM book ctx x) (termToHVM book ctx f)
       _ ->
-        HVM.Mat (HVM.MAT 0) (termToHVM book ctx x) [] [("#P", ["x$l", "x$r"], HVM.App (HVM.App (termToHVM book ctx f) (HVM.Var "x$l")) (HVM.Var "x$r"))]
+        HVM.Dup 0 "x$l" "x$r" (termToHVM book ctx x) (HVM.App (HVM.App (termToHVM book ctx f) (HVM.Var "x$l")) (HVM.Var "x$r"))
   go (All _ _)    = HVM.Era
   go (Lam n _ f)  = HVM.Lam (bindNam n) (termToHVM book (MS.insert n n ctx) (f (Var n 0)))
   go (App f x)    =
@@ -231,7 +230,9 @@ refAppToHVM :: Book -> MS.Map Name HVM.Name -> Term -> Maybe HVM.Core
 refAppToHVM book ctx term =
   case collectApps term [] of
     (Ref k, args) ->
-      let (_,tm,ty)   = fromJust (deref book k)
+      let (tm,ty)     = case deref book k of
+            Just (_,tm,ty) -> (tm,ty)
+            Nothing        -> error ("unknown ref in hvm backend: " ++ show k)
           (era,arg,_) = collectLamArgs tm ty [] []
           argsHVM     = map (termToHVM book ctx) (drop (length era) args)
           ari         = length arg
@@ -261,22 +262,23 @@ refAppToHVM book ctx term =
 patToHVM :: Book -> MS.Map Name HVM.Name -> [Term] -> [Move] -> [Case] -> HVM.Core
 patToHVM book ctx [x] m c@(([p], f) : _) =
   case p of
-    (Var k i)    -> HVM.Let HVM.LAZY (bindNam k) (termToHVM book ctx x) (termToHVM book ctx f) -- unreachable?
-    (Emp)        -> HVM.Era
-    (One)        -> termToHVM book ctx f
-    (Bt0)        -> bitMat
-    (Bt1)        -> bitMat
-    (Zer)        -> simpleMat
-    (Suc _)      -> simpleMat
-    (Nil)        -> simpleMat
-    (Con _ _)    -> simpleMat
-    (Sym _)      -> error "Nested matches on constructors and matches on symbols are not yet supported on Bend-to-HVM compiler."
-    (Tup _ _)    ->
+    (Var k i) -> HVM.Let HVM.LAZY (bindNam k) (termToHVM book ctx x) (termToHVM book ctx f) -- unreachable?
+    (Emp)     -> HVM.Era
+    (One)     -> termToHVM book ctx f
+    (Bt0)     -> bitMat
+    (Bt1)     -> bitMat
+    (Zer)     -> simpleMat
+    (Suc _)   -> simpleMat
+    (Nil)     -> simpleMat
+    (Con _ _) -> simpleMat
+    (Sym _)   -> error "Nested matches on constructors and matches on symbols are not yet supported on Bend-to-HVM compiler."
+    (Tup (Var a _) (Var b _)) ->
       case ctrPatToHVM book ctx x m c of
         Just hvm -> hvm
-        Nothing  -> simpleMat
-    (Rfl)        -> termToHVM book ctx (snd (head c))
-    (Sup l (Var a _) (Var b _)) -> HVM.Ref "DUP" 0 [termToHVM book ctx l, termToHVM book ctx x, (HVM.Lam (bindNam a) (HVM.Lam (bindNam b) (termToHVM book ctx f)))]
+        Nothing  -> HVM.Dup 0 a b (termToHVM book ctx x) (termToHVM book ctx f)
+    (Rfl)     -> termToHVM book ctx (snd (head c))
+    (Sup l (Var a _) (Var b _)) ->
+      HVM.Ref "DUP" 0 [termToHVM book ctx l, termToHVM book ctx x, (HVM.Lam (bindNam a) (HVM.Lam (bindNam b) (termToHVM book ctx f)))]
     _ -> HVM.Era
   where
     -- A match that is contained in a single Pat term (bool, nat, list, pair)
@@ -292,7 +294,6 @@ patToHVM book ctx [x] m c@(([p], f) : _) =
         (Suc (Var k _))           -> ("#S", [bindNam k], termToHVM book ctx x)
         (Nil)                     -> ("#Nil", [], termToHVM book ctx x)
         (Con (Var h _) (Var t _)) -> ("#Cons", [bindNam h, bindNam t], termToHVM book ctx x)
-        (Tup (Var a _) (Var b _)) -> ("#P", [bindNam a, bindNam b], termToHVM book ctx x)
         (Var k _)                 -> (bindNam k, [], termToHVM book ctx x)
         _                         -> ("_", [], HVM.Era)
       ) goodCs
@@ -327,7 +328,7 @@ ctrPatToHVM book ctx x m c = case c of
     caseToHVM ctr fds (Pat [(Var k _)] _ (([One], bod) : _)) = Just ('#':defNam ctr, map bindNam fds, termToHVM book ctx bod)
     caseToHVM _ _ _ = Nothing
 
-    rewriteDflt kT kB x = rewriteHVM (HVM.Ctr "#P" [HVM.Var kT, HVM.Var kB]) (HVM.Var kT) x
+    rewriteDflt kT kB x = rewriteHVM (HVM.Sup 0 (HVM.Var kT) (HVM.Var kB)) (HVM.Var kT) x
 
 
 -- Utils
@@ -398,7 +399,7 @@ showHVM lv tm =
     go (HVM.Lam x f)       = "λ" ++ x ++ " " ++ showHVM lv f
     go (HVM.App f x)       = "(" ++ showHVM lv f ++ " " ++ showHVM lv x ++ ")"
     go (HVM.Sup l a b)     = "&" ++ show l ++ "{" ++ showHVM lv a ++ " " ++ showHVM lv b ++ "}"
-    go (HVM.Dup l x y v f) = "! &" ++ show l ++ "{" ++ x ++ " " ++ y ++ "} = " ++ showHVM lv v ++ "\n" ++ indent lv ++ showHVM lv f
+    go (HVM.Dup l x y v f) = "!&" ++ show l ++ "{" ++ x ++ " " ++ y ++ "} = " ++ showHVM lv v ++ "\n" ++ indent lv ++ showHVM lv f
     go (HVM.Ctr k [])      = k
     go (HVM.Ctr k xs)      = k ++ "{" ++ unwords (map (showHVM lv) xs) ++ "}"
     go (HVM.U32 v)         = show v
