@@ -1,4 +1,6 @@
-module Core.FreeVars where
+{-./Type.hs-}
+
+-- module Core.FreeVars where
 
 -- import Core.Type
 -- import qualified Data.Map as M
@@ -45,3 +47,69 @@ module Core.FreeVars where
   -- Loc s t     -> S.map (\(n,_) -> (n,s)) (freeVars book ctx t)
   -- Pat s m c   -> S.unions ((map (freeVars book ctx) s) ++ (map (\(_,m) -> freeVars book ctx m) m) ++ (map (\(_,c) -> freeVars book ctx c) c))
   -- _           -> S.empty
+
+-- TODO: refactor. include ALL constructors explicitly. do NOT include a default case.
+
+module Core.FreeVars where
+
+import Core.Type
+import qualified Data.Map as M
+import qualified Data.Set as S
+
+-- | Returns the free variables in a term by name, checking references against a book.
+-- A Ref is only considered free if it's not defined in the book.
+freeVars :: Book -> S.Set Name -> Term -> S.Set (Name, Span)
+freeVars book ctx tm = case tm of
+  Var n _     -> if n `S.member` ctx then S.empty else S.singleton (n, noSpan)
+  Ref n _     -> case getFun book n of
+                   Nothing -> S.singleton (n, noSpan)  -- undefined reference
+                   Just _  -> S.empty        -- defined reference
+  Sub t       -> freeVars book ctx t
+  Fix n f     -> freeVars book (S.insert n ctx) (f (Var n 0))
+  Let k t v f -> S.unions [foldMap (freeVars book ctx) t, freeVars book ctx v, freeVars book (S.insert k ctx) (f (Var k 0))]
+  Use k v f   -> S.union (freeVars book ctx v) (freeVars book (S.insert k ctx) (f (Var k 0)))
+  Set         -> S.empty
+  Chk v t     -> S.union (freeVars book ctx v) (freeVars book ctx t)
+  Emp         -> S.empty
+  EmpM        -> S.empty
+  Uni         -> S.empty
+  One         -> S.empty
+  UniM f      -> freeVars book ctx f
+  Bit         -> S.empty
+  Bt0         -> S.empty
+  Bt1         -> S.empty
+  BitM f t    -> S.union (freeVars book ctx f) (freeVars book ctx t)
+  Nat         -> S.empty
+  Zer         -> S.empty
+  Suc n       -> freeVars book ctx n
+  NatM z s    -> S.union (freeVars book ctx z) (freeVars book ctx s)
+  Lst t       -> freeVars book ctx t
+  Nil         -> S.empty
+  Con h t     -> S.union (freeVars book ctx h) (freeVars book ctx t)
+  LstM n c    -> S.union (freeVars book ctx n) (freeVars book ctx c)
+  Num _       -> S.empty
+  Val _       -> S.empty
+  Op2 _ a b   -> S.union (freeVars book ctx a) (freeVars book ctx b)
+  Op1 _ a     -> freeVars book ctx a
+  Sig a b     -> S.union (freeVars book ctx a) (freeVars book ctx b)
+  Tup a b     -> S.union (freeVars book ctx a) (freeVars book ctx b)
+  SigM f      -> freeVars book ctx f
+  All a b     -> S.union (freeVars book ctx a) (freeVars book ctx b)
+  Lam n t f   -> S.union (freeVars book (S.insert n ctx) (f (Var n 0))) (foldMap (freeVars book ctx) t)
+  App f x     -> S.union (freeVars book ctx f) (freeVars book ctx x)
+  Eql t a b   -> S.unions [freeVars book ctx t, freeVars book ctx a, freeVars book ctx b]
+  Rfl         -> S.empty
+  EqlM f      -> freeVars book ctx f
+  Rwt e f     -> S.union (freeVars book ctx e) (freeVars book ctx f)
+  ADT _ xs    -> S.unions (map (freeVars book ctx) xs)
+  Ctr _ xs    -> S.unions (map (freeVars book ctx) xs)
+  ADTM _ cs d -> S.unions (map (freeVars book ctx . snd) cs ++ foldMap (\d -> [freeVars book ctx d]) d)
+  Met _ t c   -> S.unions (freeVars book ctx t : map (freeVars book ctx) c)
+  Era         -> S.empty
+  Sup _ a b   -> S.union (freeVars book ctx a) (freeVars book ctx b)
+  SupM l f    -> S.union (freeVars book ctx l) (freeVars book ctx f)
+  Loc s t     -> S.map (\(n,_) -> (n,s)) (freeVars book ctx t)
+  Log s x     -> S.union (freeVars book ctx s) (freeVars book ctx x)
+  Pri _       -> S.empty
+  Pat s m c   -> S.unions ((map (freeVars book ctx) s) ++ (map (\(_,m) -> freeVars book ctx m) m) ++ (map (\(_,c) -> freeVars book ctx c) c))
+  Frk l a b   -> S.unions [freeVars book ctx l, freeVars book ctx a, freeVars book ctx b]

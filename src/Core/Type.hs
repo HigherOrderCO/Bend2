@@ -1,4 +1,4 @@
--- GOAL:
+-- REFACTOR SPEC:
 -- We're now refactoring Bend2 to include a proper Algebraic Datatype system.
 -- Previously, we emulated algebraic datatypes with enums and sigmas. For ex:
 -- type Vec<A: Set, N: Nat>:
@@ -44,7 +44,7 @@
 -- And will not be desugared - there is a native variant for it (Ctr). Note
 -- that, to distinguish constructors from variables, we need the ending '{}'.
 -- That is, `Nil` is a variable, and `Nil{}` is a constructor. Also, to avoid
--- conflict, the old equality syntax changes from `T{a == b}` to `a == b : T`.
+-- conflict, the old equality syntax changes from `T{a == b}` to `a == b :: T`.
 -- We also include a new λ-match for ADTs:
 -- - `λT{ Ctr{}: ctr_case ; ... ; {}: def_case }`
 -- Where:
@@ -66,12 +66,12 @@
 -- Finally, the following top-level syntax declares a new ADT:
 -- type Vec<A: Set, N: Nat>:
 --   case Nil{}:
---     e: N == 0n : Nat
+--     e: N == 0n :: Nat
 --   case Con{}:
 --     n: Nat
 --     h: A
 --     t: type Vec<A,n>
---     e: N == 1n+n : Nat
+--     e: N == 1n+n :: Nat
 -- Syntactically, only change is how constructors/types/equality are written.
 -- Semantically, when a top-level ADT is parsed, instead of desugaring it to a
 -- top-level definition with sigmas and enums, we just register it in the book,
@@ -116,6 +116,8 @@
 -- Notice we get the case types by applying the return type of the All to the
 -- type stored in the given constructor entry of the retrieved ADT.
 -- We don't implement datatype indices. Fording is used to emulate them.
+
+-- Keep your code simple and idiomatic.
 --
 -- GOAL: refactor the codebase to implement the changes above.
 -- When I give you a commented-out code, REWRITE IT FULLY.
@@ -422,3 +424,26 @@ isLam SigM{}    = True
 isLam SupM{}    = True
 isLam EqlM{}    = True
 isLam _         = False
+
+-- Convenience function: getCtrADT -- given a ctr name, returns its DatType
+getCtrADT :: Book -> Name -> Maybe DataType
+getCtrADT (Book _ adts _) ctrName = 
+  case filter sameName (M.elems adts) of
+    [adt] -> Just adt
+    _     -> Nothing
+  where sameName adt = any (\ (name, _) -> name == ctrName) (adtCtrs adt)
+
+-- Convenience function: getCtr -- given a ctr name, returns its DataCtr
+getCtr :: Book -> Name -> Maybe DataCtr
+getCtr book ctrName = do
+  adt <- getCtrADT book ctrName
+  case filter (\(name, _) -> name == ctrName) (adtCtrs adt) of
+    [ctr] -> Just ctr
+    _     -> Nothing
+
+getAdtName :: Book -> Case -> Name
+getAdtName book ([(cut -> Ctr cname _)], _) = 
+  case getCtrADT book cname of
+    Just adt -> adtName adt
+    Nothing  -> error $ "Constructor " ++ cname ++ " not found in book"
+getAdtName _ _ = error "Invalid ADT pattern"
