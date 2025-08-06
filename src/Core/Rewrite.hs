@@ -1,4 +1,6 @@
 {-./Type.hs-}
+{-./WHNF.hs-}
+{-./Equal.hs-}
 
 -- module Core.Rewrite where
 
@@ -193,6 +195,7 @@ import GHC.Float (castDoubleToWord64, castWord64ToDouble)
 
 import Core.Equal
 import Core.Type
+import Core.Show
 import Core.WHNF
 
 import Debug.Trace
@@ -265,3 +268,47 @@ rewriteGo d book old neo val =
 rewriteCtx :: Int -> Book -> Term -> Term -> Ctx -> Ctx
 rewriteCtx d book old neo (Ctx ctx) = Ctx (map rewriteAnn ctx)
   where rewriteAnn (k,v,t) = (k, v, rewrite d book old neo t)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- this repository has been just refactored using AI. check Type.hs to see the
+-- refactor instructions. sadly, the comm proof on examples/main.bend is not
+-- checking anymore. when we have the goal `1n+add(ap,b) == add(b,1n+ap) : Nat`,
+-- and we rewrite it with `e0 : add(ap,b) == add(b,ap) : Nat`, the goal is
+-- updated to `1n+add(b,ap) == add(b,ap) : Nat`, which is clearly not correct:
+-- the right side is NOT equal to `add(ap,b)`, so it should NOT be rewritten to
+-- `add(b,ap)`.  seems like, on the refactor, something broke how rewrite or
+-- equality works. investigate the old and new files, and spot the divergence.
+-- explain the culprit below, in plain English.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

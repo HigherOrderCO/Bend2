@@ -866,15 +866,7 @@ derefUndo book k i (LHS (SS n) l) body x = deref book k i (LHS n (l x)) body
 --- Evaluates terms that whnf won't, including:
 --- - Injective Refs (whnf skips them for pretty printing)
 force :: Book -> Term -> Term
-force book term =
-  -- trace ("force: " ++ show term) $
-  case whnf book term of
-    term' -> case cut fn of
-      Ref k i -> case getFun book k of
-        Just fn' -> force book $ foldl App (funBody fn') xs
-        otherwise -> term'
-      term' -> term'
-      where (fn,xs) = collectApps term' []
+force book term = cut (whnf book term)
 
 -- Normalization
 -- =============

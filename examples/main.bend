@@ -176,46 +176,57 @@ def comm(a: Nat, b: Nat) -> add(a,b) == add(b,a) :: Nat:
     case 1n+ap:
       e0 = comm(ap, b)
       e1 = succ_right(b, ap)
-      #rewrite e0
-      ()
-      #rewrite e0
-      #rewrite e1
-      #1n + ()
+      rewrite e0
+      rewrite e1
+      1n + {==}
 
-## 0 != 1+n
-#def succ_neq_zero(n: Nat) -> Nat{0n != (1n+n)}:
-  #λe. absurd e
+# 0 != 1+n
+def succ_neq_zero(n: Nat) -> 0n != (1n+n) :: Nat:
+  λe. absurd e
 
-## 1n+n = 1n+m implies n = m
-#def succ_inj(n: Nat, m: Nat, e: Nat{1n+n==1n+m}) -> Nat{n==m}:
-  #match n m e:
-    #case 0n 0n e:
-      #{==}
-    #case 1n+n 0n e:
-      #absurd e
-    #case 0n 1n+m e:
-      #absurd e
-    #case 1n+n 1n+m e:
-      #match e:
-        #case 0n:
-          #()
-        #case 1n+e:
-          #e
+# 1n+n = 1n+m implies n = m
+def succ_inj(n: Nat, m: Nat, e: (1n+n)==(1n+m)::Nat) -> n==m::Nat:
+  match n m e:
+    case 0n 0n e:
+      {==}
+    case 1n+n 0n e:
+      absurd e
+    case 0n 1n+m e:
+      absurd e
+    case 1n+n 1n+m e:
+      match e:
+        case 0n:
+          ()
+        case 1n+e:
+          e
 
-### Inductive Datatype
-### ------------------
+## Datatypes
+## ---------
 
-## data Vec (A : Set) : Nat → Set where
-##   nil  : Vec A zero
-##   cons : ∀ {n} → A → Vec A n → Vec A (suc n)
-#type Vec<A: Set>(N: Nat) -> Set:
-  #case @Nil:
-    #e: Nat{N == 0n}
-  #case @Cons:
-    #n: Nat
-    #h: A
-    #t: Vec(A,n)
-    #e: Nat{N == (1n+n)}
+type B:
+  case T{}:
+  case F{}:
+
+def foo(P: B -> Set, x: B, p: P(x)) -> P(x):
+  match x:
+    case T{}:
+      p
+    case F{}:
+      p
+
+# data Vec (A : Set) : Nat → Set where
+#   nil  : Vec A zero
+#   cons : ∀ {n} → A → Vec A n → Vec A (suc n)
+type Vec<A: Set, N: Nat>:
+  case Nil{}:
+    e: N == 0n :: Nat
+  case Cons{}:
+    n: Nat
+    h: A
+    t: Vec<A,n>
+    e: N == (1n+n) :: Nat
+
+
 
 ###λA:Set. λN:Nat.
 ###  Σenum{&Nil,&Cons}.
