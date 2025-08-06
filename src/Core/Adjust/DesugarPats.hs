@@ -434,9 +434,15 @@ match d span book x ms cs@(([(cut -> Ctr _ _)], _) : _) =
     collect :: [Case] -> ([(Name,Term)], Maybe Term)
     collect [] = ([], Nothing)
 
-    collect (([(cut -> Ctr c _)], rhs) : rest) =
+    collect (([(cut -> Ctr c args)], rhs) : rest) =
       let (cs', def') = collect rest
-          brTerm      = lam d (map fst ms) $ desugarPats d span book rhs
+          -- Extract field names from constructor arguments
+          -- If args are variables, use their names; otherwise create fresh names
+          fieldNames = zipWith (\arg idx -> patOf (d + idx) arg) args [0..]
+          -- Create the body with lambdas for each field
+          mkLams [] body depth = body
+          mkLams (fname:fnames) body depth = Lam fname Nothing $ \_ -> mkLams fnames body (depth + 1)
+          brTerm = lam d (map fst ms) $ mkLams fieldNames (desugarPats (d + length args) span book rhs) d
       in  ((c, brTerm) : cs', def')
 
     collect (([(cut -> Var k _)], rhs) : _) =
