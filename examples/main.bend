@@ -375,3 +375,33 @@ def sum_wtree_fold(w: WTree) -> Nat:
         value
       case @WNode:
         add(f(&lft), f(&rgt)))
+
+
+
+
+
+
+type Foo:
+  case @A:
+  case @B:
+  case @C:
+
+def foo(x: Foo) -> Bool:
+  match x:
+    case @C:
+      True
+    case _:
+      True
+
+
+
+
+
+
+
+
+
+
+
+
+
