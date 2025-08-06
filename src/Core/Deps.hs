@@ -134,7 +134,7 @@ getBookDeps (Book funs adts _) = S.union funDeps adtDeps where
   getAdtDeps (name, DataType _ typ ctrs) = S.union (getDeps typ) (S.unions $ map getCtrDeps ctrs)
   
   getCtrDeps :: DataCtr -> S.Set Name
-  getCtrDeps (name, typFunc) = getDeps (typFunc Set) -- Apply to Set to get concrete type
+  getCtrDeps (name, typ) = getDeps typ
 
 -- | Collects all external references from a term, handling variable binding.
 -- This is a specialized version of `collectRefs` that also handles `Pat` constructors

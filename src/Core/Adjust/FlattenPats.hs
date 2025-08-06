@@ -530,9 +530,14 @@ peelCtrCol d span book k cs = (cs,cs)
 getCtrFields :: Book -> Name -> [()]
 getCtrFields book ctrName = 
   case getCtr book ctrName of
-    Just (_, ctrType) -> getCtrFieldsFromType (ctrType (Var "_" 0))
+    Just (_, ctrType) -> getCtrFieldsFromType (stripParams ctrType)
     Nothing -> []
   where
+    -- Strip parameter lambdas until we reach the motive lambda
+    stripParams :: Type -> Type
+    stripParams (Lam _ _ f) = stripParams (f (Var "_" 0))
+    stripParams t = t
+    
     getCtrFieldsFromType :: Type -> [()]
     getCtrFieldsFromType (All _ (Lam _ _ f)) = () : getCtrFieldsFromType (f (Var "_" 0))
     getCtrFieldsFromType _ = []

@@ -1577,11 +1577,13 @@ check d span book ctx term      goal =
       case getADT book adtName of
         Just adt ->
           case find (\(name,_) -> name == cname) (adtCtrs adt) of
-            Just (_, ctrTypeFn) -> do
+            Just (_, ctrType) -> do
               -- The motive returns the goal type for any constructed value
               let motive = Lam "_" Nothing (\_ -> ADT adtName params)
-              -- Get the full type of the constructor
-              let ctr_full_type = ctrTypeFn motive
+              -- Apply the constructor type to the ADT parameters and then to the motive
+              let applyParams ty [] = App ty motive
+                  applyParams ty (p:ps) = applyParams (App ty p) ps
+              let ctr_full_type = force book (applyParams ctrType params)
               -- Check arguments against the quantified types
               let checkArgs ty args = case (force book ty, args) of
                     (All a b, arg:rest) -> do
@@ -1605,16 +1607,19 @@ check d span book ctx term      goal =
         case getADT book adtName of
           Just adt ->
             case find (\(name,_) -> name == cname) (adtCtrs adt) of
-              Just (_, ctrTypeFn) -> do
+              Just (_, ctrType) -> do
                 let motive = Lam "_" Nothing (\_ -> ADT adtName params)
-                let ctr_type = ctrTypeFn motive
+                -- Apply the constructor type to the ADT parameters and then to the motive
+                let applyParams ty [] = App ty motive
+                    applyParams ty (p:ps) = applyParams (App ty p) ps
+                let ctr_full_type = applyParams ctrType params
                 let checkEqArgs ty args args1 args2 = case (force book ty, args, args1, args2) of
                       (All a b, arg:restArgs, arg1:restArgs1, arg2:restArgs2) -> do
                         check d span book ctx arg (Eql a arg1 arg2)
                         checkEqArgs (App b arg) restArgs restArgs1 restArgs2
                       (_, [], [], []) -> Done ()
                       _ -> Fail $ CantInfer span (normalCtx book ctx)
-                checkEqArgs ctr_type cargs cargs1 cargs2
+                checkEqArgs ctr_full_type cargs cargs1 cargs2
               Nothing -> Fail $ Undefined span (normalCtx book ctx) cname
           Nothing -> Fail $ Undefined span (normalCtx book ctx) adtName
       else
@@ -1807,10 +1812,11 @@ check d span book ctx term      goal =
           where
             checkCase adt (ctrName, caseTerm) = do
               case find (\(name,_) -> name == ctrName) (adtCtrs adt) of
-                Just (_, ctrTypeFn) -> do
-                  -- The expected type for this case is the constructor's type
-                  -- function applied to the return type `rT`.
-                  let expectedType = ctrTypeFn rT
+                Just (_, ctrType) -> do
+                  -- Apply the constructor type to the ADT parameters and then to rT
+                  let applyParams ty [] = App ty rT
+                      applyParams ty (p:ps) = applyParams (App ty p) ps
+                  let expectedType = applyParams ctrType params
                   check d span book ctx caseTerm expectedType
                 Nothing -> Fail $ Undefined span (normalCtx book ctx) ctrName
         Nothing -> Fail $ Undefined span (normalCtx book ctx) adtName

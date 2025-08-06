@@ -79,8 +79,8 @@
 -- DataType "Vec" type ctrs
 -- Where:
 -- type ::= ∀ A:Set N:Nat . Set
--- ctrs["Nil"] ::= λp. ∀ e:(N == 0n : Nat) . p(Nil{x})
--- ctrs["Con"] ::= λp. ∀ n:Nat h:A t:(type Vec<A,n>) e:(N == 1n+n : Nat) . p(Con{n,h,t,e})
+-- ctrs["Nil"] ::= λA. λN. λp. ∀ e:(N == 0n : Nat) . p(Nil{e})
+-- ctrs["Con"] ::= λA. λN. λp. ∀ n:Nat h:A t:(type Vec<A,n>) e:(N == 1n+n : Nat) . p(Con{n,h,t,e})
 -- Notice how we built the constructors types to simplify type-checking.
 
 -- For convenience, we also add the following top-level function:
@@ -297,7 +297,7 @@ data Term
 -- Sigmas. With native ADTs, we don't need it anymore, so it was removed.
 
 type DataCtr
-  = (Name, Type -> Type) -- ("K" , λP. ∀ x0:T0 x1:T1 ... P(@K{x0,x1,...}))
+  = (Name, Type) -- ("K" , λT0. λT1. ... λP. ∀ x0:T0 x1:T1 ... P(K{x0,x1,...}))
 
 data DataType
   = DataType

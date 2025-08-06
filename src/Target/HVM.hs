@@ -477,8 +477,12 @@ compileADT book (nam, DataType adtName adtType ctrs) =
   "data " ++ (defNam nam) ++ " {\n" ++ unlines (map compileCtr ctrs) ++ "}"
   where
     compileCtr (ctrName, ctrType) = "  #" ++ (defNam ctrName) ++ "{" ++ unwords (getCtrFields ctrType) ++ "}"
-    getCtrFields :: (Type -> Type) -> [String]
-    getCtrFields ctrTypeFunc = extractFields (ctrTypeFunc (Var "_P" 0)) []
+    getCtrFields :: Type -> [String]
+    getCtrFields typ = extractFields (stripParams typ) []
+    -- Strip parameter lambdas until we reach the motive lambda, then apply it
+    stripParams :: Type -> Type
+    stripParams (Lam _ _ f) = stripParams (f (Var "_" 0))
+    stripParams t = App t (Var "_P" 0)  -- Apply to motive
     extractFields :: Type -> [String] -> [String]
     extractFields (All _ (Lam x _ f)) acc = extractFields (f (Var x 0)) (acc ++ [x])
     extractFields _ acc = acc
@@ -590,8 +594,10 @@ adtmToHVM book adtName cases defCase =
     defCaseToHVM (Just body) = [("_", [], termToHVM book body)]
     getCtrFields ctrName = 
       case getCtr book ctrName of
-        Just (_, ctrType) -> extractFields (ctrType (Var "_P" 0)) []
+        Just (_, ctrType) -> extractFields (stripParams ctrType) []
         Nothing -> []
+    stripParams (Lam _ _ f) = stripParams (f (Var "_" 0))
+    stripParams t = App t (Var "_P" 0)
     extractFields (All _ (Lam x _ f)) acc = extractFields (f (Var x 0)) (acc ++ [bindNam x])
     extractFields _ acc = acc
 
