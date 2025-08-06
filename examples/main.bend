@@ -226,8 +226,6 @@ type Vec<A: Set, N: Nat>:
     t: Vec<A,n>
     e: N == (1n+n) :: Nat
 
-
-
 ###λA:Set. λN:Nat.
 ###  Σenum{&Nil,&Cons}.
 ###  λ{
@@ -236,18 +234,20 @@ type Vec<A: Set, N: Nat>:
 ##    ;λ_. ()
 ##  }
 
-#def VecInd
-  #( A: Set
-  #, P: all n:Nat xs:Vec(A,n). Set
-  #, N: P(0n,@Nil{{==}})
-  #, C: all s:Nat x:A xs:Vec(A,s) p:P(s,xs). P(1n+s,@Cons{s,x,xs,{==}})
-  #, n: Nat
-  #, x: Vec(A,n)
-  #) -> P(n,x):
-  #match x:
-    #case @Nil{{==}}:
+def VecInd
+  ( A: Set
+  , P: all n:Nat xs:Vec(A,n). Set
+  , N: P(0n,Nil{{==}})
+  , C: all s:Nat x:A xs:Vec(A,s) p:P(s,xs). P(1n+s,Cons{s,x,xs,{==}})
+  , n: Nat
+  , x: Vec(A,n)
+  ) -> P(n,x):
+  match x:
+    case Nil{e}:
+      ()
       #N
-    #case @Cons{n,h,t,{==}}:
+    case Cons{n,h,t,e}:
+      ()
       #C(n,h,t,VecInd(A,P,N,C,n,t))
 
 ## Proofs by o3

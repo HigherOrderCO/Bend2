@@ -83,10 +83,8 @@
 -- ctrs["Con"] ::= λA. λN. λp. ∀ n:Nat h:A t:(type Vec<A,n>) e:(N == 1n+n : Nat) . p(Con{n,h,t,e})
 -- Notice how we built the constructors types to simplify type-checking.
 
--- For convenience, we also add the following top-level function:
--- def Vec : ∀A: set. ∀N: Nat. Set = type Vec<A, N>
--- This allows `Vec<A,N>` (internally, a Ref applied to arguments) to reduce to
--- `@Vec<A,N>` (internally, an ADT reference).
+-- Note: We don't create a convenience function for ADTs anymore. The ADT term
+-- constructor can be used directly in code as `type Vec<A,N>`.
 -- 
 -- Notes:
 -- 

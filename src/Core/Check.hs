@@ -1198,10 +1198,11 @@ infer d span book@(Book funs adts names) ctx term =
                 if equal d book adt_ty Set
                 then Done ()
                 else Fail $ CantInfer span (normalCtx book ctx) -- Should end in Set
-              checkParams (All a b) (p:ps) = do
-                check d span book ctx p a
-                checkParams (App b p) ps
-              checkParams _ (_:_) = Fail $ CantInfer span (normalCtx book ctx) -- Too many params
+              checkParams adt_ty (p:ps) = case force book adt_ty of
+                All a b -> do
+                  check d span book ctx p a
+                  checkParams (App b p) ps
+                _ -> Fail $ CantInfer span (normalCtx book ctx) -- Too many params
           checkParams (adtType adt) params
           Done Set
         Nothing -> Fail $ Undefined span (normalCtx book ctx) name

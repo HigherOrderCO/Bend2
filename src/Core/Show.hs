@@ -362,8 +362,8 @@ instance Show Term where
   show (EqlM f)        = "λ{{==}:" ++ show f ++ "}"
   show (Rwt e f)       = "rewrite " ++ show e ++ " " ++ show f
   show (ADT name params) = if null params 
-                           then "type " ++ name
-                           else "type " ++ name ++ "<" ++ intercalate "," (map show params) ++ ">"
+                           then name
+                           else name ++ "<" ++ intercalate "," (map show params) ++ ">"
   show (Ctr name args)   = name ++ "{" ++ intercalate "," (map show args) ++ "}"
   show (ADTM name cases defCase) = "λ" ++ name ++ "{" ++ intercalate ";" (map showCase cases ++ maybeDefault) ++ "}"
     where

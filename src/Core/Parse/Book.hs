@@ -403,14 +403,6 @@ parseType = label "datatype declaration" $ do
                       (ADT tName paramVars) 
                       params
   let function = Function tName funType funBody
-
-  -- TODO: fully print the registered type, for debugging (use Trace)
-  -- let !_ = trace ("ADT: " ++ tName ++ 
-                 -- "\n- Type: " ++ show adtType ++
-                 -- "\n- Ctrs: " ++ show (map fst ctrs)) ()
-  -- this isn't complete. you should also print the Ctrs types. substitute the var with Var "P"
-  -- let showCtrType (ctrName, ctrType) = ctrName ++ " : " ++ show ctrType
-  -- let !_ = trace ("ADT: " ++ tName ++ "\n- Type: " ++ show adtType ++ "\n- Ctrs:\n" ++ unlines (map (("  - " ++) . showCtrType) ctrs)) ()
   
   return [Right datatype, Left function]
 
