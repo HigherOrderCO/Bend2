@@ -27,6 +27,7 @@ import Core.Type
 import Core.WHNF
 
 import Core.FreeVars
+import Debug.Trace (trace)
 
 -- | Adjusts a single term, simplifying pattern matching and other constructs.
 -- It uses a book of already-adjusted definitions for context during flattening.
@@ -34,12 +35,19 @@ import Core.FreeVars
 -- book adjustment where recursive references aren't available yet.
 adjust :: Book -> Term -> Term
 adjust book term =
+  trace ("-raw : " ++ show term) $ 
+  -- trace ("-flat: " ++ show flat) $ 
+  -- trace ("-npat: " ++ show npat) $ 
+  trace ("-nfrk: " ++ show nfrk) $ 
+  -- trace ("-etas: " ++ show etas) $ 
+  trace ("-done: " ++ show done) $ 
+  trace ("") $
   done
   where
     flat = flattenPats 0 noSpan book term
     npat = desugarPats 0 noSpan flat
     nfrk = desugarFrks book 0 npat
-    etas = reduceEtas 0 nfrk
+    etas = reduceEtas 0 (bind nfrk)
     done = bind etas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.

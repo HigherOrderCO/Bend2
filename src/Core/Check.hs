@@ -478,6 +478,7 @@ check :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result ()
 check d span book ctx (Loc l t) goal = check d l book ctx t goal 
 check d span book ctx term      goal =
   -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
+  -- trace ("- ctx:\n" ++ show ctx) $
   case (term, force book goal) of
     -- ctx |- 
     -- ----------- Era
@@ -989,6 +990,7 @@ check d span book ctx term      goal =
 verify :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result ()
 verify d span book ctx term goal = do
   t <- infer d span book ctx term
+  -- if trace ("-verify: " ++ show term ++ " :: " ++ show goal) $ equal d book t goal
   if equal d book t goal
     then Done ()
     else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book t)
