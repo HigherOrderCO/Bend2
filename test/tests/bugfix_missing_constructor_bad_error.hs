@@ -29,6 +29,6 @@ def t(a:Wrapper) -> Nat:
 main :: IO ()
 main = testFile missing_constructor_bad_error
   "Missing constructor gives a mismatch, bad erroring." $ \out err -> do
-    assert (err `has` "Constructor pattern error")
+    assert (err `has` "missing constructor")
     assert (not (err `has` "Mismatch"))
 

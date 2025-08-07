@@ -43,7 +43,6 @@ import Core.FreeVars
 import Core.Show
 import Core.Type
 import Core.WHNF
-import Core.Equal
 
 -- Flattener
 -- =========
@@ -115,53 +114,6 @@ isVarCol []                        = True
 isVarCol (((cut->Var _ _):_,_):cs) = isVarCol cs
 isVarCol _                         = False
 
--- Count fields in a pattern
-countPatternFields :: Term -> Int
-countPatternFields One = 0
-countPatternFields (Tup a b) = 1 + countPatternFields b
-countPatternFields _ = 1
-
--- Count expected fields for a constructor from its type
-countExpectedFields :: Book -> Term -> Int
-countExpectedFields book t = case force book t of
-  Uni -> 0
-  Sig _ (Lam _ _ f) -> 1 + countExpectedFields book (f (Var "_" 0))
-  _ -> 1
-
--- Validate all constructor patterns in a case before processing
-validateConstructorPatterns :: Span -> Book -> [Case] -> ()
-validateConstructorPatterns span book cases = 
-  foldr seq () (map validateCase cases)
-  where
-    validateCase :: Case -> ()
-    validateCase (pats, _) = foldr seq () (map validatePat pats)
-    
-    validatePat :: Term -> ()
-    validatePat (Loc l p) = validatePat p
-    validatePat p@(Tup (Sym tag) fields) = checkConstructorArity span book tag fields p
-    validatePat _ = ()
-
--- Check constructor arity matches definition
-checkConstructorArity :: Span -> Book -> String -> Term -> Term -> ()
-checkConstructorArity span book@(Book defs _) tag patFields fullPat =
-  let enumTypes = [(name, body) |
-        (name, (_, Sig (Enu tags) body, Set)) <- M.toList defs,
-        tag `elem` tags]
-  in case enumTypes of
-    [] -> () -- Unknown constructor, let type checker handle
-    [(typeName, body)] ->
-      let expectedType = normal book (App body (Sym tag))
-          expectedCount = countExpectedFields book expectedType
-          actualCount = countPatternFields patFields
-      in if expectedCount /= actualCount
-         then errorWithSpan span (
-                "Constructor pattern error:\n" ++
-                "  Constructor '@" ++ tag ++ "' expects " ++ show expectedCount ++ " field(s).\n" ++
-                "  But the pattern provides " ++ show actualCount ++ " field(s).")
-         else ()
-    _ -> () -- Ambiguous constructor
-
-
 flattenPat :: Int -> Span -> Book -> Term -> Term
 flattenPat d span book pat =
   -- trace ("FLATTEN: " ++ show pat) $
@@ -171,9 +123,6 @@ flattenPat d span book pat =
       flattenPats d span book $ Pat ss ms (joinVarCol (d+1) span book s (((Var k i:ps),rhs):cs))
       -- flattenPats d span book $ Pat ss (ms++[(k,s)]) (joinVarCol (d+1) (Var k 0) (((Var k i:ps),rhs):cs))
     flattenPatGo d book pat@(Pat (s:ss) ms cs@((((cut->p):_),_):_)) =
-      -- Validate constructor patterns BEFORE processing
-      let !_ = validateConstructorPatterns span book cs
-      in
       -- trace (">> ctr: " ++ show p ++ " " ++ show pat
           -- ++ "\n>> - picks: " ++ show picks
           -- ++ "\n>> - drops: " ++ show drops) $
