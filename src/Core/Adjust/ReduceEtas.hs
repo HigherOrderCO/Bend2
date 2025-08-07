@@ -223,7 +223,7 @@ resolveMatches d n l clause args t = case t of
             case clause of
               0 -> resolveMatches d n l clause args z
               1 -> -- Beta-reduce s with the predecessor argument
-                   case (s, args) of
+                   case (cut s, args) of
                      (Lam _ _ body, [q]) -> resolveMatches d n l clause args (body q)
                      _ -> foldl App (resolveMatches d n l clause args s) args
               _ -> error "Invalid clause for NatM"
@@ -243,8 +243,8 @@ resolveMatches d n l clause args t = case t of
               0 -> resolveMatches d n l clause args nil
               1 -> -- Beta-reduce cons with head and tail arguments
                    case args of
-                     [h, t] -> case cons of
-                       Lam _ _ body1 -> case body1 h of
+                     [h, t] -> case cut cons of
+                       Lam _ _ body1 -> case cut (body1 h) of
                          Lam _ _ body2 -> resolveMatches d n l clause args (body2 t)
                          _ -> error "LstM cons expects two lambda levels"
                        _ -> foldl App (resolveMatches d n l clause args cons) args
@@ -261,8 +261,8 @@ resolveMatches d n l clause args t = case t of
           (SigM pair, SIGM) -> 
             -- Beta-reduce pair with both components
             case args of
-              [a, b] -> case pair of
-                Lam _ _ body1 -> case body1 a of
+              [a, b] -> case cut pair of
+                Lam _ _ body1 -> case cut (body1 a) of
                   Lam _ _ body2 -> resolveMatches d n l clause args (body2 b)
                   _ -> error "SigM expects two lambda levels"
                 _ -> foldl App (resolveMatches d n l clause args pair) args
@@ -274,8 +274,8 @@ resolveMatches d n l clause args t = case t of
           (SupM label branches, SUPM) ->
             -- Beta-reduce branches with left and right arguments
             case args of
-              [lft, rgt] -> case branches of
-                Lam _ _ body1 -> case body1 lft of
+              [lft, rgt] -> case cut branches of
+                Lam _ _ body1 -> case cut (body1 lft) of
                   Lam _ _ body2 -> resolveMatches d n l clause args (body2 rgt)
                   _ -> error "SupM expects two lambda levels"
                 _ -> foldl App (resolveMatches d n l clause args branches) args
