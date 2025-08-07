@@ -26,7 +26,7 @@ def Nat/add(a:Nat, b:Nat) -> Nat:
     case 0n: b
     case 1n+p: 1n+Nat/add(p,b)
 
-def add_x_y (a:Nat, b:Nat) -> Nat{(a+b) == Nat/add(a,b)}:
+def add_x_y (a:Nat, b:Nat) -> (a+b) == Nat/add(a,b) :: Nat:
   match a:
     case 0n:
       finally

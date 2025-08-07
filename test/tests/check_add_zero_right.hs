@@ -11,7 +11,7 @@ def add(a: Nat, b: Nat) -> Nat:
     case 1n + p:
       1n + add(p, b)
 
-def add_zero_right(a: Nat) -> Nat{a == add(a,0n)}:
+def add_zero_right(a: Nat) -> a == add(a,0n) :: Nat:
   match a:
     case 0n:
       {==}

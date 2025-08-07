@@ -10,11 +10,11 @@ def cong
   , a: A
   , b: A
   , f: A -> B
-  , e: A{a == b}
-  ) -> B{f(a) == f(b)}:
+  , e: a == b :: A
+  ) -> f(a) == f(b) :: B:
   rewrite e
   ()
 """
 
 main :: IO ()
-main = testFileGoal cong_goal_1_bend "B{f(b)==f(b)}" []
+main = testFileGoal cong_goal_1_bend "f(b)==f(b) : B" []

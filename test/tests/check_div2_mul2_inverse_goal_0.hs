@@ -20,7 +20,7 @@ def div2(n: Nat) -> Nat:
     case 2n + p:
       1n + div2(p)
 
-def div2_mul2_inverse(n: Nat) -> Nat{div2(mul2(n)) == n}:
+def div2_mul2_inverse(n: Nat) -> div2(mul2(n)) == n :: Nat:
   match n:
     case 0n:
       ()
@@ -29,4 +29,4 @@ def div2_mul2_inverse(n: Nat) -> Nat{div2(mul2(n)) == n}:
 """
 
 main :: IO ()
-main = testFileGoal div2_mul2_inverse_goal_0_bend "Nat{0n==0n}" []
+main = testFileGoal div2_mul2_inverse_goal_0_bend "0n==0n : Nat" []

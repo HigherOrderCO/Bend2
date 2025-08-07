@@ -17,7 +17,7 @@ scoping_not_respected_on_ctx = """
 def exists(A: Set, P:A->Set) -> Set:
   Σa:A.P(a)
 
-def thm(A:Set) -> exists((Σa:A.Unit)->A, λf.(∀a:A. A{f((a,())) == a})):
+def thm(A:Set) -> exists( (Σa:A.Unit)->A, λf.(∀a:A. f((a,())) == a :: A)):
   ()
 
   # ✗ thm

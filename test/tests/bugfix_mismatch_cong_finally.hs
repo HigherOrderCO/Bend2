@@ -2,7 +2,6 @@
 
 import Test
 
--- fixed in commit (BendGen-align branch) 1f894d60578461a514bf9dacc3fc52ee6ac3e121
 --
 -- bug description:
 -- this gives an unhelpful error, that doesn't show Goal/Type
@@ -24,8 +23,9 @@ import Test
 
 mismatch_cong :: String
 mismatch_cong = """
-def cong(A: Set, B: Set, f: (A -> B), x: A, y: A, h: A{x==y}) -> B{f(x)==f(y)}:
+def cong(A: Set, B: Set, f: (A -> B), x: A, y: A, h: x==y :: A) -> f(x)==f(y) :: B:
   finally
+
 """
 
 main :: IO ()

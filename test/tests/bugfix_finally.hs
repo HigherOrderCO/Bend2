@@ -15,8 +15,9 @@ import Test
 
 finally_ :: String
 finally_ = """
-def t(A:Set, a:A) -> A{a==a}:
+def t(A:Set, a:A) -> a==a :: A:
   finally
+
 """
 
 main :: IO ()

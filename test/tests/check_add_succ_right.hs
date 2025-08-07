@@ -11,7 +11,7 @@ def add(a: Nat, b: Nat) -> Nat:
     case 1n + p:
       1n + add(p, b)
 
-def add_succ_right(a: Nat, b: Nat) -> Nat{add(a,1n+b) == (1n+add(a,b))}:
+def add_succ_right(a: Nat, b: Nat) -> add(a,1n+b) == (1n+add(a,b)) :: Nat:
   match a:
     case 0n:
       1n + {==}

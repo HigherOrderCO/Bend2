@@ -10,7 +10,7 @@ def neg(x: Bool) -> Bool:
   else:
     True
 
-def double_neg_identity(x: Bool) -> Bool{neg(neg(x)) == x}:
+def double_neg_identity(x: Bool) -> neg(neg(x)) == x :: Bool:
   if x:
     {==}
   else:
@@ -32,7 +32,7 @@ def is_even_b(n: Nat) -> Bool:
     case 1n + p:
       neg(is_even_b(p))
 
-def is_even_equivalence(n: Nat) -> Bool{is_even_a(n) == is_even_b(n)}:
+def is_even_equivalence(n: Nat) -> is_even_a(n) == is_even_b(n) :: Bool:
   match n:
     case 0n:
       {==}

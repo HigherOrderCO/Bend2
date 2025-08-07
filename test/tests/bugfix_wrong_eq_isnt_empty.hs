@@ -17,7 +17,7 @@ import Test
 
 wrong_eq_isnt_empty :: String
 wrong_eq_isnt_empty = """
-def t(A:Set, e:Nat{0n==1n}) -> A:
+def t(A:Set, e: 0n==1n :: Nat) -> A:
   λ{}(e)
 """
 

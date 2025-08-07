@@ -15,14 +15,14 @@ nested_pat_on_ctors :: String
 nested_pat_on_ctors = """
 
 type T:
-  case @A:
-  case @B:
+  case A{}:
+  case B{}:
     a: T
     b: T
 
 def bad(x: T) -> U64:
   match x:
-    case @B{@A, x}:
+    case B{A{}, x}:
       0
     case x:
       1

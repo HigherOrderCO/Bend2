@@ -12,13 +12,13 @@ import Test
 untyped_assign_val_mismatch :: String
 untyped_assign_val_mismatch = """
 type ListNat:
-  case @Nil:
-  case @Cons: h: Nat
+  case Nil{}:
+  case Cons{}: h: Nat
               t: ListNat
 def t(a:Nat, l:ListNat) -> Bool:
   match l:
-    case @Nil: True
-    case @Cons{h,t}:
+    case Nil{}: True
+    case Cons{h,t}:
       ind = t(h,t)
       True
 """

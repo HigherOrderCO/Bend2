@@ -11,7 +11,7 @@ def add(a: Nat, b: Nat) -> Nat:
     case 1n + p:
       1n + add(p, b)
 
-def add_zero_right(a: Nat) -> Nat{a == add(a,0n)}:
+def add_zero_right(a: Nat) -> a == add(a,0n) :: Nat:
   match a:
     case 0n:
       ()
@@ -20,4 +20,4 @@ def add_zero_right(a: Nat) -> Nat{a == add(a,0n)}:
 """
 
 main :: IO ()
-main = testFileGoal add_zero_right_goal_0_bend "Nat{0n==0n}" []
+main = testFileGoal add_zero_right_goal_0_bend "0n==0n "Nat" []

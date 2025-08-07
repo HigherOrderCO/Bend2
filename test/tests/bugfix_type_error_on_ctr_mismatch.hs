@@ -13,23 +13,24 @@ def String() -> Set:
   Char[]
 
 type Complex:
-  case @A:
+  case A{}:
     f: (Nat -> Complex) -> Complex
-  case @B:
+  case B{}:
     value: String
 
 def Check(ctx: Complex[], x: Complex) -> Complex:
   match x:
-    case @A{f}:
+    case A{f}:
       # Type error: should return Complex but returns a function
       λg. f(g)
-    case @B{value}:
-      @B{value}
+    case B{value}:
+      B{value}
 
 def main() -> Complex:
-  ctx : Complex[] = [@B{"test"}]
-  x : Complex = @A{λg. g(@B{"inner"})}
+  ctx : Complex[] = [B{"test"}]
+  x : Complex = A{λg. g(B{"inner"})}
   Check(ctx, x)
+
 """
 
 main :: IO ()

@@ -10,8 +10,8 @@ def cong
   , a: A
   , b: A
   , f: A -> B
-  , e: A{a == b}
-  ) -> B{f(a) == f(b)}:
+  , e: a == b :: A
+  ) -> f(a) == f(b) :: B:
   rewrite e
   {==}
 """

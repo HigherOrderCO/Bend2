@@ -1,5 +1,6 @@
 {-# LANGUAGE MultilineStrings #-}
 
+-- NOT FIXED ON NEW BRANCH -> SIMILAR BUG
 -- fixed in commit (BendGen-align branch) e268c925719922f390686ef0d351cd0f4245fb17
 
 -- bug description:
@@ -28,7 +29,7 @@ def add(x:Nat, y:Nat) -> Nat:
     case 1n+p:
       1n+add(p,y)
 
-def t(a:Nat, b:Nat, e: Nat{1n+add(a,b) == add(a,1n+b)}) -> Nat{1n+1n+add(a,b) == 1n+add(a,1n+b)}:
+def t(a:Nat, b:Nat, e: 1n+add(a,b) == add(a,1n+b) :: Nat) -> 1n+1n+add(a,b) == 1n+add(a,1n+b) :: Nat:
   rewrite e 
   finally
 """

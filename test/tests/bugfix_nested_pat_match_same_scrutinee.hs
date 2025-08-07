@@ -9,16 +9,16 @@ import Test
 nested_pat_match_same_scrutinee :: String
 nested_pat_match_same_scrutinee = """
 type Term:
-  case @A:
-  case @B:
+  case A{}:
+  case B{}:
 
 def f(a: Term) -> Unit:
   match a:
-    case @A{}: ()
+    case A{}: ()
     case a:
       match a:
-        case @A{}: ()
-        case @B{}: ()
+        case A{}: ()
+        case B{}: ()
 
 """
 

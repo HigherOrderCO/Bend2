@@ -10,7 +10,7 @@ def neg(x: Bool) -> Bool:
   else:
     True
 
-def double_neg_identity(x: Bool) -> Bool{neg(neg(x)) == x}:
+def double_neg_identity(x: Bool) -> neg(neg(x)) == x :: Bool:
   if x:
     ()
   else:
@@ -18,4 +18,4 @@ def double_neg_identity(x: Bool) -> Bool{neg(neg(x)) == x}:
 """
 
 main :: IO ()
-main = testFileGoal double_neg_identity_goal_0_bend "Bool{True==True}" []
+main = testFileGoal double_neg_identity_goal_0_bend "True==True : Bool" []

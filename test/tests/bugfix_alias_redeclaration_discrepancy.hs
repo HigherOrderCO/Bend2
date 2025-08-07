@@ -2,7 +2,7 @@
 
 import Test
 
--- fixed in: 5541251597d236d01dc8907cf7273bc52b3981e4
+-- NOT FIXED
 --
 -- bug description:
 

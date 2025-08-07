@@ -9,30 +9,30 @@
 -- ✓ pred
 -- ✓ main
 --
--- @S{@Z{}}
+-- S{Z{}}
 
 import Test
 
 not_shadowing_case_datatype :: String
 not_shadowing_case_datatype = """
 type Nats: 
-  case @Z:
-  case @S: pred: Nats
+  case Z{}:
+  case S{}: pred: Nats
 
 def pred(n: Nats) -> Nats:
   match n:
-    case @Z{} : @Z{}
-    case @S{n}: n
+    case Z{} : Z{}
+    case S{n}: n
 
 def main() -> Nats:
-  pred(@S{@Z})
+  pred(S{Z{}})
 """
 
 main :: IO ()
 main = testFile not_shadowing_case_datatype
-  "Result should be @Z{}, not @S{@Z{}} if shadowing of n works in pred" (\out err -> do
-    assert (not (out `has` "@S{@Z{}}"))
-    assert (out `has` "@Z{}")
+  "Result should be Z{}, not S{Z{}} if shadowing of n works in pred" (\out err -> do
+    assert (not (out `has` "S{Z{}}"))
+    assert (out `has` "Z{}")
     assert (err == "")
     )
 

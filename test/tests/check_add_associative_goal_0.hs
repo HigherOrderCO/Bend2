@@ -11,7 +11,7 @@ def add(a: Nat, b: Nat) -> Nat:
     case 1n + p:
       1n + add(p, b)
 
-def add_associative(a: Nat, b: Nat, c: Nat) -> Nat{add(add(a,b), c) == add(a, add(b,c))}:
+def add_associative(a: Nat, b: Nat, c: Nat) -> add(add(a,b), c) == add(a, add(b,c)) :: Nat:
   match a:
     case 0n:
       ()
@@ -20,4 +20,4 @@ def add_associative(a: Nat, b: Nat, c: Nat) -> Nat{add(add(a,b), c) == add(a, ad
 """
 
 main :: IO ()
-main = testFileGoal add_associative_goal_0_bend "Nat{add(b,c)==add(b,c)}" [("b", "Nat"), ("c", "Nat")]
+main = testFileGoal add_associative_goal_0_bend "add(b,c)==add(b,c) : Nat" [("b", "Nat"), ("c", "Nat")]

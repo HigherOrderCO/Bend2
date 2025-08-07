@@ -11,9 +11,9 @@ import Test
 eta_reduce_nested_pats :: String
 eta_reduce_nested_pats = """
 type A:
-  case @B:
+  case B{}:
     x: Nat
-  case @C:
+  case C{}:
     y: Unit
 
 def f1(s: Char[], b: Bool, c: Nat) -> Unit:
@@ -43,12 +43,13 @@ def f2(a : Unit) -> Unit:
 def f3(s: A, b: Bool) -> Unit:
   if b:
     match s:
-      case @B{x}:
+      case B{x}:
         ()
-      case @C{y}:
+      case C{y}:
         ()
   else:
     ()
+
 """
 
 main :: IO ()

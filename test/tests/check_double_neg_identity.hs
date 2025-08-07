@@ -10,7 +10,7 @@ def neg(x: Bool) -> Bool:
   else:
     True
 
-def double_neg_identity(x: Bool) -> Bool{neg(neg(x)) == x}:
+def double_neg_identity(x: Bool) -> neg(neg(x)) == x :: Bool:
   if x:
     {==}
   else:

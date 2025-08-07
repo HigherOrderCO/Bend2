@@ -11,7 +11,7 @@ def t(a:Nat) -> Unit:
   match a:
     case 0n:
       ()
-    case @Undefined{x}:
+    case Undefined{x}:
       ()
 """
 

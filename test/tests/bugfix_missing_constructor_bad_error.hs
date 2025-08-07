@@ -11,11 +11,12 @@ import Test
 missing_constructor_bad_error :: String
 missing_constructor_bad_error = """
 type Wrapper:
-  case @Wrap: a :Nat
+  case Wrap{}:
+    a :Nat
 
 def t(a:Wrapper) -> Nat:
   match a:
-    case @Wrap: 0n
+    case Wrap{}: 0n
 """
 
 -- ✓ Wrapper
