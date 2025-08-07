@@ -93,9 +93,10 @@ reduceEtas d t = case t of
             cases = [(sym, Use k (Sym sym) (\x -> 
                       reduceEtas d (resolveMatches d k (ENUM syms) i [] (f (Var k d)))))
                     | (i, sym) <- zip [0..] syms]
-            def = reduceEtas d (Lam (k++"$def") Nothing (\y ->
-                    Use k y (\x -> resolveMatches (d+1) k (ENUM syms) (-1) [] (f (Var k d)))))
-            -- def = reduceEtas d (Use k (Var k d) (\x -> resolveMatches (d+1) k (ENUM syms) (-1) [] (f (Var k d))))
+            -- def = reduceEtas d (Lam (k++"$def") Nothing (\y ->
+            --         Use k y (\x -> resolveMatches (d+1) k (ENUM syms) (-1) [] (f (Var k d)))))
+            def = reduceEtas d (Lam (k++"$def") Nothing (\q ->
+              Use k q (\x -> (resolveMatches (d+1) k (ENUM syms) (-1) [q] (f (Var k d))))))
 
         Nothing -> Lam k mty (\x -> reduceEtas d (f x))
   Fix n f           -> Fix n (\v -> reduceEtas (d+1) (f v))
@@ -296,7 +297,10 @@ resolveMatches d n l clause args t = case t of
           --         Nothing -> error $ "Missing case for symbol " ++ sym
           (EnuM cs def, ENUM syms) ->
             if clause == -1 
-              then resolveMatches d n l clause args def  -- Default case
+              -- then resolveMatches d n l clause args def  -- Default case
+              then case (cut def, args) of
+                 (Lam _ _ body, [q]) -> resolveMatches d n l clause args (body q)
+                 _ -> foldl App (resolveMatches d n l clause args def) args
               else 
                 -- Get the symbol at this clause index
                 let sym = syms !! clause
