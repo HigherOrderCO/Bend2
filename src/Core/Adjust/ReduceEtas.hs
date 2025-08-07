@@ -410,7 +410,7 @@ injectInto inj scrutName term = case term of
   
   -- ADT match - inject into each case and default
   ADTM adtName cs df -> ADTM adtName [(cname, injectBody [] inj scrutName (\_ -> Ctr cname []) v) | (cname,v) <- cs] 
-                                      (fmap (injectBody [] inj scrutName (\_ -> Era)) df)
+                                      (fmap (injectBody ["_"] inj scrutName (\_ -> Era)) df)
   
   -- Sigma match - special handling for pair case (2 fields)
   SigM f -> SigM (injectBody ["a", "b"] inj scrutName (\vars -> case vars of [a,b] -> Tup a b; _ -> Era) f)
