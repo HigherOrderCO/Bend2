@@ -245,11 +245,12 @@ resolveMatches d n l clause args t = case t of
                    case args of
                      [h, t] -> case cons of
                        Lam _ _ body1 -> case body1 h of
-                         Lam _ _ body2 -> resolveMatches d n l clause [] (body2 t)
+                         Lam _ _ body2 -> resolveMatches d n l clause args (body2 t)
                          _ -> error "LstM cons expects two lambda levels"
                        _ -> foldl App (resolveMatches d n l clause args cons) args
                      _ -> error "LstM cons case expects exactly two arguments"
               _ -> error "Invalid clause for LstM"
+
           (LstM nil cons, _) -> LstM (resolveMatches d n l clause args nil) (resolveMatches d n l clause args cons)
          
           -- (SigM pair, SIGM) -> 
@@ -262,7 +263,7 @@ resolveMatches d n l clause args t = case t of
             case args of
               [a, b] -> case pair of
                 Lam _ _ body1 -> case body1 a of
-                  Lam _ _ body2 -> resolveMatches d n l clause [] (body2 b)
+                  Lam _ _ body2 -> resolveMatches d n l clause args (body2 b)
                   _ -> error "SigM expects two lambda levels"
                 _ -> foldl App (resolveMatches d n l clause args pair) args
               _ -> error "SigM expects exactly two arguments"
@@ -275,7 +276,7 @@ resolveMatches d n l clause args t = case t of
             case args of
               [lft, rgt] -> case branches of
                 Lam _ _ body1 -> case body1 lft of
-                  Lam _ _ body2 -> resolveMatches d n l clause [] (body2 rgt)
+                  Lam _ _ body2 -> resolveMatches d n l clause args (body2 rgt)
                   _ -> error "SupM expects two lambda levels"
                 _ -> foldl App (resolveMatches d n l clause args branches) args
               _ -> error "SupM expects exactly two arguments"
