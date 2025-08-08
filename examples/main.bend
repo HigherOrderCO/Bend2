@@ -13,8 +13,8 @@ def app
   , a: A
   , b: A
   , f: A -> B
-  , e: a == b :: A
-  ) -> f(a) == f(b) :: B:
+  , e: A{a == b}
+  ) -> B{f(a) == f(b)}:
   rewrite e
   {==}
 
@@ -28,7 +28,7 @@ def neg(x: Bool) -> Bool:
     True
 
 # Proof: double negation is identity
-def double_neg_theo(x: Bool) -> neg(neg(x)) == x :: Bool:
+def double_neg_theo(x: Bool) -> Bool{neg(neg(x)) == x}:
   if x:
     {==}
   else:
@@ -59,7 +59,7 @@ def div2(n: Nat) -> Nat:
       1n + div2(p)
 
 # Proof: n*2/2 = n (old method)
-def div2_mul2_theo(n: Nat) -> div2(mul2(n)) == n :: Nat:
+def div2_mul2_theo(n: Nat) -> Nat{div2(mul2(n)) == n}:
   match n:
     case 0n:
       {==}
@@ -99,7 +99,7 @@ def eql(a: Nat, b: Nat) -> Bool:
     case 1n+a 1n+b: eql(a, b)
 
 # Proof: n*2/2 = n (simpler method)
-def div2_mul2_theo_2(n: Nat) -> div2(mul2(n)) == n :: Nat:
+def div2_mul2_theo_2(n: Nat) -> Nat{div2(mul2(n)) == n}:
   match n:
     case 0n:
       {==}
@@ -134,7 +134,7 @@ def is_even_b(n: Nat) -> Bool:
 
 # Proof that both is_even implementations are identical
 # (Can we have FunExt?)
-def is_even_ab_theo(n: Nat) -> is_even_a(n) == is_even_b(n) :: Bool:
+def is_even_ab_theo(n: Nat) -> Bool{is_even_a(n) == is_even_b(n)}:
   match n:
     case 0n:
       {==}
@@ -153,7 +153,7 @@ def map<A,B>(f: A -> B, xs: A[]) -> B[]:
       f(x) <> map<A,B>(f, xs)
 
 # Add: reduce zero on right
-def zero_right(a: Nat) -> a == add(a,0n) :: Nat:
+def zero_right(a: Nat) -> Nat{a == add(a,0n)}:
   match a:
     case 0n:
       {==}
@@ -161,7 +161,7 @@ def zero_right(a: Nat) -> a == add(a,0n) :: Nat:
       1n + zero_right(ap)
 
 # Add: reduce succ on right
-def succ_right(a: Nat, b: Nat) -> add(a,1n+b) == (1n+add(a,b)) :: Nat:
+def succ_right(a: Nat, b: Nat) -> Nat{add(a,1n+b) == (1n+add(a,b))}:
   match a:
     case 0n:
       1n + {==}
@@ -169,7 +169,7 @@ def succ_right(a: Nat, b: Nat) -> add(a,1n+b) == (1n+add(a,b)) :: Nat:
       1n + succ_right(ap,b)
 
 # Add commutes
-def comm(a: Nat, b: Nat) -> add(a,b) == add(b,a) :: Nat:
+def comm(a: Nat, b: Nat) -> Nat{add(a,b) == add(b,a)}:
   match a:
     case 0n:
       zero_right(b)
@@ -181,11 +181,11 @@ def comm(a: Nat, b: Nat) -> add(a,b) == add(b,a) :: Nat:
       1n + {==}
 
 # 0 != 1+n
-def succ_neq_zero(n: Nat) -> 0n != (1n+n) :: Nat:
+def succ_neq_zero(n: Nat) -> Nat{0n != (1n+n)}:
   λe. absurd e
 
 # 1n+n = 1n+m implies n = m
-def succ_inj(n: Nat, m: Nat, e: (1n+n)==(1n+m)::Nat) -> n==m::Nat:
+def succ_inj(n: Nat, m: Nat, e: Nat{(1n+n)==(1n+m)}) -> Nat{n==m}:
   match n m e:
     case 0n 0n e:
       {==}
@@ -219,12 +219,12 @@ def foo(P: B -> Set, x: B, p: P(x)) -> P(x):
 #   cons : ∀ {n} → A → Vec A n → Vec A (suc n)
 type Vec<A: Set, N: Nat>:
   case Nil{}:
-    e: N == 0n :: Nat
+    e: Nat{N == 0n}
   case Cons{}:
     n: Nat
     h: A
     t: Vec<A,n>
-    e: N == (1n+n) :: Nat
+    e: Nat{N == (1n+n)}
 
 ###λA:Set. λN:Nat.
 ###  Σenum{&Nil,&Cons}.

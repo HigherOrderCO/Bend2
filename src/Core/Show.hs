@@ -357,7 +357,10 @@ instance Show Term where
               Var k i -> show (Var k i)
               Ref k i -> show (Ref k i)
               fn      -> "(" ++ show fn ++ ")"
-  show (Eql t a b)     = show a ++ " == " ++ show b ++ " : " ++ show t
+  show (Eql t a b)     = case t of
+    (Sig _ _) -> "(" ++ show t ++ "){" ++ show a ++ "==" ++ show b ++ "}"
+    (All _ _) -> "(" ++ show t ++ "){" ++ show a ++ "==" ++ show b ++ "}"
+    _         ->        show t ++        "{" ++ show a ++ "==" ++ show b ++ "}"
   show (Rfl)           = "{==}"
   show (EqlM f)        = "λ{{==}:" ++ show f ++ "}"
   show (Rwt e f)       = "rewrite " ++ show e ++ " " ++ show f

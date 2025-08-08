@@ -1198,23 +1198,23 @@ parseTermArg t = do
   st <- get
   guard (tight st)
   mb <- optional $ choice
-    [ parsePol t   -- f<...>
-    , parseCal t   -- f(...)
-    , parseLst t ] -- f[]
+    [ parsePol t
+    , parseCal t
+    , parseEql t
+    , parseLst t ]
   maybe (pure t) parseTermArg mb
   <|> pure t
 
 -- | Parse a "loose" postfix: f + x | f <> x | ...
 parseTermOpr :: Term -> Parser Term
 parseTermOpr t = choice
-  [ parseCon t   -- <>
-  , parseFun t   -- ->
-  , parseAnd t   -- &
-  , parseChk t   -- ::
-  , parseEql t   -- NEW: a == b : T syntax
-  , parseAdd t   -- +
-  , parseNumOp t -- <, >, ==, etc.
-  , parseAss t   -- =
+  [ parseCon t
+  , parseFun t
+  , parseAnd t
+  , parseChk t
+  , parseAdd t
+  , parseNumOp t
+  , parseAss t
   , return t ]
 
 -- | A helper that conditionally applies a postfix/infix parser to a term.
@@ -1400,13 +1400,25 @@ parseADT = label "ADT type" $ try $ do
   return (ADT n args)
 
 -- | Syntax: K{v0,v1,...}
+-- Disambiguation: if the braced content is of the form `a == b` or `a != b`,
+-- this is NOT a constructor; let the equality postfix parser handle it.
 parseCtr :: Parser Term
 parseCtr = label "constructor" $ try $ do
   n <- name
+  _ <- lookAhead (symbol "{")
+  notFollowedBy (try eqLike)
   _ <- symbol "{"
   args <- sepEndBy parseTerm (symbol ",")
   _ <- symbol "}"
   return (Ctr n args)
+  where
+    eqLike = do
+      _ <- symbol "{"
+      _ <- parseTerm
+      _ <- choice [symbol "==", symbol "!="]
+      _ <- parseTerm
+      _ <- symbol "}"
+      return ()
 
 -- | Syntax: match expr: case pat: body | match expr { case pat: body }
 parsePat :: Parser Term
@@ -1789,16 +1801,17 @@ parseLst t = label "list type" $ do
   _ <- try $ symbol "[]"
   return (Lst t)
 
--- | Syntax: a == b : T or a != b : T (NEW)
+-- | Syntax: Type{term1 == term2} or Type{term1 != term2}
 parseEql :: Term -> Parser Term
-parseEql a = label "equality type" $ do
+parseEql t = label "equality type" $ do
+  _ <- try $ symbol "{"
+  a <- parseTerm
   op <- choice
-    [ try $ symbol "==" >> return True
-    , try $ symbol "!=" >> return False
+    [ symbol "==" >> return True
+    , symbol "!=" >> return False
     ]
-  b <- parseTermBefore "::"
-  _ <- symbol "::"
-  t <- parseTerm
+  b <- parseTerm
+  _ <- symbol "}"
   let eql = Eql t a b
   return $ if op then eql else App (Ref "Not" 1) eql
 

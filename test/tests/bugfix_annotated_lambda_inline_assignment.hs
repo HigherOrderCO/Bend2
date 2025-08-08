@@ -9,14 +9,14 @@ import Test
 
 annotated_lambda_inline_assignment :: String
 annotated_lambda_inline_assignment = """
-def thm_fixed(A:Set) -> Σf: A->A . Σg:A->A . ∀a:A . g(f(a)) == a :: A:
+def thm_fixed(A:Set) -> Σf: A->A . Σg:A->A . ∀a:A . A{g(f(a)) == a}:
   (λa:A.a,λb.b,λc.finally)
 
 ###
 
 # can't infer type of inlined function λa.a
 
-def thm(A:Set) -> Σf: A->A . Σg:A->A . ∀a:A . g(f(a)) == a :: A:
+def thm(A:Set) -> Σf: A->A . Σg:A->A . ∀a:A . A{g(f(a)) == a}:
   (λa.a,λb.b,λc.finally)
   # (id(A),λb.b,λc.finally)
 

@@ -20,7 +20,7 @@ def div2(n: Nat) -> Nat:
     case 2n + p:
       1n + div2(p)
 
-def div2_mul2_inverse(n: Nat) -> div2(mul2(n)) == n :: Nat:
+def div2_mul2_inverse(n: Nat) -> Nat{div2(mul2(n)) == n}:
   match n:
     case 0n:
       {==}
