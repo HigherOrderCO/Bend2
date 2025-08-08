@@ -18,28 +18,28 @@ def mul(a: Nat, b: Nat) -> Nat:
     case 1n + ap:
       add(b, mul(ap, b))
 
-def add_associative(a: Nat, b: Nat, c: Nat) -> Nat{add(add(a,b), c) == add(a, add(b,c))}:
+def add_associative(a: Nat, b: Nat, c: Nat) -> add(add(a,b), c) == add(a, add(b,c)) :: Nat:
   match a:
     case 0n:
       {==}
     case 1n + ap:
       1n + add_associative(ap, b, c)
 
-def add_zero_right(a: Nat) -> Nat{a == add(a,0n)}:
+def add_zero_right(a: Nat) -> a == add(a,0n) :: Nat:
   match a:
     case 0n:
       {==}
     case 1n + ap:
       1n + add_zero_right(ap)
 
-def add_succ_right(a: Nat, b: Nat) -> Nat{add(a,1n+b) == (1n+add(a,b))}:
+def add_succ_right(a: Nat, b: Nat) -> add(a,1n+b) == (1n+add(a,b)) :: Nat:
   match a:
     case 0n:
       1n + {==}
     case 1n + ap:
       1n + add_succ_right(ap,b)
 
-def add_commutative(a: Nat, b: Nat) -> Nat{add(a,b) == add(b,a)}:
+def add_commutative(a: Nat, b: Nat) -> add(a,b) == add(b,a) :: Nat:
   match a:
     case 0n:
       add_zero_right(b)
@@ -50,7 +50,7 @@ def add_commutative(a: Nat, b: Nat) -> Nat{add(a,b) == add(b,a)}:
       rewrite e1
       1n + {==}
 
-def mul_distributive_left(n: Nat, m: Nat, k: Nat) -> Nat{mul(n, add(m,k)) == add(mul(n,m), mul(n,k))}:
+def mul_distributive_left(n: Nat, m: Nat, k: Nat) -> mul(n, add(m,k)) == add(mul(n,m), mul(n,k)) :: Nat:
   match n:
     case 0n:
       {==}

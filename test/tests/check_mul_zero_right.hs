@@ -18,7 +18,7 @@ def mul(a: Nat, b: Nat) -> Nat:
     case 1n + ap:
       add(b, mul(ap, b))
 
-def mul_zero_right(n: Nat) -> Nat{mul(n, 0n) == 0n}:
+def mul_zero_right(n: Nat) -> mul(n, 0n) == 0n :: Nat:
   match n:
     case 0n:
       finally

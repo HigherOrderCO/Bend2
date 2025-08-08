@@ -18,7 +18,7 @@ def mul(a: Nat, b: Nat) -> Nat:
     case 1n + ap:
       add(b, mul(ap, b))
 
-def mul_zero_right(n: Nat) -> Nat{mul(n, 0n) == 0n}:
+def mul_zero_right(n: Nat) -> mul(n, 0n) == 0n :: Nat:
   match n:
     case 0n:
       finally
@@ -27,4 +27,4 @@ def mul_zero_right(n: Nat) -> Nat{mul(n, 0n) == 0n}:
 """
 
 main :: IO ()
-main = testFileGoal mul_zero_right_goal_1_bend "Nat{mul(p,0n)==0n}" []
+main = testFileGoal mul_zero_right_goal_1_bend "mul(p,0n)==0n : Nat" []

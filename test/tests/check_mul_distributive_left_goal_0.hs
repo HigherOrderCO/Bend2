@@ -18,7 +18,7 @@ def mul(a: Nat, b: Nat) -> Nat:
     case 1n + ap:
       add(b, mul(ap, b))
 
-def mul_distributive_left(n: Nat, m: Nat, k: Nat) -> Nat{mul(n, add(m,k)) == add(mul(n,m), mul(n,k))}:
+def mul_distributive_left(n: Nat, m: Nat, k: Nat) -> mul(n, add(m,k)) == add(mul(n,m), mul(n,k)) :: Nat:
   match n:
     case 0n:
       ()
@@ -27,4 +27,4 @@ def mul_distributive_left(n: Nat, m: Nat, k: Nat) -> Nat{mul(n, add(m,k)) == add
 """
 
 main :: IO ()
-main = testFileGoal mul_distributive_left_goal_0_bend "Nat{0n==0n}" []
+main = testFileGoal mul_distributive_left_goal_0_bend "0n==0n : Nat" []

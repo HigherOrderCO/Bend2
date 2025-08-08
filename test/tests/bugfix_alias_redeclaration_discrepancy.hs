@@ -24,7 +24,7 @@ def exists_intro : ∀A: Set . (∀P: A -> Set . (∀a:A . (∀pa:P(a) . (exists
   λA.λP.λa.λpa.λC.λI.I(a)(pa)
 
 def is_left_inverse<A,B>(g: B->A, f:A->B) -> Set:
-  ∀a:A . A{g(f(a)) == a}
+  ∀a:A . g(f(a)) == a :: A
 
 def has_left_inverse<A,B>(f: A->B) -> Set:
   exists(B->A, λg . is_left_inverse<A,B>(g,f)) 

@@ -7,7 +7,7 @@ succ_not_zero_bend = """
 def Not(A: Set) -> Set:
   A -> Empty
 
-def succ_not_zero(n: Nat) -> Not(Nat{0n == (1n+n)}):
+def succ_not_zero(n: Nat) -> Not(0n == (1n+n) :: Nat):
   λe. absurd e
 """
 
