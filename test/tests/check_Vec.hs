@@ -7,7 +7,7 @@ vec_bend = """
 type Vec<A: Set>(N: Nat) -> Set:
   case Nil{}:
     e: N == 0n :: Nat
-  case @Cons:
+  case Cons{}:
     n: Nat
     h: A
     t: Vec(A,n)

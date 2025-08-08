@@ -34,7 +34,7 @@ def WTreeRec(tag: WTreeTag(Nat)) -> Set:
     case WLeaf{value}:
       return Empty
     case WNode:
-      return Direction
+      return Direction 
 
 def WTree : Set =
   W(WTreeTag(Nat), WTreeRec)
@@ -43,7 +43,7 @@ def WLeaf(n: Nat) -> WTree:
   return Sup{WLeaf{n}, λe. absurd e}
 
 def WNode(l: WTree, r: WTree) -> WTree:
-  return Sup{WNode{}, λi. match i: case Lft{}: l case Rgt{}: r  }
+  return Sup{WNode{}, λi. match i: case Lft: l case Rgt: r  }
 """
 
 main :: IO ()

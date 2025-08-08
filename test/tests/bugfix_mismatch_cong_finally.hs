@@ -24,8 +24,8 @@ import Test
 mismatch_cong :: String
 mismatch_cong = """
 def cong(A: Set, B: Set, f: (A -> B), x: A, y: A, h: x==y :: A) -> f(x)==f(y) :: B:
+  rewrite h
   finally
-
 """
 
 main :: IO ()
