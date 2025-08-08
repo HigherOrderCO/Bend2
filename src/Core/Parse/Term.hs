@@ -1200,6 +1200,7 @@ parseTermArg t = do
   mb <- optional $ choice
     [ parsePol t   -- f<...>
     , parseCal t   -- f(...)
+    , parseEqlOld t   -- f{x == y} (OLD SYNTAX)
     , parseLst t ] -- f[]
   maybe (pure t) parseTermArg mb
   <|> pure t
@@ -1789,7 +1790,21 @@ parseLst t = label "list type" $ do
   _ <- try $ symbol "[]"
   return (Lst t)
 
--- | Syntax: a == b : T or a != b : T (NEW)
+-- | Syntax: Type{term1 == term2} or Type{term1 != term2} (OLD)
+parseEqlOld :: Term -> Parser Term
+parseEqlOld t = label "equality type (old syntax)" $ do
+  _ <- try $ symbol "{"
+  a <- parseTerm
+  op <- choice
+    [ symbol "==" >> return True
+    , symbol "!=" >> return False
+    ]
+  b <- parseTerm
+  _ <- symbol "}"
+  let eql = Eql t a b
+  return $ if op then eql else App (Ref "Not" 1) eql
+
+-- | Syntax: a == b :: T or a != b :: T (NEW)
 parseEql :: Term -> Parser Term
 parseEql a = label "equality type" $ do
   op <- choice
