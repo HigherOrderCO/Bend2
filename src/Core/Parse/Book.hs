@@ -363,17 +363,21 @@ parseBook = do
   return $ Book functions datatypes names
 
 -- | Syntax: type Name<A: Set, N: Nat>: case Ctr{}: field1: T1 case Ctr2{}: field2: T2
+--           type Name<T, U>(i: Nat) -> Type: case @Tag1: field1: T1 case @Tag2: field2: T2  
 parseType :: Parser [Either Function DataType]
 parseType = label "datatype declaration" $ do
   _ <- symbol "type"
   tName <- name
   params <- option [] $ angles (sepEndBy parseArg (symbol ","))
+  indices <- option [] $ parens (sepEndBy parseArg (symbol ","))
+  let args = params ++ indices
+  retTy <- option Set (symbol "->" *> parseTerm)
   _ <- symbol ":"
   cases <- many parseTypeCase
   when (null cases) $ fail "datatype must have at least one constructor case"
   
-  -- Build the ADT type: ∀ A:Set N:Nat . Set
-  let adtType = foldr (\(n,ty) acc -> All ty (Lam n (Just ty) (\_ -> acc))) Set params
+  -- Build the ADT type: ∀ A:Set N:Nat . RetTy
+  let adtType = foldr (\(n,ty) acc -> All ty (Lam n (Just ty) (\_ -> acc))) retTy args
   
   -- Build constructors with the format: λA. λN. ... λp. ∀ field:Type . p(Ctr{fields})
   let buildCtr (ctrName, fields) = 
@@ -387,7 +391,7 @@ parseType = label "datatype declaration" $ do
                                   body = App p (Ctr ctrName fieldVars)
                               -- Wrap with foralls for each field
                               in foldr (\(fn, ft) term -> All ft (Lam fn (Just ft) (\_ -> term))) body fields))
-                            params
+                            args
         -- Apply bind to convert named vars to HOAS
         in (ctrName, bind ctrType)
   
@@ -396,12 +400,12 @@ parseType = label "datatype declaration" $ do
   
   -- Also create a convenience function: def Name : Type = type Name<params>
   let funType = adtType
-  let paramNames = map fst params
-  let paramIndices = reverse [0 .. length params - 1]
-  let paramVars = zipWith (\n i -> Var n i) paramNames paramIndices
+  let argNames = map fst args
+  let argIndices = reverse [0 .. length args - 1]
+  let argVars = zipWith (\n i -> Var n i) argNames argIndices
   let funBody = foldr (\(n,ty) acc -> Lam n (Just ty) (\_ -> acc)) 
-                      (ADT tName paramVars) 
-                      params
+                      (ADT tName argVars) 
+                      args
   let function = Function tName funType funBody
   
   return [Right datatype, Left function]
