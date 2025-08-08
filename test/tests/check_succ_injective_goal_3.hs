@@ -4,7 +4,7 @@ import Test
 
 succ_injective_goal_3_bend :: String
 succ_injective_goal_3_bend = """
-def succ_injective(n: Nat, m: Nat, e: Nat{1n+n==1n+m}) -> Nat{n==m}:
+def succ_injective(n: Nat, m: Nat, e: (1n+n)==(1n+m) :: Nat) -> n==m :: Nat:
   match n m e:
     case 0n 0n e:
       {==}
@@ -17,4 +17,4 @@ def succ_injective(n: Nat, m: Nat, e: Nat{1n+n==1n+m}) -> Nat{n==m}:
 """
 
 main :: IO ()
-main = testFileGoal succ_injective_goal_3_bend "Nat{1n+n==1n+m}" []
+main = testFileGoal succ_injective_goal_3_bend "1n+n==1n+m : Nat" []

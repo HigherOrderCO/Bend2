@@ -18,7 +18,7 @@ def mul(a: Nat, b: Nat) -> Nat:
     case 1n + ap:
       add(b, mul(ap, b))
 
-def mul_succ_left(a: Nat, b: Nat) -> Nat{mul(1n + a, b) == add(b, mul(a, b))}:
+def mul_succ_left(a: Nat, b: Nat) -> mul(1n + a, b) == add(b, mul(a, b)) :: Nat:
   finally
 """
 
