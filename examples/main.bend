@@ -243,12 +243,10 @@ def VecInd
   , x: Vec(A,n)
   ) -> P(n,x):
   match x:
-    case Nil{e}:
-      ()
-      #N
-    case Cons{n,h,t,e}:
-      ()
-      #C(n,h,t,VecInd(A,P,N,C,n,t))
+    case Nil{{==}}:
+      N
+    case Cons{n,h,t,{==}}:
+      C(n,h,t,VecInd(A,P,N,C,n,t))
 
 ## Proofs by o3
 ## ------------
