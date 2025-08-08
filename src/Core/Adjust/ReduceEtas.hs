@@ -50,7 +50,7 @@ reduceEtas d t = case t of
   Var n i     -> Var n i
   Ref n i     -> Ref n i
   Sub t'      -> Sub (reduceEtas d t')
-  Lam k Nothing f ->
+  Lam k mty f ->
     case isEtaLong d k (f (Var k d)) of
         Just lab -> case lab of
           UNIM -> UniM u where
@@ -93,11 +93,12 @@ reduceEtas d t = case t of
             cases = [(sym, Use k (Sym sym) (\x -> 
                       reduceEtas d (resolveMatches d k (ENUM syms) i [] (f (Var k d)))))
                     | (i, sym) <- zip [0..] syms]
+            -- def = reduceEtas d (Lam (k++"$def") Nothing (\y ->
+            --         Use k y (\x -> resolveMatches (d+1) k (ENUM syms) (-1) [] (f (Var k d)))))
             def = reduceEtas d (Lam (k++"$def") Nothing (\q ->
               Use k q (\x -> (resolveMatches (d+1) k (ENUM syms) (-1) [q] (f (Var k d))))))
 
-        Nothing -> Lam k Nothing (\x -> reduceEtas (d+1) (f x))
-  Lam k (Just ty) f -> Lam k (Just (reduceEtas d ty)) (\x -> reduceEtas (d+1) (f x))
+        Nothing -> Lam k mty (\x -> reduceEtas d (f x))
   Fix n f           -> Fix n (\v -> reduceEtas (d+1) (f v))
   Let n mty v f     -> Let n (fmap (reduceEtas d) mty) (reduceEtas d v) (\v' -> reduceEtas (d+1) (f v'))
   Use n v f         -> Use n (reduceEtas d v) (\v' -> reduceEtas (d+1) (f v'))
@@ -202,69 +203,106 @@ resolveMatches d n l clause args t = case t of
       (Var k i) -> if k == n
         then case (cut f, l) of
 
+          -- (UniM u, UNIM) -> resolveMatches d n l clause args u
           (UniM u,     UNIM) -> resolveMatches d n l clause args u
           (UniM u,        _) -> UniM (resolveMatches d n l clause args u)
 
+          -- (BitM fl tr, BITM) -> 
+          --   let branch = [fl, tr] !! clause
+          --   in resolveMatches d n l clause args branch
           (BitM fl tr, BITM) -> 
             let branch = [fl, tr] !! clause
             in resolveMatches d n l clause args branch
           (BitM fl tr,    _) -> BitM (resolveMatches d n l clause args fl) (resolveMatches d n l clause args tr)
 
+          -- (NatM z s, NATM) -> 
+          --   case clause of
+          --     0 -> resolveMatches d n l clause args z
+          --     1 -> foldl App (resolveMatches d n l clause args s) args
+          --     _ -> error "Invalid clause for NatM"
           (NatM z s, NATM) -> 
             case clause of
               0 -> resolveMatches d n l clause args z
-              1 -> case (cut s, args) of
-                     (Lam _ Nothing body, [q]) -> resolveMatches d n l clause args (body q)
+              1 -> -- Beta-reduce s with the predecessor argument
+                   case (cut s, args) of
+                     (Lam _ _ body, [q]) -> resolveMatches d n l clause args (body q)
                      _ -> foldl App (resolveMatches d n l clause args s) args
               _ -> error "Invalid clause for NatM"
           (NatM z s,    _) -> NatM (resolveMatches d n l clause args z) (resolveMatches d n l clause args s)
 
+          -- (EmpM, EMPM) -> resolveMatches d n l clause args EmpM
           (EmpM, EMPM) -> resolveMatches d n l clause args EmpM  -- Empty match has no branches
           (EmpM, _) -> EmpM
           
+          -- (LstM nil cons, LSTM) -> 
+          --   case clause of
+          --     0 -> resolveMatches d n l clause args nil
+          --     1 -> foldl App (resolveMatches d n l clause args cons) args
+          --     _ -> error "Invalid clause for LstM"
           (LstM nil cons, LSTM) -> 
             case clause of
               0 -> resolveMatches d n l clause args nil
-              1 -> case args of
+              1 -> -- Beta-reduce cons with head and tail arguments
+                   case args of
                      [h, t] -> case cut cons of
-                       Lam _ Nothing body1 -> case cut (body1 h) of
-                         Lam _ Nothing body2 -> resolveMatches d n l clause args (body2 t)
-                         _ -> foldl App (resolveMatches d n l clause args cons) args
+                       Lam _ _ body1 -> case cut (body1 h) of
+                         Lam _ _ body2 -> resolveMatches d n l clause args (body2 t)
+                         _ -> error "LstM cons expects two lambda levels"
                        _ -> foldl App (resolveMatches d n l clause args cons) args
                      _ -> error "LstM cons case expects exactly two arguments"
               _ -> error "Invalid clause for LstM"
 
           (LstM nil cons, _) -> LstM (resolveMatches d n l clause args nil) (resolveMatches d n l clause args cons)
          
+          -- (SigM pair, SIGM) -> 
+          --   -- foldl App (resolveMatches d n l clause args pair) args
+          --   case args of
+          --     [a, b] -> foldl App (resolveMatches d n l clause args pair) args
+          --     _ -> error "SigM expects exactly two arguments"
           (SigM pair, SIGM) -> 
+            -- Beta-reduce pair with both components
             case args of
               [a, b] -> case cut pair of
-                Lam _ Nothing body1 -> case cut (body1 a) of
-                  Lam _ Nothing body2 -> resolveMatches d n l clause args (body2 b)
-                  _ -> foldl App (resolveMatches d n l clause args pair) args
+                Lam _ _ body1 -> case cut (body1 a) of
+                  Lam _ _ body2 -> resolveMatches d n l clause args (body2 b)
+                  _ -> error "SigM expects two lambda levels"
                 _ -> foldl App (resolveMatches d n l clause args pair) args
               _ -> error "SigM expects exactly two arguments"
           (SigM pair, _) -> SigM (resolveMatches d n l clause args pair)         
 
+          -- (SupM label branches, SUPM) ->
+          --   foldl App (resolveMatches d n l clause args branches) args
           (SupM label branches, SUPM) ->
+            -- Beta-reduce branches with left and right arguments
             case args of
               [lft, rgt] -> case cut branches of
-                Lam _ Nothing body1 -> case cut (body1 lft) of
-                  Lam _ Nothing body2 -> resolveMatches d n l clause args (body2 rgt)
-                  _ -> foldl App (resolveMatches d n l clause args branches) args
+                Lam _ _ body1 -> case cut (body1 lft) of
+                  Lam _ _ body2 -> resolveMatches d n l clause args (body2 rgt)
+                  _ -> error "SupM expects two lambda levels"
                 _ -> foldl App (resolveMatches d n l clause args branches) args
               _ -> error "SupM expects exactly two arguments"
           (SupM label branches, _) -> SupM (resolveMatches d n l clause args label) (resolveMatches d n l clause args branches)
           
+          -- (EqlM refl, EQLM) -> resolveMatches d n l clause args refl
           (EqlM refl, EQLM) -> resolveMatches d n l clause args refl
           (EqlM refl, _) -> EqlM (resolveMatches d n l clause args refl)
 
+          -- (EnuM cs def, ENUM syms) ->
+          --   if clause == -1 
+          --     then resolveMatches d n l clause args def
+          --     else 
+          --       let sym = syms !! clause
+          --       in case lookup sym cs of
+          --         Just branch -> resolveMatches d n l clause args branch
+          --         Nothing -> error $ "Missing case for symbol " ++ sym
           (EnuM cs def, ENUM syms) ->
             if clause == -1 
+              -- then resolveMatches d n l clause args def  -- Default case
               then case (cut def, args) of
-                 (Lam _ Nothing body, [q]) -> resolveMatches d n l clause args (body q)
+                 (Lam _ _ body, [q]) -> resolveMatches d n l clause args (body q)
                  _ -> foldl App (resolveMatches d n l clause args def) args
               else 
+                -- Get the symbol at this clause index
                 let sym = syms !! clause
                 in case lookup sym cs of
                   Just branch -> resolveMatches d n l clause args branch
@@ -303,12 +341,12 @@ data ElimLabel
   = UNIM
   | BITM
   | NATM
-  | EMPM
-  | LSTM
-  | SIGM
-  | SUPM
-  | EQLM
-  | ENUM [String]
+  | EMPM  -- new
+  | LSTM  -- new
+  | SIGM  -- new
+  | SUPM  -- new
+  | EQLM  -- new
+  | ENUM [String] -- new
   deriving Show
 
 -- Check if a term contains the eta-long pattern: App (λ{...}) (Var name)
@@ -379,3 +417,4 @@ isEtaLong d n t = case t of
   Pri _ -> Nothing
   Pat ss ms cs -> foldr (<|>) Nothing (map (isEtaLong d n) ss ++ map (isEtaLong d n . snd) ms ++ concatMap (\(ps, rhs) -> map (isEtaLong d n) ps ++ [isEtaLong d n rhs]) cs)
   Frk l a b -> isEtaLong d n l <|> isEtaLong d n a <|> isEtaLong d n b
+  -- _ -> trace "NOT" $ Nothing
