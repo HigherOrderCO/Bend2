@@ -25,10 +25,21 @@ It is structured as follows:
 
 - src/Core/Bind.hs: binds named variables to native λ's (HOAS). Used after parsing.
 
-- src/Core/Flatten.hs: converts generalized pattern-matches to native eliminators
-  (case-of). Used after parsing.
+- src/Core/Show.hs: pretty-printing utilities for core terms and types.
 
-- src/Core/Adjust.hs: flattens and binds in topological order. Used after parsing.
+- src/Core/FreeVars.hs: free-variable analysis utilities.
+
+- src/Core/Termination.hs: termination checking utilities.
+
+- src/Core/Adjust/Adjust.hs: flattens and binds in topological order. Used after parsing.
+
+- src/Core/Adjust/ReduceEtas.hs: eta-reduction passes used during adjustment.
+
+- src/Core/Adjust/DesugarPats.hs: desugars pattern-related constructs.
+
+- src/Core/Adjust/DesugarFrks.hs: desugars fork constructs.
+
+- src/Core/Adjust/FlattenPats.hs: converts generalized pattern-matches to native eliminators (case-of).
 
 - src/Core/CLI.hs: Bend's command-line interface.
 
@@ -36,15 +47,17 @@ It is structured as follows:
 
 - src/Core/Deps.hs: collects all external dependencies of a term. Used by the CLI.
 
-- src/Core/Parse.hs: parser type, commons and utils (lexeme, keywords, etc.).
+- src/Core/Parse/Parse.hs: parser type, commons and utils (lexeme, keywords, etc.).
 
 - src/Core/Parse/Term.hs: all core term parsers (lambdas, pairs, numbers, etc.).
 
-- src/Core/Parse/Book.hs: top-level persers (def, type, import, etc.).
+- src/Core/Parse/Book.hs: top-level parsers (def, type, import, etc.).
 
 - src/Core/Parse/WithSpan.hs: temporary hack to improve errors (not important).
 
 - src/Target/JavaScript.hs: compiles Bend files to JavaScript modules.
+
+- src/Target/HVM.hs: HVM backend target.
 
 - app/Main.hs: entry point for the CLI.
 
@@ -67,7 +80,7 @@ The Bend2 test framework is located in the `test/` directory:
 
 To run tests:
 - All tests: `cabal test`
-- Single test: `runhaskell -i:test test/tests/BasicTest.hs`
+- Single test: `runhaskell -i:test test/tests/check_id.hs`
 
 ### Test Style Convention
 
