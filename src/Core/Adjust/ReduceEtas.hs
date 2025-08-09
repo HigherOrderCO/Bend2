@@ -291,7 +291,7 @@ reduceEtas d t = case t of
         let t'' = reduceEtas d t' in
         -- trace ("ETA:\n> " ++ show t ++ "\n> " ++ show t' ++ "\n> " ++ show t'') $
         t''
-      Nothing          -> Lam n (fmap (reduceEtas d) ty) (\v -> reduceEtas (d+1) (f v))
+      Nothing -> Lam n (fmap (reduceEtas d) ty) (\v -> reduceEtas (d+1) (f v))
   
   -- Recursive cases for all other constructors
   Var n i      -> Var n i

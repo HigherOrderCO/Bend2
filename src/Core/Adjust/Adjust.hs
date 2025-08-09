@@ -146,18 +146,18 @@ import Control.Monad.State
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-import Core.Show (errorWithSpan)
+import Debug.Trace
 
+import Core.Adjust.DesugarFrks
+import Core.Adjust.DesugarPats
+import Core.Adjust.FlattenPats
+import Core.Adjust.ReduceEtas
 import Core.Bind
 import Core.Deps
-import Core.Adjust.ReduceEtas
-import Core.Adjust.FlattenPats
-import Core.Adjust.DesugarPats
-import Core.Adjust.DesugarFrks
+import Core.FreeVars
+import Core.Show
 import Core.Type
 import Core.WHNF
-
-import Core.FreeVars
 
 -- | Adjusts a single term, simplifying pattern matching and other constructs.
 -- It uses a book of already-adjusted definitions for context during flattening.
@@ -165,6 +165,7 @@ import Core.FreeVars
 -- book adjustment where recursive references aren't available yet.
 adjust :: Book -> Term -> Term
 adjust book term =
+  trace ("done: " ++ show done) $
   done
   where
     flat = flattenPats 0 noSpan book term
