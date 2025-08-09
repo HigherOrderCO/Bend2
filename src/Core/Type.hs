@@ -1,3 +1,126 @@
+-- REFACTOR SPEC:
+-- We're now refactoring Bend2 to include a proper Algebraic Datatype system.
+-- Previously, we emulated algebraic datatypes with enums and sigmas. For ex:
+-- type Vec<A: Set, N: Nat>:
+--   case @Nil:
+--     e: Nat{N == 0n}
+--   case @Con:
+--     n: Nat
+--     h: A
+--     t: Vec(A,n)
+--     e: Nat{N == (1n+n)}
+-- Desugared to:
+-- Vec : ∀A:Set. ∀N:Nat. Set =
+--   λA:Set. λN:Nat.
+--     Σenum{&Nil,&Con}.
+--     λ{
+--       &Nil: Σe:Nat{N==0n}. Unit
+--       &Con: Σn:Nat. Σh:A. Σt:Vec(A,n). Σe:Nat{N==1n+n}. Unit
+--       λ_. ()
+--     }
+-- To pattern-match an ADT, the user had to write
+-- match vec:
+--   case (&Nil, fs):
+--     ...
+--   case (&Con, fs):
+--     match fs:
+--       case (n, fs):
+--         match fs:
+--           case (h, fs):
+--             match fs:
+--               case (t, fs):
+--                 match e:
+--                   case (e, fs):
+--                     ...
+-- Which was verbose and error-prone.
+-- This change will remove enums, and introduce proper ADTs.
+-- Previously, constructors were written as:
+-- - `@Foo{v0,v1,...}` -- without names
+-- And they desugared to:
+-- - `(&Foo,v0,v1,...,())`
+-- Where &Foo was an enum symbol.
+-- Now, constructors will be written as:
+-- - `Foo{v0,v1,...}`
+-- And will not be desugared - there is a native variant for it (Ctr). Note
+-- that, to distinguish constructors from variables, we need the ending '{}'.
+-- That is, `Nil` is a variable, and `Nil{}` is a constructor. Also, to avoid
+-- conflict, the old equality syntax changes from `T{a == b}` to `a == b :: T`.
+-- We also include a new λ-match for ADTs:
+-- - `λT{ Ctr{}: ctr_case ; ... ; {}: def_case }`
+-- Where:
+-- - `T` is the name of the eliminated ADT.
+-- - `K{}: K_case` is the case for the K constructor.
+-- - `{}: case` is a default case.
+-- As a syntax-sugar, the user can write cases like:
+-- - `λT{ ... Ctr{x0,x1,...}: ctr_case ... }`
+-- Which desugars to:
+-- - `λ{ ... Ctr{}: λx0. λx1. ctr_case ... }`
+-- And they can write default cases like:
+-- - `λ{ ... x: def_case }`
+-- Which desugars to:
+-- - `λ{ ... {}: λx. def_case }`
+-- I.e., the parser introduces the lambdas for convenience.
+-- We also include a variant to refer to an ADT:
+-- - `type T<p0,p1,...>`
+-- Which denotes the ADT `T` parametrized with `p0, p1...`.
+-- Finally, the following top-level syntax declares a new ADT:
+-- type Vec<A: Set, N: Nat>:
+--   case Nil{}:
+--     e: N == 0n :: Nat
+--   case Con{}:
+--     n: Nat
+--     h: A
+--     t: type Vec<A,n>
+--     e: N == 1n+n :: Nat
+-- Syntactically, only change is how constructors/types/equality are written.
+-- Semantically, when a top-level ADT is parsed, instead of desugaring it to a
+-- top-level definition with sigmas and enums, we just register it in the book,
+-- which now includes a map of top-level ADTs. For Vec, we register:
+-- DataType "Vec" type ctrs
+-- Where:
+-- type ::= ∀ A:Set N:Nat . Set
+-- ctrs["Nil"] ::= λA. λN. λp. ∀ e:(N == 0n : Nat) . p(Nil{e})
+-- ctrs["Con"] ::= λA. λN. λp. ∀ n:Nat h:A t:(type Vec<A,n>) e:(N == 1n+n : Nat) . p(Con{n,h,t,e})
+-- Notice how we built the constructors types to simplify type-checking.
+
+-- Note: We don't create a convenience function for ADTs anymore. The ADT term
+-- constructor can be used directly in code as `type Vec<A,N>`.
+-- 
+-- Notes:
+-- 
+-- The expression
+-- (λ{ Con{}: F ; Nil{}: G } Con{1n,h,t,e})
+-- reduces to:
+-- F(1n,h,t,e)
+-- Because the scrutinee name, Con, is in the case list.
+--
+-- The expression:
+-- (λ{ Nil{}: G ; {}: D } Con{1n,h,t,e})
+-- Reduces to:
+-- D(Con{1n,h,t,e})
+-- Because the scrutinee name, Con, is not in the case list, and there is a
+-- default case. Notice the default case is applied to the entire term!
+--
+-- The expression:
+-- (λ{ Nil{}: G ; {}: D } 123)
+-- Doesn't reduce, because 123 isn't a constructor (stuck form).
+-- 
+-- As for type-checking, to check:
+-- check λ{ Con{}: F ; Nil: G } :: ∀x:(type Vec<A,N>) . P(x)
+-- We:
+-- - Retrieve 'Vec' from the ADT Map on the Book.
+-- - check F : ∀ n:Nat h:A t:Vec<A,n> e:(N == 1n+n : Nat) . P(Con{n,h,t,e})
+-- - check G : ∀ e:(N == 0n : Nat) . P(Nil{e})
+-- Notice we get the case types by applying the return type of the All to the
+-- type stored in the given constructor entry of the retrieved ADT.
+-- We don't implement datatype indices. Fording is used to emulate them.
+
+-- Keep your code simple and idiomatic.
+--
+-- GOAL: refactor the codebase to implement the changes above.
+-- When I give you a commented-out code, REWRITE IT FULLY.
+-- Do NOT remove any old feature, behavior, quirk, comment.
+
 -- Bend2's Core Type
 -- =================
 -- This is the starting point of this repository. All other modules are files
@@ -46,8 +169,8 @@ data NVal
   deriving (Show, Eq)
 
 data NOp2
-  = ADD | SUB | MUL | DIV
-  | MOD | POW | EQL | NEQ  
+  = ADD | SUB | MUL | DIV | MOD | POW
+  | EQL | NEQ  
   | LST | GRT | LEQ | GEQ
   | AND | OR  | XOR
   | SHL | SHR
@@ -109,6 +232,12 @@ data Term
   | Con Term Term  -- h<>t
   | LstM Term Term -- λ{[]:n;<>:c}
 
+  -- REMOVED
+  -- -- Enum
+  -- | Enu [String]              -- {&foo,&bar...}
+  -- | Sym String                -- &foo
+  -- | EnuM [(String,Term)] Term -- λ{&foo:f;&bar:b;...d}
+
   -- Numbers
   | Num NTyp           -- CHR | U64 | I64 | F64
   | Val NVal           -- 123 | +123 | +123.0
@@ -156,6 +285,14 @@ data Term
   -- Sugars
   | Pat [Term] [Move] [Case] -- match x ... { with k=v ... ; case A{} ...: F ; ... }
   | Frk Term Term Term       -- fork L:a else:b
+
+-- Book of Definitions
+
+-- REMOVED:
+-- type Inj  = Bool -- "is injective" flag
+-- type Defn = (Inj, Term, Type)
+-- NOTE: The 'Inj' flag was only needed to pretty print ADTs encoded with
+-- Sigmas. With native ADTs, we don't need it anymore, so it was removed.
 
 type DataCtr
   = (Name, Type) -- ("K" , λT0. λT1. ... λP. ∀ x0:T0 x1:T1 ... P(K{x0,x1,...}))
@@ -279,7 +416,8 @@ isLam UniM{}    = True
 isLam BitM{}    = True
 isLam NatM{}    = True
 isLam LstM{}    = True
-isLam ADTM{}    = True
+-- isLam EnuM{}    = True -- REMOVED
+isLam ADTM{}    = True -- NEW
 isLam SigM{}    = True
 isLam SupM{}    = True
 isLam EqlM{}    = True
