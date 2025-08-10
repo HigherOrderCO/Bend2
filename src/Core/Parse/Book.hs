@@ -121,6 +121,11 @@ parseType = label "datatype declaration" $ do
   _       <- symbol ":"
   cases   <- many parseTypeCase
   when (null cases) $ fail "datatype must have at least one constructor case"
+  -- Register the ADT constructors in the parser state
+  st <- get
+  let constructorArities = [(tag, length flds) | (tag, flds) <- cases]
+      newAdtArities = M.insert tName constructorArities (adtArities st)
+  put st { adtArities = newAdtArities }
   let tags = map fst cases
       mkFields :: [(Name, Term)] -> Term
       mkFields []             = Uni
@@ -221,7 +226,7 @@ parseAssert = do
 -- | Parse a book from a string, returning an error message on failure
 doParseBook :: FilePath -> String -> Either String Book
 doParseBook file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0) of
+  case evalState (runParserT p file input) (ParserState True input [] M.empty 0 M.empty) of
     Left err  -> Left (formatError input err)
     Right res -> Right res
       -- in Right (trace (show book) book)
