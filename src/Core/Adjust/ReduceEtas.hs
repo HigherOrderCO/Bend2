@@ -391,7 +391,7 @@ isEtaLong d n t = case t of
   Lam k _ f -> if k == n then Nothing else isEtaLong (d+1) n (f (Var k d))
   App f x -> case cut x of
     (Var k _) -> if k == n
-      then case f of
+      then case cut f of
         UniM _   -> Just UNIM
         BitM _ _ -> Just BITM
         NatM _ _ -> Just NATM
