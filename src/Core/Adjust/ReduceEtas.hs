@@ -93,8 +93,6 @@ reduceEtas d t = case t of
             cases = [(sym, Use k (Sym sym) (\x -> 
                       reduceEtas d (resolveMatches d k (ENUM syms) i [] (f (Var k d)))))
                     | (i, sym) <- zip [0..] syms]
-            -- def = reduceEtas d (Lam (k++"$def") Nothing (\y ->
-            --         Use k y (\x -> resolveMatches (d+1) k (ENUM syms) (-1) [] (f (Var k d)))))
             def = reduceEtas d (Lam (k++"$def") Nothing (\q ->
               Use k q (\x -> (resolveMatches (d+1) k (ENUM syms) (-1) [q] (f (Var k d))))))
 
@@ -203,23 +201,14 @@ resolveMatches d n l clause args t = case t of
       (Var k i) -> if k == n
         then case (cut f, l) of
 
-          -- (UniM u, UNIM) -> resolveMatches d n l clause args u
           (UniM u,     UNIM) -> resolveMatches d n l clause args u
           (UniM u,        _) -> UniM (resolveMatches d n l clause args u)
 
-          -- (BitM fl tr, BITM) -> 
-          --   let branch = [fl, tr] !! clause
-          --   in resolveMatches d n l clause args branch
           (BitM fl tr, BITM) -> 
             let branch = [fl, tr] !! clause
             in resolveMatches d n l clause args branch
           (BitM fl tr,    _) -> BitM (resolveMatches d n l clause args fl) (resolveMatches d n l clause args tr)
 
-          -- (NatM z s, NATM) -> 
-          --   case clause of
-          --     0 -> resolveMatches d n l clause args z
-          --     1 -> foldl App (resolveMatches d n l clause args s) args
-          --     _ -> error "Invalid clause for NatM"
           (NatM z s, NATM) -> 
             case clause of
               0 -> resolveMatches d n l clause args z
@@ -230,15 +219,9 @@ resolveMatches d n l clause args t = case t of
               _ -> error "Invalid clause for NatM"
           (NatM z s,    _) -> NatM (resolveMatches d n l clause args z) (resolveMatches d n l clause args s)
 
-          -- (EmpM, EMPM) -> resolveMatches d n l clause args EmpM
           (EmpM, EMPM) -> resolveMatches d n l clause args EmpM  -- Empty match has no branches
           (EmpM, _) -> EmpM
           
-          -- (LstM nil cons, LSTM) -> 
-          --   case clause of
-          --     0 -> resolveMatches d n l clause args nil
-          --     1 -> foldl App (resolveMatches d n l clause args cons) args
-          --     _ -> error "Invalid clause for LstM"
           (LstM nil cons, LSTM) -> 
             case clause of
               0 -> resolveMatches d n l clause args nil
@@ -254,11 +237,6 @@ resolveMatches d n l clause args t = case t of
 
           (LstM nil cons, _) -> LstM (resolveMatches d n l clause args nil) (resolveMatches d n l clause args cons)
          
-          -- (SigM pair, SIGM) -> 
-          --   -- foldl App (resolveMatches d n l clause args pair) args
-          --   case args of
-          --     [a, b] -> foldl App (resolveMatches d n l clause args pair) args
-          --     _ -> error "SigM expects exactly two arguments"
           (SigM pair, SIGM) -> 
             -- Beta-reduce pair with both components
             case args of
@@ -270,8 +248,6 @@ resolveMatches d n l clause args t = case t of
               _ -> error "SigM expects exactly two arguments"
           (SigM pair, _) -> SigM (resolveMatches d n l clause args pair)         
 
-          -- (SupM label branches, SUPM) ->
-          --   foldl App (resolveMatches d n l clause args branches) args
           (SupM label branches, SUPM) ->
             -- Beta-reduce branches with left and right arguments
             case args of
@@ -287,14 +263,6 @@ resolveMatches d n l clause args t = case t of
           (EqlM refl, EQLM) -> resolveMatches d n l clause args refl
           (EqlM refl, _) -> EqlM (resolveMatches d n l clause args refl)
 
-          -- (EnuM cs def, ENUM syms) ->
-          --   if clause == -1 
-          --     then resolveMatches d n l clause args def
-          --     else 
-          --       let sym = syms !! clause
-          --       in case lookup sym cs of
-          --         Just branch -> resolveMatches d n l clause args branch
-          --         Nothing -> error $ "Missing case for symbol " ++ sym
           (EnuM cs def, ENUM syms) ->
             if clause == -1 
               -- then resolveMatches d n l clause args def  -- Default case
@@ -417,4 +385,3 @@ isEtaLong d n t = case t of
   Pri _ -> Nothing
   Pat ss ms cs -> foldr (<|>) Nothing (map (isEtaLong d n) ss ++ map (isEtaLong d n . snd) ms ++ concatMap (\(ps, rhs) -> map (isEtaLong d n) ps ++ [isEtaLong d n rhs]) cs)
   Frk l a b -> isEtaLong d n l <|> isEtaLong d n a <|> isEtaLong d n b
-  -- _ -> trace "NOT" $ Nothing
