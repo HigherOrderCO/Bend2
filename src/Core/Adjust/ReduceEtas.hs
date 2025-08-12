@@ -77,8 +77,8 @@ reduceEtas d t = case t of
                   Use k (Con h t) (\x -> resolveMatches (d+2) k LSTM 1 [h, t] (f (Var k d))))))
 
           SIGM -> SigM pair where
-              pair = reduceEtas d (Lam (k++"$l") Nothing (\a ->
-                Lam (k++"$r") Nothing (\b ->
+              pair = reduceEtas d (Lam (k++"$a") Nothing (\a ->
+                Lam (k++"$b") Nothing (\b ->
                   Use k (Tup a b) (\x -> (resolveMatches (d+2) k SIGM 0 [a, b] (f (Var k d)))))))
 
           SUPM -> SupM label branches where
@@ -379,7 +379,7 @@ isEtaLong d n t = case t of
   LstM nil c -> isEtaLong d n nil <|> isEtaLong d n c
   Enu _ -> Nothing
   Sym _ -> Nothing
-  EnuM cs def -> foldr (<|>) (isEtaLong d n def) (map (isEtaLong d n . snd) cs) <|> isEtaLong d n def
+  EnuM cs def -> foldr (<|>) (isEtaLong d n def) (map (isEtaLong d n . snd) cs)
   Num _ -> Nothing
   Val _ -> Nothing
   Op2 _ a b -> isEtaLong d n a <|> isEtaLong d n b
