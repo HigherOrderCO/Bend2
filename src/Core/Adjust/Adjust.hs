@@ -40,7 +40,7 @@ adjust book term =
   -- trace ("-flat: " ++ show flat) $ 
   -- trace ("-npat: " ++ show npat) $ 
   trace ("-nfrk: " ++ show nfrk) $ 
-  -- trace ("-etas: " ++ show etas) $ 
+  trace ("-etas: " ++ show etas) $ 
   trace ("-done: " ++ show done) $ 
   trace ("") $
   done
