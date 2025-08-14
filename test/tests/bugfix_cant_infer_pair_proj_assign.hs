@@ -2,9 +2,7 @@
 
 import Test
 
--- fixed: f10831ebfc0c709b05a038149f7067b562f10f36
--- It was not being inferred because the eta expansion was not fixing the match on p to be on the canonical form.
-
+-- Fixed by new eta reduction / canonicalize algorithm
 -- bug description:
 -- see https://github.com/HigherOrderCO/Bend2/issues/18
 --

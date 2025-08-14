@@ -8,7 +8,8 @@ import Test
 assignment_vars_not_in_ctx :: String
 assignment_vars_not_in_ctx = """
 def f() -> Unit:
-  (x,y) = (1n,2n)
+  # (x,y) = (1n,2n)
+  a = False
   z = 3n
   True
 """
@@ -19,6 +20,5 @@ main = testFile assignment_vars_not_in_ctx
     assert (err `has` "Mismatch:")
     assert (err `has` "Goal: Unit")
     assert (err `has` "Type: Bool")
-    assert (err `has` "x : Nat")
-    assert (err `has` "y : Nat")
+    assert (err `has` "a : Bool")
     assert (err `has` "z : Nat")

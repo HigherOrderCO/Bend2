@@ -2,10 +2,11 @@
 
 import Test
 
--- fixed in: 5541251597d236d01dc8907cf7273bc52b3981e4
+-- NOT FIXED
 --
 -- bug description:
 
+-- OLD SOLUTION:
 -- The issue was that, once you create an an alias, like `Y = A`, Bend replaces
 -- all occurrences of `A` by `Y`, in the *goal* and *context*. but if you then
 -- explicitly write `A` (again) in the term itself, it won't be replaced, and you

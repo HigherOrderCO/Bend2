@@ -64,7 +64,7 @@ whnfRef book k i =
   if i == 0
   then Ref k i
   else case getDefn book k of
-    Just (False, term, _) -> deref book k i (LHS SZ id) term
+    Just (False, term, _) -> whnf book $ deref book k i (LHS SZ id) term
     otherwise             -> Ref k 0
 
 -- Normalizes a fixpoint
@@ -164,15 +164,13 @@ whnfEqlM book x f =
 -- Normalizes a log operation
 whnfLog :: Book -> Term -> Term -> Term
 whnfLog book s x =
-  let extractString :: Term -> Maybe String
-      extractString Nil = Just ""
-      extractString (Con (Val (CHR_V c)) rest) = do
-        restStr <- extractString (whnf book rest)
-        return (c : restStr)
-      extractString (Loc _ t) = extractString t
-      extractString _ = Nothing
-  in case extractString (whnf book s) of
-       Just str -> (whnf book x)
+  let str :: Term -> Maybe String
+      str (red -> Nil)                           = Just ""
+      str (red -> Con (red -> Val (CHR_V c)) cs) = do cs <- str cs ; return (c : cs)
+      str _                                      = Nothing
+      red = whnf book
+  in case str (whnf book s) of
+       Just str -> trace str $ whnf book x
        Nothing  -> whnf book x
 
 -- Normalizes a primitive application

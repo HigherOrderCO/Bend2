@@ -155,6 +155,42 @@ termToHVM book term = go term where
         HVM.Lam "x$" (HVM.Dup 0 "x$l" "x$r" (HVM.Var "x$") (HVM.App (HVM.App (termToHVM book f) (HVM.Var "x$l")) (HVM.Var "x$r")))
   go (All _ _)    = HVM.Era
   go (Lam n _ f)  = HVM.Lam (bindNam n) (termToHVM book (f (Var n 0)))
+  -- Directly compile application of a boolean match to a scrutinee
+  -- Avoids emitting (λx$ ~ x$ {..} x)
+  go (App (BitM f t) x) =
+    HVM.Mat HVM.SWI (termToHVM book x) [] [("0", [], termToHVM book f), ("_", [], termToHVM book t)]
+  -- Directly compile application of a nat match to a scrutinee
+  go (App (NatM z s) x) =
+    HVM.Mat (HVM.MAT 0) (termToHVM book x) [] [("#Z", [], termToHVM book z), ("#S", ["x$p"], HVM.App (termToHVM book s) (HVM.Var "x$p"))]
+  -- Directly compile application of a list match to a scrutinee
+  go (App (LstM n c) x) =
+    HVM.Mat (HVM.MAT 0) (termToHVM book x) [] [("#Nil", [], termToHVM book n), ("#Cons", ["x$h", "x$t"], HVM.App (HVM.App (termToHVM book c) (HVM.Var "x$h")) (HVM.Var "x$t"))]
+  -- Directly compile application of a pair match to a scrutinee
+  go (App (SigM f) x) =
+    case f of
+      (Lam l _ (subst l -> (Lam r _ (subst r -> bod)))) ->
+        HVM.Dup 0 (bindNam l) (bindNam r) (termToHVM book x) (termToHVM book bod)
+      _ ->
+        HVM.Dup 0 "x$l" "x$r" (termToHVM book x) (HVM.App (HVM.App (termToHVM book f) (HVM.Var "x$l")) (HVM.Var "x$r"))
+  -- Empty match applied: ignores scrutinee, erases
+  go (App EmpM _) = HVM.Era
+  -- Unit match applied: single branch, ignore scrutinee
+  go (App (UniM f) _) = termToHVM book f
+  -- Equality match applied: erased, single branch
+  go (App (EqlM f) _) = termToHVM book f
+  -- Special-case: applying a SupM to a scrutinee should compile to a direct DUP
+  go (App (SupM l f) x) =
+    case f of
+      (Lam a _ (subst a -> Lam b _ (subst b -> bod))) ->
+        HVM.Ref "DUP" 0 [ termToHVM book l
+                        , termToHVM book x
+                        , HVM.Lam (bindNam a) (HVM.Lam (bindNam b) (termToHVM book bod))
+                        ]
+      _ ->
+        HVM.Ref "DUP" 0 [ termToHVM book l
+                        , termToHVM book x
+                        , HVM.Lam "x$l" (HVM.Lam "x$r" (HVM.App (HVM.App (termToHVM book f) (HVM.Var "x$l")) (HVM.Var "x$r")))
+                        ]
   go (App f x)    =
     case refAppToHVM book term of
       Just hvm -> hvm
@@ -168,7 +204,21 @@ termToHVM book term = go term where
     HVM.Let HVM.LAZY "sup0$" (termToHVM book a) $
     HVM.Let HVM.LAZY "sup1$" (termToHVM book b) $
     HVM.Ref "SUP" 0 [termToHVM book l, HVM.Var "sup0$", HVM.Var "sup1$"]
-  go (SupM l f)   = termToHVM book f
+  go (SupM l f)   =
+    -- Compile a superposition lambda-match by duplicating the scrutinee
+    -- using the provided label, then evaluating the body with both sides.
+    case f of
+      (Lam a _ (subst a -> Lam b _ (subst b -> bod))) ->
+        HVM.Lam "x$" $ HVM.Ref "DUP" 0 [ termToHVM book l
+                                       , HVM.Var "x$"
+                                       , HVM.Lam (bindNam a) (HVM.Lam (bindNam b) (termToHVM book bod))
+                                       ]
+      _ ->
+        -- If fields aren't explicit, introduce them and apply the matcher.
+        HVM.Lam "x$" $ HVM.Ref "DUP" 0 [ termToHVM book l
+                                       , HVM.Var "x$"
+                                       , HVM.Lam "x$l" (HVM.Lam "x$r" (HVM.App (HVM.App (termToHVM book f) (HVM.Var "x$l")) (HVM.Var "x$r")))
+                                       ]
   go (Frk l a b)  = HVM.Era
   go (Rwt e f)    = HVM.Era  -- Erases at runtime
   go (Loc s t)    = termToHVM book t
@@ -391,7 +441,11 @@ showHVM lv tm =
     go (HVM.U32 v)         = show v
     go (HVM.Chr v)         = "'" ++ [v] ++ "'"
     go (HVM.Op2 o a b)     = "(" ++ show o ++ " " ++ showHVM lv a ++ " " ++ showHVM lv b ++ ")"
-    go (HVM.Let m k v f)   = "! " ++ show m ++ k ++ " = " ++ showHVM (lv+1) v ++ "\n" ++ indent lv ++ showHVM lv f
+    go (HVM.Let m k v f)   =
+      let rhs = showHVM (lv+1) v in
+      if '\n' `elem` rhs
+        then "! " ++ show m ++ k ++ " =\n" ++ indent (lv+1) ++ rhs ++ "\n" ++ indent lv ++ showHVM lv f
+        else "! " ++ show m ++ k ++ " = " ++ rhs ++ "\n" ++ indent lv ++ showHVM lv f
     go (HVM.Mat k v m ks)  = "~ " ++ showHVM lv v ++ concatMap showMov m ++ " {\n" ++ unlines (map showCase ks) ++ indent lv ++ "}"
         where showMov (k,v)     = " !" ++ k ++ "=" ++ showHVM lv v
               showCase (c,[],b) = indent (lv+1) ++ c ++ ":\n" ++ indent (lv+2) ++ showHVM (lv+2) b
@@ -425,11 +479,6 @@ showHVM lv tm =
     prettyLst (HVM.Ctr "#Cons" [h, t]) acc = prettyLst t (showHVM lv h : acc)
     prettyLst (HVM.Ctr "#Nil" [])      acc = Just $ "[" ++ unwords (reverse acc) ++ "]"
     prettyLst _ _ = Nothing
-
-
-
-
-
 
 
 

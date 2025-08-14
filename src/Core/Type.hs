@@ -276,3 +276,41 @@ isLam SigM{}    = True
 isLam SupM{}    = True
 isLam EqlM{}    = True
 isLam _         = False
+
+-- | Collects all variable usages with their names and depths
+collectVars :: Term -> [(String, Int)]
+collectVars t = case t of
+  Var k i -> [(k, i)]
+  Ref k i -> []  -- Refs don't shadow
+  Sub t -> collectVars t
+  Fix k f -> collectVars (f (Var k 0))
+  Let k t v f -> maybe [] collectVars t ++ collectVars v ++ collectVars (f (Var k 0))
+  Use k v f -> collectVars v ++ collectVars (f (Var k 0))
+  Chk x t -> collectVars x ++ collectVars t
+  UniM f -> collectVars f
+  BitM f t -> collectVars f ++ collectVars t
+  NatM z s -> collectVars z ++ collectVars s
+  Lst t -> collectVars t
+  Con h t -> collectVars h ++ collectVars t
+  LstM n c -> collectVars n ++ collectVars c
+  EnuM cs d -> concatMap (collectVars . snd) cs ++ collectVars d
+  Op2 _ a b -> collectVars a ++ collectVars b
+  Op1 _ a -> collectVars a
+  Sig t f -> collectVars t ++ collectVars f
+  Tup a b -> collectVars a ++ collectVars b
+  SigM f -> collectVars f
+  All t f -> collectVars t ++ collectVars f
+  Lam k t f -> maybe [] collectVars t ++ collectVars (f (Var k 0))
+  App f a -> collectVars f ++ collectVars a
+  Eql t a b -> collectVars t ++ collectVars a ++ collectVars b
+  EqlM f -> collectVars f
+  Rwt e f -> collectVars e ++ collectVars f
+  Met n t ctx -> collectVars t ++ concatMap collectVars ctx
+  Sup l a b -> collectVars l ++ collectVars a ++ collectVars b
+  SupM l f -> collectVars l ++ collectVars f
+  Loc _ t -> collectVars t
+  Log s x -> collectVars s ++ collectVars x
+  Pat ts ms cs -> concatMap collectVars ts ++ concatMap (collectVars . snd) ms ++ 
+                  concatMap (\(ps, t) -> concatMap collectVars ps ++ collectVars t) cs
+  Frk l a b -> collectVars l ++ collectVars a ++ collectVars b
+  _ -> []

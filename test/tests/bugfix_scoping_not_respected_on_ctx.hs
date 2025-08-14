@@ -33,4 +33,4 @@ def thm(A:Set) -> exists((Σa:A.Unit)->A, λf.(∀a:A. A{f((a,())) == a})):
 main :: IO ()
 main = testFile scoping_not_respected_on_ctx
   "Scoping not respected when printing context" $ \out err -> do
-    assert (err `has` "Goal: Σa:((Σa:A^0. Unit) -> A^0). ∀a:A^0. A^0{(a^0)((a^0,()))==a^0}")
+    assert (err `has` "Σa^0:((Σa^0:A. Unit) -> A). ∀a^1:A. A{(a^0)((a^1,()))==a^1}")

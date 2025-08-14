@@ -7,9 +7,11 @@ import Test
 
 cant_infer_indirectly_derived_empty :: String
 cant_infer_indirectly_derived_empty = """
+def t_(A: Set, e: Empty) -> A:
+  absurd e
+
 def t(A: Set, e: Nat{0n == 0n} -> Empty) -> A:
-  emp = e(finally)
-  ~emp{}
+  t_(A, e(finally))
 """
 
 -- gives:

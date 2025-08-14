@@ -95,6 +95,11 @@ parseTermOpr t = choice
 -- The parser is only applied if the next token is not in the 'blocked' list.
 -- This is the core of the operator-blocking mechanism that allows for context-
 -- sensitive parsing, preventing ambiguity in expressions like `~ term { ... }`.
+-- | A helper that conditionally applies a postfix/infix parser to a term.
+-- The parser is only applied if the next token is not in the 'blocked' list.
+-- This is the core of the operator-blocking mechanism that allows for context-
+-- sensitive parsing, preventing ambiguity in expressions like `if ...:` or
+-- `~ term { ... }`, where certain trailing operators must not be parsed.
 withOperatorParsing :: Term -> (Term -> Parser Term) -> Parser Term
 withOperatorParsing term operatorParser = do
   st <- get
@@ -150,6 +155,7 @@ parseTermBefore op = do
       put st' { blocked = wasBlocked }
       return term
 
+
 -- | Syntax: x, foo, bar_123, Type<A,B>, Nat/add
 parseVar :: Parser Term
 parseVar = label "variable" $ do
@@ -198,9 +204,13 @@ parseSup = label "superposition" $ do
 parseBifIf :: Parser Term
 parseBifIf = label "if clause" $ do
   _ <- try $ keyword "if"
-  condition <- parseTerm
+  -- Block ':' so it can't be parsed as a trailing operator
+  -- on the scrutinee by downstream postfix/infix parsers.
+  condition <- parseTermBefore ":"
   _ <- symbol ":"
-  trueCase <- parseTerm
+  -- Block operator parsing when we hit 'else' to avoid
+  -- consuming into the else-branch accidentally.
+  trueCase <- parseTermBefore "else"
   _ <- symbol "else"
   _ <- symbol ":"
   falseCase <- parseTerm
@@ -439,9 +449,12 @@ parseBraceClauses arity = manyTill singleClause (lookAhead (symbol "}")) where
 parseFrk :: Parser Term
 parseFrk = label "fork" $ do
   _ <- try $ symbol "fork"
-  l <- parseTerm
+  -- Block ':' so it can't be parsed as a trailing operator
+  -- on the scrutinee by downstream postfix/infix parsers.
+  l <- parseTermBefore ":"
   _ <- symbol ":"
-  a <- parseTerm
+  -- Parse first branch; prevent it from consuming the following 'else'.
+  a <- parseTermBefore "else"
   elifs <- many parseElif
   _ <- symbol "else"
   _ <- symbol ":"
@@ -452,7 +465,8 @@ parseFrk = label "fork" $ do
     parseElif = do
       _ <- keyword "elif"
       _ <- symbol ":"
-      parseTerm
+      -- Parse elif branch; avoid consuming the subsequent 'else'.
+      parseTermBefore "else"
     
     buildForkChain :: Term -> Term -> [Term] -> Term -> Term
     buildForkChain l firstBranch [] elseBranch = Frk l firstBranch elseBranch
