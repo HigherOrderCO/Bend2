@@ -1,4 +1,15 @@
 {-# LANGUAGE ViewPatterns #-}
+-- Leterize Transformation
+-- ======================
+--
+-- Transforms pattern matches applied to values into canonical let-bound form:
+-- t[λ{%A}(v)] -> t[f : typeof(λ{%A}) = λ{%A}; f(v)]
+--
+-- The key insight from infernotes.bend is that we need:
+-- 1. leterize d j ctx term - main traversal with context building
+-- 2. typeof(ctx, elim, val) - core type inference for eliminators
+-- 3. domain/codomain inference using eta-reduced structure analysis
+--
 module Core.Adjust.Leterize where
 
 import Core.Type
@@ -10,9 +21,182 @@ import qualified Data.Map as M
 import Control.Applicative
 import Debug.Trace
 
+-- Context extension helper
 extend :: Ctx -> Name -> Term -> Term -> Ctx
 extend (Ctx ctx) k v t = Ctx (ctx ++ [(k, v, t)])
 
+-- ============================================================================
+-- CORE LETERIZE TRANSFORMATION (following infernotes.bend structure)
+-- ============================================================================
+
+-- Main leterize function as described in infernotes.bend
+leterize :: Int -> Int -> Book -> Ctx -> Type -> Term -> Term
+leterize d j book ctx typ term = case term of
+  -- THE KEY CASE: App f x where f is λ{%A}
+  App f x -> case cut f of
+    eliminator | isLamMatch eliminator -> 
+      let auxName = "$aux_" ++ show j
+          eliminatorType = typeof ctx eliminator x
+      in Let auxName (Just eliminatorType) f (\_ -> App (Var auxName d) (leterize d (j+1) book ctx typ x))
+    _ -> App (leterize d j book ctx typ f) (leterize d j book ctx typ x)
+  
+  -- Standard traversal for other constructs, increasing d when passing through binders
+  Var n i     -> Var n i
+  Ref n i     -> Ref n i
+  Sub t'      -> Sub (leterize d j book ctx typ t')
+  Fix k f     -> Fix k (\x -> leterize (d+1) j book ctx typ (f x))
+  Let k ty v f -> Let k (fmap (leterize d j book ctx typ) ty) (leterize d j book ctx typ v) (\x -> leterize (d+1) j book ctx typ (f x))
+  Use k v f   -> Use k (leterize d j book ctx typ v) (\x -> leterize (d+1) j book ctx typ (f x))
+  Set         -> Set
+  Chk x ty    -> Chk (leterize d j book ctx typ x) (leterize d j book ctx typ ty)
+  Emp         -> Emp
+  EmpM        -> EmpM
+  Uni         -> Uni
+  One         -> One
+  UniM f      -> UniM (leterize d j book ctx typ f)
+  Bit         -> Bit
+  Bt0         -> Bt0
+  Bt1         -> Bt1
+  BitM f t    -> BitM (leterize d j book ctx typ f) (leterize d j book ctx typ t)
+  Nat         -> Nat
+  Zer         -> Zer
+  Suc n       -> Suc (leterize d j book ctx typ n)
+  NatM z s    -> NatM (leterize d j book ctx typ z) (leterize d j book ctx typ s)
+  Lst ty      -> Lst (leterize d j book ctx typ ty)
+  Nil         -> Nil
+  Con h t'    -> Con (leterize d j book ctx typ h) (leterize d j book ctx typ t')
+  LstM n c    -> LstM (leterize d j book ctx typ n) (leterize d j book ctx typ c)
+  Enu ss      -> Enu ss
+  Sym s       -> Sym s
+  EnuM cs e   -> EnuM [(s, leterize d j book ctx typ v) | (s, v) <- cs] (leterize d j book ctx typ e)
+  Num nt      -> Num nt
+  Val nv      -> Val nv
+  Op2 o a b   -> Op2 o (leterize d j book ctx typ a) (leterize d j book ctx typ b)
+  Op1 o a     -> Op1 o (leterize d j book ctx typ a)
+  Sig a b     -> Sig (leterize d j book ctx typ a) (leterize d j book ctx typ b)
+  Tup a b     -> Tup (leterize d j book ctx typ a) (leterize d j book ctx typ b)
+  SigM f      -> SigM (leterize d j book ctx typ f)
+  All a b     -> All (leterize d j book ctx typ a) (leterize d j book ctx typ b)
+  Lam k ty f  -> Lam k (fmap (leterize d j book ctx typ) ty) (\x -> leterize (d+1) j book ctx typ (f x))
+  Eql ty a b  -> Eql (leterize d j book ctx typ ty) (leterize d j book ctx typ a) (leterize d j book ctx typ b)
+  Rfl         -> Rfl
+  EqlM f      -> EqlM (leterize d j book ctx typ f)
+  Rwt e f     -> Rwt (leterize d j book ctx typ e) (leterize d j book ctx typ f)
+  Met n ty as -> Met n (leterize d j book ctx typ ty) (map (leterize d j book ctx typ) as)
+  Era         -> Era
+  Sup l a b   -> Sup (leterize d j book ctx typ l) (leterize d j book ctx typ a) (leterize d j book ctx typ b)
+  SupM l f    -> SupM (leterize d j book ctx typ l) (leterize d j book ctx typ f)
+  Loc s t'    -> Loc s (leterize d j book ctx typ t')
+  Log s x     -> Log (leterize d j book ctx typ s) (leterize d j book ctx typ x)
+  Pri p       -> Pri p
+  Pat ss ms cs -> Pat (map (leterize d j book ctx typ) ss) 
+                      [(k, leterize d j book ctx typ v) | (k, v) <- ms]
+                      [(map (leterize d j book ctx typ) ps, leterize d j book ctx typ rhs) | (ps, rhs) <- cs]
+  Frk l a b   -> Frk (leterize d j book ctx typ l) (leterize d j book ctx typ a) (leterize d j book ctx typ b)
+
+-- ============================================================================
+-- TYPEOF INFERENCE (core function from infernotes.bend)
+-- ============================================================================
+
+-- The typeof(ctx, elim, val) function as described in infernotes.bend
+-- Returns: ∀p: domain(ctx, elim, val) . codomainFunc(ctx, elim, val)(p)
+typeof :: Ctx -> Term -> Term -> Term
+typeof ctx eliminator value = 
+  let domainType = inferDomain ctx eliminator value
+      codomainFunc = inferCodomainFunc ctx eliminator value
+  in All domainType codomainFunc
+
+-- ============================================================================
+-- DOMAIN AND CODOMAIN INFERENCE (using eta-reduced structure)
+-- ============================================================================
+
+-- Infers the domain type of an eliminator applied to a value
+inferDomain :: Ctx -> Term -> Term -> Term
+inferDomain ctx eliminator value = case eliminator of
+  NatM _ _ -> Nat
+  BitM _ _ -> Bit  
+  LstM ty _ -> Lst ty
+  EnuM cases _ -> Enu (map fst cases)
+  SigM _ -> inferSigmaDomain ctx eliminator value
+  UniM _ -> Uni
+  SupM _ _ -> Set  -- TODO: proper superposition domain
+  EqlM _ -> Set   -- TODO: proper equality domain  
+  EmpM -> Emp
+  _ -> Set  -- fallback
+
+-- Infers the codomain function using eta-reduced structure analysis
+inferCodomainFunc :: Ctx -> Term -> Term -> Term
+inferCodomainFunc ctx eliminator value = 
+  -- Key insight: use reduceEtas to reveal the dependency structure
+  let etaReduced = reduceEtas 0 eliminator
+  in extractCodomainFromEtaForm ctx etaReduced value
+
+-- ============================================================================
+-- ETA-REDUCED STRUCTURE ANALYSIS (following infernotes.bend insight)
+-- ============================================================================
+
+-- Extracts codomain function from eta-reduced eliminator structure
+-- This is where we use the "use a = ..." bindings to understand dependencies
+extractCodomainFromEtaForm :: Ctx -> Term -> Term -> Term
+extractCodomainFromEtaForm ctx etaReduced value = case etaReduced of
+  -- Pattern matches create branches in the dependent type  
+  NatM z s -> NatM (extractCodomainFromEtaForm ctx z value)
+                  (extractCodomainFromEtaForm ctx s value)
+  BitM f t -> BitM (extractCodomainFromEtaForm ctx f value) 
+                   (extractCodomainFromEtaForm ctx t value)
+  SigM body -> SigM (extractCodomainFromEtaForm ctx body value)
+  
+  -- Use bindings reveal where variables get fixed values
+  Use k v cont -> 
+    let ctx' = extend ctx k v (greedyInfer 0 (Book M.empty []) ctx Set v)
+    in extractCodomainFromEtaForm ctx' (cont v) value
+  
+  -- Lambdas in eta-reduced form represent pattern continuations
+  Lam k ty body -> Lam k ty (\x -> extractCodomainFromEtaForm ctx (body x) value)
+  
+  -- After all bindings/patterns, infer the result type
+  term -> greedyInfer 0 (Book M.empty []) ctx Set term
+
+-- ============================================================================
+-- SIGMA TYPE SPECIFIC INFERENCE (your existing specialized logic)
+-- ============================================================================
+
+inferSigmaDomain :: Ctx -> Term -> Term -> Term
+inferSigmaDomain ctx (SigM body) (Tup a b) = 
+  case cut body of
+    Lam aParam _ innerBody -> 
+      case cut (innerBody (Var aParam 0)) of
+        Lam bParam _ _ ->
+          let aType = greedyInfer 0 (Book M.empty []) ctx Set a
+              -- Use your existing logic for dependent pair domain
+              bTypeFunc = buildBTypeFunc 0 (Book M.empty []) ctx Set aParam bParam (reduceEtas 0 body)
+          in Sig aType bTypeFunc
+        _ -> Set
+    _ -> Set
+inferSigmaDomain _ _ _ = Set
+
+-- ============================================================================
+-- AUXILIARY FUNCTIONS (reorganized existing logic)
+-- ============================================================================
+
+-- Determines if a term is a lambda-match pattern
+isLamMatch :: Term -> Bool
+isLamMatch EmpM      = True
+isLamMatch UniM{}    = True  
+isLamMatch BitM{}    = True
+isLamMatch NatM{}    = True
+isLamMatch LstM{}    = True
+isLamMatch EnuM{}    = True
+isLamMatch SigM{}    = True
+isLamMatch SupM{}    = True
+isLamMatch EqlM{}    = True
+isLamMatch _         = False
+
+-- ============================================================================
+-- LEGACY FUNCTIONS (preserved but reorganized)
+-- ============================================================================
+
+-- Your existing dependency analysis (now used as helper)
 dependencyInfer :: Int -> Book -> Ctx -> Term -> Term -> Term -> Either Term Term
 dependencyInfer d book ctx@(Ctx ctxl) goal term def = trace ("-depInfer: " ++ show term) $
   case term of
@@ -203,79 +387,6 @@ greedyInfer d book ctx@(Ctx ctxl) goal term =  -- TODO: not everything here is w
   Pat ss ms cs -> goal  -- pattern matching preserves goal type
   Frk l a b   -> goal  -- fork preserves goal type
 
-leterize :: Int -> Int -> Book -> Ctx -> Type -> Term -> Term
-leterize d j book ctx typ t = case t of
-  Var n i     -> Var n i
-  Ref n i     -> Ref n i
-  Sub t'      -> Sub (leterize d j book ctx typ t')
-  Fix k f     -> Fix k (\x -> leterize (d+1) j book ctx typ (f x))
-  Let k ty v f -> Let k (fmap (leterize d j book ctx typ) ty) (leterize d j book ctx typ v) (\x -> leterize (d+1) j book ctx typ (f x))
-  Use k v f   -> Use k (leterize d j book ctx typ v) (\x -> leterize (d+1) j book ctx typ (f x))
-  Set         -> Set
-  Chk x ty    -> Chk (leterize d j book ctx typ x) (leterize d j book ctx typ ty)
-  Emp         -> Emp
-  EmpM        -> EmpM
-  Uni         -> Uni
-  One         -> One
-  UniM f      -> UniM (leterize d j book ctx typ f)
-  Bit         -> Bit
-  Bt0         -> Bt0
-  Bt1         -> Bt1
-  BitM f t    -> BitM (leterize d j book ctx typ f) (leterize d j book ctx typ t)
-  Nat         -> Nat
-  Zer         -> Zer
-  Suc n       -> Suc (leterize d j book ctx typ n)
-  NatM z s    -> NatM (leterize d j book ctx typ z) (leterize d j book ctx typ s)
-  Lst ty      -> Lst (leterize d j book ctx typ ty)
-  Nil         -> Nil
-  Con h t'    -> Con (leterize d j book ctx typ h) (leterize d j book ctx typ t')
-  LstM n c    -> LstM (leterize d j book ctx typ n) (leterize d j book ctx typ c)
-  Enu ss      -> Enu ss
-  Sym s       -> Sym s
-  EnuM cs e   -> EnuM [(s, leterize d j book ctx typ v) | (s, v) <- cs] (leterize d j book ctx typ e)
-  Num nt      -> Num nt
-  Val nv      -> Val nv
-  Op2 o a b   -> Op2 o (leterize d j book ctx typ a) (leterize d j book ctx typ b)
-  Op1 o a     -> Op1 o (leterize d j book ctx typ a)
-  Sig a b     -> Sig (leterize d j book ctx typ a) (leterize d j book ctx typ b)
-  Tup a b     -> Tup (leterize d j book ctx typ a) (leterize d j book ctx typ b)
-  SigM f      -> SigM (leterize d j book ctx typ f)
-  All a b     -> All (leterize d j book ctx typ a) (leterize d j book ctx typ b)
-  Lam k ty f  -> Lam k (fmap (leterize d j book ctx typ) ty) (\x -> leterize (d+1) j book ctx typ (f x))
-  App f x -> if isLamMatch (cut f)
-    then
-      let k = "$aux_" ++ show j
-          fT = case cut f of
-            SigM b -> 
-              case inferDependentPairType d book ctx f x typ of
-                Just (domType, codType) -> 
-                  let result = All domType codType
-                  in
-                  -- trace ("WIP: domain/codomain(" ++ show f ++ ", " ++ show x ++ ") = " ++ show (Just (domType, codType))) $
-                  result
-                Nothing -> 
-                  -- trace ("WIP: domain/codomain(" ++ show f ++ ", " ++ show x ++ ") = Nothing") $
-                  greedyInfer d book ctx typ f
-            _ -> greedyInfer d book ctx typ f
-      in
-      Let k (Just fT) f (\_ -> App (Var k d) x)
-  else App (leterize d j book ctx typ f) (leterize d j book ctx typ x)
-  Eql ty a b  -> Eql (leterize d j book ctx typ ty) (leterize d j book ctx typ a) (leterize d j book ctx typ b)
-  Rfl         -> Rfl
-  EqlM f      -> EqlM (leterize d j book ctx typ f)
-  Rwt e f     -> Rwt (leterize d j book ctx typ e) (leterize d j book ctx typ f)
-  Met n ty as -> Met n (leterize d j book ctx typ ty) (map (leterize d j book ctx typ) as)
-  Era         -> Era
-  Sup l a b   -> Sup (leterize d j book ctx typ l) (leterize d j book ctx typ a) (leterize d j book ctx typ b)
-  SupM l f    -> SupM (leterize d j book ctx typ l) (leterize d j book ctx typ f)
-  Loc s t'    -> Loc s (leterize d j book ctx typ t')
-  Log s x     -> Log (leterize d j book ctx typ s) (leterize d j book ctx typ x)
-  Pri p       -> Pri p
-  Pat ss ms cs -> Pat (map (leterize d j book ctx typ) ss) 
-                      [(k, leterize d j book ctx typ v) | (k, v) <- ms]
-                      [(map (leterize d j book ctx typ) ps, leterize d j book ctx typ rhs) | (ps, rhs) <- cs]
-  Frk l a b   -> Frk (leterize d j book ctx typ l) (leterize d j book ctx typ a) (leterize d j book ctx typ b)
-
 -- Builds the codomain type based on the value of the pair (a, b)
 buildCodomainType :: Int -> Book -> Ctx -> Term -> String -> String -> Term -> Term
 buildCodomainType d book ctx defaultCodomain aParam bParam etaReduced = 
@@ -398,14 +509,3 @@ inferDependentPairType d book ctx sigm@(cut -> (SigM body)) (cut -> (Tup a b)) t
     _ -> Nothing  -- Body is not a lambda
 
 inferDependentPairType _ _ _ _ _ _ = Nothing
-isLamMatch :: Term -> Bool
-isLamMatch EmpM      = True
-isLamMatch UniM{}    = True
-isLamMatch BitM{}    = True
-isLamMatch NatM{}    = True
-isLamMatch LstM{}    = True
-isLamMatch EnuM{}    = True
-isLamMatch SigM{}    = True
-isLamMatch SupM{}    = True
-isLamMatch EqlM{}    = True
-isLamMatch _         = False
