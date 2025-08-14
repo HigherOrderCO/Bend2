@@ -38,6 +38,9 @@ module Core.Parse.Parse
   
   -- * Error recovery
   , expectBody
+  
+  -- * ADT arity checking
+  , getConstructorArity
   ) where
 
 import Control.Monad (when, replicateM, void, guard)
@@ -65,6 +68,7 @@ data ParserState = ParserState
   , blocked       :: [String]              -- ^ list of blocked operators
   , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/"
   , assertCounter :: Int                   -- ^ counter for generating unique assert names (E0, E1, E2...)
+  , adtArities    :: M.Map String [(String, Int)] -- ^ map from type name to list of (constructor name, arity)
   }
 
 type Parser = ParsecT Void String (Control.Monad.State.Strict.State ParserState)
@@ -209,3 +213,33 @@ formatError input bundle = do
         then "\nAt end of file.\n"
         else "\nAt line " ++ show lin ++ ", column " ++ show col ++ ":\n" ++ src
   "\nPARSE_ERROR\n" ++ msg ++ cod
+
+-- | Get constructor arity, handling type hints and ambiguity checking
+getConstructorArity :: Parser (Name -> Maybe (Maybe String, Int))
+getConstructorArity = do
+  st <- get
+  let adts = adtArities st
+  return $ \ctorName ->
+    -- Check if constructor has :: type hint
+    case break (== ':') ctorName of
+      (typeName, ':':':':actualCtor) ->
+        -- Type hint provided: look up in specific type
+        case M.lookup typeName adts of
+          Nothing -> Nothing  -- Type not found
+          Just ctors -> lookup actualCtor ctors >>= \arity -> Just (Just typeName, arity)
+      _ ->
+        -- No type hint: search all types
+        let allMatches = [(typeName, arity) | 
+                          (typeName, ctors) <- M.toList adts,
+                          (ctorName', arity) <- ctors,
+                          ctorName' == ctorName]
+        in case allMatches of
+          [] -> Nothing  -- Constructor not found
+          [(typeName, arity)] -> Just (Nothing, arity)  -- Single match
+          matches ->
+            -- Multiple matches - check if all have same arity
+            let arities = map snd matches
+                allSame = all (== head arities) arities
+            in if allSame
+               then Just (Nothing, head arities)  -- All same arity, OK
+               else Nothing  -- Ambiguous with different arities - will error later

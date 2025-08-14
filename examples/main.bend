@@ -344,27 +344,27 @@ def WLeaf(n: Nat) -> WTree:
 def WNode(l: WTree, r: WTree) -> WTree:
   return @Sup{@WNode{}, λi. match i: case &lft: l case &rgt: r  }
 
-# FIXME: written like this, Adjust will produce a (λ{...} x) form (CantInfer)
-#def sum_wtree(w: WTree) -> Nat:
-  #match w:
-    #case @Sup{x,f}:
-      #match x:
-        #case @WLeaf{value}:
-          #return value
-        #case @WNode{}:
-          #a = f(&lft)
-          #b = f(&rgt)
-          #return add(sum_wtree(a), sum_wtree(b))
-
 # Sums a W-Tree
 def sum_wtree(w: WTree) -> Nat:
   match w:
-    case @Sup{@WLeaf{value},f}:
-      value
-    case @Sup{@WNode{},f}:
-      a = f(&lft)
-      b = f(&rgt)
-      return add(sum_wtree(a), sum_wtree(b))
+    case @Sup{x,f}:
+      match x:
+        case @WLeaf{value}:
+          return value
+        case @WNode{}:
+          a = f(&lft)
+          b = f(&rgt)
+          return add(sum_wtree(a), sum_wtree(b))
+
+## Sums a W-Tree
+#def sum_wtree(w: WTree) -> Nat:
+  #match w:
+    #case @Sup{@WLeaf{value},f}:
+      #value
+    #case @Sup{@WNode{},f}:
+      #a = f(&lft)
+      #b = f(&rgt)
+      #return add(sum_wtree(a), sum_wtree(b))
 
 # Sum a W-Tree (using the generic fold)
 def sum_wtree_fold(w: WTree) -> Nat:

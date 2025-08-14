@@ -39,7 +39,6 @@ import qualified Data.Set as S
 import Debug.Trace
 
 import Core.Bind
-import Core.FreeVars
 import Core.Show
 import Core.Type
 import Core.WHNF
@@ -224,7 +223,8 @@ simplify :: Int -> Term -> Term
 simplify d (Pat ss ms cs) =
   case Pat ss ms (map (\ (p, c) -> (p, simplify d c)) cs) of
     pat@(Pat [] ms (([],rhs):cs)) ->
-      simplify d (shove d ms rhs)
+      -- simplify d (shove d ms rhs)
+      simplify d rhs
     pat@(Pat ss ms cs) -> Pat ss ms (merge d cs)
 simplify d (Loc l t) = Loc l (simplify d t)
 simplify d pat       = pat
@@ -236,7 +236,8 @@ simplify d pat       = pat
 merge :: Int -> [Case] -> [Case]
 merge d (([Var x _], (Pat [Var x' _] ms cs')) : cs)
                 | x == x' = csA ++ csB
-                where csA = map (\ (p, rhs) -> (p, shove d ms rhs)) cs'
+                -- where csA = map (\ (p, rhs) -> (p, shove d ms rhs)) cs'
+                where csA = map (\ (p, rhs) -> (p, rhs)) cs'
                       csB = merge d cs
 merge d ((p,rhs):cs) = (p, rhs) : merge d cs
 merge d []           = []
@@ -245,7 +246,8 @@ merge d []           = []
 -- ----------------------------------------- simplify-decay
 -- F(A,...)
 decay :: Int -> Term -> Term
-decay d (Pat [] ms (([],rhs):cs)) = simplify d (shove d ms rhs)
+-- decay d (Pat [] ms (([],rhs):cs)) = simplify d (shove d ms rhs)
+decay d (Pat [] ms (([],rhs):cs)) = simplify d rhs
 decay d pat                       = pat
 
 -- Helpers

@@ -29,6 +29,7 @@ import Core.Adjust.Adjust
 import Core.Parse.Parse
 import Core.Type
 import Core.Show
+import Data.List (unlines)
 
 -- | Parse a "core" form
 parseTermIni :: Parser Term
@@ -290,14 +291,67 @@ parseSym = label "enum symbol / constructor" $ try $ do
     , parseOldSymbol    -- @tag -> (&tag,())
     ]
   where
-    -- Parse @tag{...} constructor syntax (unchanged)
+    -- Parse @tag{...} or @Type::tag{...} constructor syntax with arity checking
     parseConstructor = try $ do
       _ <- symbol "@"
-      n <- some (satisfy isNameChar)
+      -- Parse potential Type::Constructor syntax
+      fullName <- parseConstructorName
       _ <- symbol "{"
       f <- sepEndBy parseTerm (symbol ",")
       _ <- symbol "}"
-      return $ buildCtor n f
+      -- Check constructor arity
+      getArity <- getConstructorArity
+      let providedArity = length f
+      case getArity fullName of
+        Nothing -> 
+          -- Constructor not found or ambiguous - check for ambiguity
+          checkAmbiguousConstructor fullName
+        Just (_, expectedArity) ->
+          when (providedArity /= expectedArity) $
+            fail $ "Constructor '" ++ fullName ++ "' expects " ++ show expectedArity ++ 
+                   " field(s), but got " ++ show providedArity
+      -- Extract the actual constructor name (without type hint)
+      let ctorName = case break (== ':') fullName of
+                       (_, ':':':':actualCtor) -> actualCtor
+                       _ -> fullName
+      return $ buildCtor ctorName f
+    
+    -- Parse constructor name with optional Type:: prefix
+    parseConstructorName = do
+      firstPart <- some (satisfy isNameChar)
+      maybeType <- optional $ try $ do
+        _ <- string "::"
+        secondPart <- some (satisfy isNameChar)
+        return secondPart
+      case maybeType of
+        Nothing -> return firstPart
+        Just ctorName -> return (firstPart ++ "::" ++ ctorName)
+    
+    -- Check for ambiguous constructor and provide helpful error
+    checkAmbiguousConstructor ctorName = do
+      st <- get
+      let adts = adtArities st
+      -- Remove type hint if present
+      let baseName = case break (== ':') ctorName of
+                       (_, ':':':':actualCtor) -> actualCtor
+                       _ -> ctorName
+      -- Find all matching constructors across types
+      let allMatches = [(typeName, arity) | 
+                        (typeName, ctors) <- M.toList adts,
+                        (ctorName', arity) <- ctors,
+                        ctorName' == baseName]
+      case allMatches of
+        [] -> return () -- Will be caught by type checker
+        matches | length matches > 1 ->
+          let arities = map snd matches
+              allSame = all (== head arities) arities
+          in if not allSame
+             then fail $ "Ambiguous constructor name: `" ++ baseName ++ "{..}`. " ++
+                        "Please prefix it with its type name. Options:\n" ++
+                        unlines ["- " ++ typeName ++ "::" ++ baseName ++ "{..}" | 
+                                (typeName, _) <- matches]
+             else return () -- Same arity everywhere, OK
+        _ -> return ()
     
     -- Parse new &tag bare symbol syntax  
     parseNewSymbol = try $ do
@@ -312,6 +366,14 @@ parseSym = label "enum symbol / constructor" $ try $ do
       _ <- symbol "@"
       notFollowedBy (char '{')  -- make sure we are not @{...} or @tag{...}
       n <- lexeme $ some (satisfy isNameChar)
+      -- Check arity for bare constructor (should be 0)
+      getArity <- getConstructorArity
+      case getArity n of
+        Nothing -> checkAmbiguousConstructor n
+        Just (_, expectedArity) ->
+          when (expectedArity /= 0) $
+            fail $ "Constructor '" ++ n ++ "' expects " ++ show expectedArity ++ 
+                   " field(s), but got 0. Use @" ++ n ++ "{...} with " ++ show expectedArity ++ " field(s)."
       -- Desugar @Foo to (&Foo,())
       return $ Tup (Sym n) One
     
@@ -1118,7 +1180,7 @@ parseSupMCases scrut = do
 -- | Parse a term from a string, returning an error message on failure
 doParseTerm :: FilePath -> String -> Either String Term
 doParseTerm file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0) of
+  case evalState (runParserT p file input) (ParserState True input [] M.empty 0 M.empty) of
     Left err  -> Left (formatError input err)
     Right res -> Right (adjust (Book M.empty []) res)
   where

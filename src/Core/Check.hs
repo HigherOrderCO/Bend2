@@ -978,6 +978,14 @@ check d span book ctx term      goal =
     (Lam f t x, _) ->
       Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (Ref "Function" 1)
 
+    -- ctx |- x : T
+    -- ctx |- f : T -> T -> P
+    -- ----------------------
+    -- ctx |- (λ{&L:f} x) : P
+    (App (SupM l f) x, _) -> do
+      xT <- infer d span book ctx x
+      check d span book ctx f (All xT (Lam "_" Nothing (\_ -> All xT (Lam "_" Nothing (\_ -> goal)))))
+
     -- Default case: try to infer and verify
     (term, _) -> do
       let (fn, xs) = collectApps term []

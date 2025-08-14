@@ -66,16 +66,16 @@ binder lv term ctx vars = case term of
   Pri p       -> Pri p
   Log s x     -> Log (binder lv s ctx vars) (binder lv x ctx vars)
   Met k t c   -> Met k (binder lv t ctx vars) (map (\x -> binder lv x ctx vars) c)
-  Pat s m c   -> error "unreachable"
-    -- -- Since Pat doesn't bind with HOAS, keep as Var
-    -- let s'     = map (\x -> binder lv x ctx vars) s
-        -- m'     = map (\(k,x) -> (k, binder lv x ctx vars)) m
-        -- c'     = map (\(p,x) -> (p, binder lv x (ctx ++ map v mvar ++ map v (pvar p)) (M.union (M.fromList (map kv (mvar ++ pvar p))) vars))) c
-        -- mvar   = map fst m
-        -- pvar p = S.toList (S.unions (map (freeVars S.empty) p))
-        -- kv nam = (nam, Var nam 0)
-        -- v nam  = Var nam 0
-    -- in Pat s' m' c'
+  Pat s m c   ->
+    -- Since Pat doesn't bind with HOAS, keep as Var
+    let s'     = map (\x -> binder lv x ctx vars) s
+        m'     = map (\(k,x) -> (k, binder lv x ctx vars)) m
+        c'     = map (\(p,x) -> (p, binder lv x (ctx ++ map v mvar ++ map v (pvar p)) (M.union (M.fromList (map kv (mvar ++ pvar p))) vars))) c
+        mvar   = map fst m
+        pvar p = S.toList (S.unions (map (freeVars S.empty) p))
+        kv nam = (nam, Var nam 0)
+        v nam  = Var nam 0
+    in Pat s' m' c'
 
 -- Generic bind function that takes a predicate to match variables
 bindVar :: (Name -> Int -> Bool) -> Term -> Term -> Term

@@ -1,3 +1,8 @@
+-- Bend2's Core Type
+-- =================
+-- This is the starting point of this repository. All other modules are files
+-- from/to the core Term type. Includes Books, Errors and other helper types.
+
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GADTs #-}
@@ -19,7 +24,6 @@ import Debug.Trace
 import qualified Data.Kind as DK
 import qualified Data.Map as M
 import qualified Data.Set as S
-
 
 data Bits = O Bits | I Bits | E deriving Show
 type Name = String

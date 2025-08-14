@@ -217,12 +217,14 @@ match d span s ms cs = errorWithSpan span "Invalid pattern."
 
 -- Helper function to create lambda abstractions
 lam :: Int -> [Name] -> Term -> Term
-lam d []     t = t
-lam d (k:ks) t = Lam k Nothing $ \_ -> lam (d+1) ks t
+lam d ks t = t
+-- lam d []     t = t
+-- lam d (k:ks) t = Lam k Nothing $ \_ -> lam (d+1) ks t
 
 -- Applies n arguments to a value
 apps :: Int -> [Term] -> Term -> Term
-apps d ms t = foldl (\t x -> App t x) t ms
+apps d ms t = t
+-- apps d ms t = foldl (\t x -> App t x) t ms
 
 -- Substitutes a move list into an expression
 shove :: Int -> [Move] -> Term -> Term

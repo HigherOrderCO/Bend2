@@ -20,8 +20,8 @@ import Debug.Trace
 
 rewrite :: Int -> Book -> Term -> Term -> Term -> Term
 rewrite d book old neo val
-  | equal d book old val  = neo
-  | otherwise             = rewriteGo d book old neo $ whnf book val
+  | equal d book old val = neo
+  | otherwise            = rewriteGo d book old neo $ whnf book val
 
 -- Recursively rewrites occurrences of 'old' with 'neo' in 'val'
 rewriteGo :: Int -> Book -> Term -> Term -> Term -> Term

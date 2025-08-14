@@ -78,15 +78,15 @@ desugarFrksGo book d ctx (Log s x)     = Log (desugarFrksGo book d ctx s) (desug
 desugarFrksGo book d ctx (Loc s t)     = Loc s (desugarFrksGo book d ctx t)
 desugarFrksGo book d ctx (Pat s m c)   = Pat (map (desugarFrksGo book d ctx) s) [(k, desugarFrksGo book d ctx v) | (k,v) <- m] [(p, desugarFrksGo book d (ctxCs p) f) | (p, f) <- c]
   where ctxCs  p = ctx ++ map (\(k,v) -> (k, d)) m ++ ctxPat p
-        ctxPat p = map (\k -> (k, d)) (S.toList (S.map fst (S.unions (map (freeVars book S.empty) p))))
+        ctxPat p = map (\k -> (k, d)) (S.toList (S.unions (map (freeVars S.empty) p)))
 
 desugarFrk :: Book -> Int -> [(Name, Int)] -> Term -> Term -> Term -> Term
 desugarFrk book d ctx l a b = buildSupMs vars where
   vars =  shadowCtx (filter (\x -> fst x `S.member` free) (reverse ctx))
   free = case cut l of
     -- 'l' must be a non-superposed U64 so we can remove it from the forked vars as a (reasonable) optimization.
-    Var n _ -> S.delete n (S.map fst (freeVars book S.empty a `S.union` freeVars book S.empty b))
-    _       -> S.map fst (freeVars book S.empty a `S.union` freeVars book S.empty b)
+    Var n _ -> S.delete n (freeVars S.empty a `S.union` freeVars S.empty b)
+    _       -> freeVars S.empty a `S.union` freeVars S.empty b
   -- Build nested SupM matches for each context variable
   buildSupMs :: [(Name, Int)] -> Term
   buildSupMs [] = Sup l a' b' where
