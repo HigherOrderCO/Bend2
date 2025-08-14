@@ -405,7 +405,7 @@ instance Show Span where
 instance Show Error where
   show err = case err of
     CantInfer span ctx       -> "\x1b[1mCantInfer:\x1b[0m\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    Unsupported span ctx     -> "\x1b[1mUnsupported:\x1b[0m\nCurrently, Bend doesn't support matching on non-var expressions.\nThis will be added later. For now, please split this definition.\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    Unsupported span ctx     -> "\x1b[1mUnsupported:\x1b[0m\nBend2 is currently incorporating a new internal term format that will enable\nadvanced pattern matching features. During this transition, pattern matching\non non-variable expressions and certain match forms are temporarily unsupported.\n\nIf you need these features immediately, please use the previous version:\n  git checkout old-main\n\nOtherwise, please refactor your code to use variable patterns or wait for\nthe transition to complete.\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     Undefined span ctx name  -> "\x1b[1mUndefined:\x1b[0m " ++ name ++ "\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     TypeMismatch span ctx goal typ -> "\x1b[1mMismatch:\x1b[0m\n- Goal: " ++ showTerm True goal ++ "\n- Type: " ++ showTerm True typ ++ "\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     TermMismatch span ctx a b -> "\x1b[1mMismatch:\x1b[0m\n- " ++ showTerm True a ++ "\n- " ++ showTerm True b ++ "\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
