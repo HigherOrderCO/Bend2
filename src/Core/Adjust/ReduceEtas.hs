@@ -81,11 +81,10 @@ reduceEtas d t = case t of
                 Lam (k++"$b") Nothing (\b ->
                   Use k (Tup a b) (\x -> (resolveMatches (d+2) k SIGM 0 [a, b] (f (Var k d)))))))
 
-          SUPM -> SupM label branches where
-              label = Var "label" d
+          SUPM lab -> SupM lab branches where
               branches = reduceEtas d (Lam (k++"$l") Nothing (\l ->
                 Lam (k++"$r") Nothing (\r ->
-                  Use k (Sup label l r) (\x -> resolveMatches (d+2) k SUPM 0 [l, r] (f (Var k d))))))
+                  Use k (Sup lab l r) (\x -> resolveMatches (d+2) k (SUPM lab) 0 [l, r] (f (Var k d))))))
 
           EQLM -> EqlM refl where
               refl = Use k Rfl (\x -> (reduceEtas d (resolveMatches d k EQLM 0 [] (f (Var k d)))))
@@ -248,7 +247,7 @@ resolveMatches d n l clause args t = case t of
               _ -> error "SigM expects exactly two arguments"
           (SigM pair, _) -> SigM (resolveMatches d n l clause args pair)         
 
-          (SupM label branches, SUPM) ->
+          (SupM label branches, SUPM _) ->
             -- Beta-reduce branches with left and right arguments
             case args of
               [lft, rgt] -> case cut branches of
@@ -309,12 +308,12 @@ data ElimLabel
   = UNIM
   | BITM
   | NATM
-  | EMPM  -- new
-  | LSTM  -- new
-  | SIGM  -- new
-  | SUPM  -- new
-  | EQLM  -- new
-  | ENUM [String] -- new
+  | EMPM
+  | LSTM
+  | SIGM
+  | SUPM Term
+  | EQLM
+  | ENUM [String]
   deriving Show
 
 -- Check if a term contains the eta-long pattern: App (λ{...}) (Var name)
@@ -366,7 +365,7 @@ isEtaLong d n t = case t of
         EmpM     -> Just EMPM
         LstM _ _ -> Just LSTM
         SigM _   -> Just SIGM
-        SupM _ _ -> Just SUPM
+        SupM l _ -> Just (SUPM l)
         EqlM _   -> Just EQLM
         EnuM cs _ -> Just (ENUM (map fst cs))  -- Extract symbol order
         _      -> isEtaLong d n f
