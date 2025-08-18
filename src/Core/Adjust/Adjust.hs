@@ -84,13 +84,14 @@ import Core.WHNF
 -- book adjustment where recursive references aren't available yet.
 adjust :: Book -> Term -> Term
 adjust book term =
+  -- trace ("nfrk: " ++ show nfrk) $
   -- trace ("done: " ++ show done) $
   done
   where
     flat = flattenPats 0 noSpan book term
     npat = desugarPats 0 noSpan flat
     nfrk = desugarFrks book 0 npat
-    etas = reduceEtas 0 nfrk
+    etas = reduceEtas 0 (bind nfrk)
     done = bind etas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
