@@ -20,4 +20,4 @@ def add_zero_right(a: Nat) -> Nat{a == add(a,0n)}:
 """
 
 main :: IO ()
-main = testFileGoal add_zero_right_goal_1_bend "Nat{ap==add(ap,0n)}" []
+main = testFileGoal add_zero_right_goal_1_bend "Nat{a$p==add(a$p,0n)}" []

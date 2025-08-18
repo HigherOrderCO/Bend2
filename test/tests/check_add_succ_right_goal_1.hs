@@ -20,4 +20,4 @@ def add_succ_right(a: Nat, b: Nat) -> Nat{add(a,1n+b) == (1n+add(a,b))}:
 """
 
 main :: IO ()
-main = testFileGoal add_succ_right_goal_1_bend "Nat{add(ap,1n+b)==1n+add(ap,b)}" []
+main = testFileGoal add_succ_right_goal_1_bend "Nat{add(a$p,1n+b)==1n+add(a$p,b)}" []

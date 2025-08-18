@@ -29,4 +29,4 @@ def div2_mul2_inverse(n: Nat) -> Nat{div2(mul2(n)) == n}:
 """
 
 main :: IO ()
-main = testFileGoal div2_mul2_inverse_goal_1_bend "Nat{div2(mul2(p))==p}" []
+main = testFileGoal div2_mul2_inverse_goal_1_bend "Nat{div2(mul2(n$p))==n$p}" []

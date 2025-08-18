@@ -44,4 +44,4 @@ def is_even_equivalence(n: Nat) -> Bool{is_even_a(n) == is_even_b(n)}:
 """
 
 main :: IO ()
-main = testFileGoal is_even_equivalence_goal_3_bend "Bool{is_even_a(p)==is_even_b(p)}" []
+main = testFileGoal is_even_equivalence_goal_3_bend "Bool{is_even_a(n$p$p)==is_even_b(n$p$p)}" []

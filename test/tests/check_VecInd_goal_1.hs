@@ -29,4 +29,4 @@ def VecInd
 """
 
 main :: IO ()
-main = testFileGoal vecind_goal_1_bend "P(1n+n,@Cons{n,h,t,{==}})" []
+main = testFileGoal vecind_goal_1_bend "P(1n+x$b$a,@Cons{x$b$a,x$b$b$a,x$b$b$b$a,{==}})" []
