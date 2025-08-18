@@ -93,7 +93,6 @@ processFile :: FilePath -> IO ()
 processFile file = do
   book <- parseFile file
   let bookAdj = adjustBook book
-  putStrLn $ show bookAdj
   bookChk <- checkBook bookAdj
   runMain bookChk
 
