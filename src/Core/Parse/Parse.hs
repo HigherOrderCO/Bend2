@@ -226,20 +226,7 @@ getConstructorArity = do
         -- Type hint provided: look up in specific type
         case M.lookup typeName adts of
           Nothing -> Nothing  -- Type not found
-          Just ctors -> lookup actualCtor ctors >>= \arity -> Just (Just typeName, arity)
+          Just ctors -> lookup (typeName ++ "::" ++ actualCtor) ctors >>= \arity -> Just (Just typeName, arity)
       _ ->
-        -- No type hint: search all types
-        let allMatches = [(typeName, arity) | 
-                          (typeName, ctors) <- M.toList adts,
-                          (ctorName', arity) <- ctors,
-                          ctorName' == ctorName]
-        in case allMatches of
-          [] -> Nothing  -- Constructor not found
-          [(typeName, arity)] -> Just (Nothing, arity)  -- Single match
-          matches ->
-            -- Multiple matches - check if all have same arity
-            let arities = map snd matches
-                allSame = all (== head arities) arities
-            in if allSame
-               then Just (Nothing, head arities)  -- All same arity, OK
-               else Nothing  -- Ambiguous with different arities - will error later
+        -- No type hint: always fail, require prefixes for all constructors
+        Nothing
