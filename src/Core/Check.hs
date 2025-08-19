@@ -730,10 +730,11 @@ check d span book ctx term      goal =
     -- s ∈ tags
     -- ---------------------- Sym
     -- ctx |- &s : enum{tags}
-    (Sym s, Enu y) -> do
+    (Sym s, Enu y) -> do 
+      typ <- infer d span book ctx (Sym s)
       if s `elem` y
         then Done ()
-        else Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Enu y)) (normal book (Sym s))
+        else Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Enu y)) (normal book typ)
 
     -- s ∈ tags, s == s1, s1 == s2
     -- -------------------------------- Sym-Eql
@@ -761,13 +762,21 @@ check d span book ctx term      goal =
     -- -------------------------------------------------- EnuM
     -- ctx |- λ{cs;df} : ∀x:enum{syms}. R
     (EnuM cs df, All (force book -> Enu syms) rT) -> do
+
+      -- Check if symbols belong to  expected type
+      mapM_ (\(s, t) -> check d span book ctx (Sym s) (Enu syms)) cs      
+
       mapM_ (\(s, t) -> check d span book ctx t (App rT (Sym s))) cs
+
       let covered_syms = map fst cs
+      -- TODO: change default to maybe and check exhaustiveness here
       let all_covered = length covered_syms >= length syms
                      && all (`elem` syms) covered_syms
+
       if not all_covered
         then do
           case df of
+            -- if applying a variable to the lambda results in a ()
             (cut -> Lam k Nothing (unlam k d -> One)) -> do
               Fail $ IncompleteMatch span (normalCtx book ctx)
             otherwise -> do
