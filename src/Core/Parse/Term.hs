@@ -59,7 +59,6 @@ parseTermIni = choice
   , parseLstLit
   , parseNil
   , parseRfl
-  , parseEnu
   , parseSym
   , parseTupApp
   , parseView
@@ -272,25 +271,6 @@ parseAllSimple = do
 
 -- Enum Type Parsers
 -- -----------------
-
--- | Syntax: &{tag1, tag2, tag3}
-parseEnu :: Parser Term
-parseEnu = label "enum type" $ do
-  _ <- try $ do
-    _ <- symbol "enum"
-    _ <- symbol "{"
-    return ()
-  s <- sepBy parseSymbolName (symbol ",")
-  _ <- symbol "}"
-  return (Enu s)
-
--- | Syntax: &name
--- Helper for parsing enum tag names
-parseSymbolName :: Parser String
-parseSymbolName = do
-  _ <- symbol "&"
-  n <- some (satisfy isNameChar)
-  return n
 
 -- | Syntax: @tag | @tag{field1, field2} | &tag
 parseSym :: Parser Term

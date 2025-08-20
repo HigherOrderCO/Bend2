@@ -26,12 +26,6 @@ import Core.Show
 
 -- | Book parsing
 
--- | Syntax: def name : Type = term | type Name<T>(i) -> Type: cases | name : Type = term | try name : Type | assert A == B : T
-parseDefinition :: Parser (Name, Defn)
-parseDefinition = do
-  (name, defn) <- choice [ parseType , parseDef , parseTry , parseAssert ]
-  return $ (name, defn)
-
 -- | Syntax: def name : Type = term | def name(x: T1, y: T2) -> RetType: body
 parseDef :: Parser (Name, Defn)
 parseDef = do
@@ -99,18 +93,38 @@ parseImport = do
   alias <- name
   addImportMapping alias path
 
--- | Syntax: import statements followed by definitions
+-- | Syntax: import statements followed by type definitions, then other definitions
 parseBook :: Parser Book
 parseBook = do
   -- Parse all import statements first
   _ <- many (try parseImport)
-  -- Then parse definitions
-  defs <- many parseDefinition
+  -- Parse all type definitions first
+  typeDefLists <- many (try parseType)
+  let typeDefs = concat typeDefLists
+  -- Then parse other definitions (no more types allowed)
+  otherDefLists <- many parseNonTypeDefinition
+  let otherDefs = concat otherDefLists
+  let defs = typeDefs ++ otherDefs
   let names = map fst defs
   return $ Book (M.fromList defs) names
 
+-- | Parse definitions that are not type definitions
+parseNonTypeDefinition :: Parser [(Name, Defn)]
+parseNonTypeDefinition = do
+  defs <- choice 
+    [ tryTypeError
+    , fmap (:[]) parseDef 
+    , fmap (:[]) parseTry 
+    , fmap (:[]) parseAssert 
+    ]
+  return defs
+  where
+    tryTypeError = do
+      _ <- try (symbol "type")
+      fail "Type definitions must come before function definitions. Move all 'type' declarations to the top of the file."
+
 -- | Syntax: type Name<T, U>(i: Nat) -> Type: case @Tag1: field1: T1 case @Tag2: field2: T2
-parseType :: Parser (Name, Defn)
+parseType :: Parser [(Name, Defn)]
 parseType = label "datatype declaration" $ do
   _       <- symbol "type"
   tName   <- name
@@ -133,13 +147,19 @@ parseType = label "datatype declaration" $ do
       mkFields ((fn,ft):rest) = Sig ft (Lam fn (Just ft) (\_ -> mkFields rest))
       --   match ctr: case @Tag: …
       branches v = Pat [v] [] [([Sym (tName ++ "::" ++ tag)], mkFields flds) | (tag, flds) <- cases]
+      -- Create the enum definition separately
+      enumTerm = Enu prefixedTags
+      enumName = tName ++ "$cases"
+      enumDefn = (enumName, (False, enumTerm, Set))
       -- The body of the definition (see docstring).
       body0 = Sig (Enu prefixedTags) (Lam "ctr" (Just $ Enu prefixedTags) (\v -> branches v))
       -- Wrap the body with lambdas for the parameters.
       nest (n, ty) (tyAcc, bdAcc) = (All ty  (Lam n (Just ty) (\_ -> tyAcc)) , Lam n (Just ty) (\_ -> bdAcc))
       (fullTy, fullBody) = foldr nest (retTy, body0) args
       term = fullBody
-  return (tName, (True, term, fullTy))
+      mainDefn = (tName, (True, term, fullTy))
+  -- Return both the enum definition and the main type definition
+  return [enumDefn, mainDefn]
 
 -- | Syntax: case @Tag: field1: Type1 field2: Type2
 parseTypeCase :: Parser (String, [(Name, Term)])
