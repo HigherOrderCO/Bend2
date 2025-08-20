@@ -29,12 +29,17 @@ import Core.WHNF
 extend :: Ctx -> Name -> Term -> Term -> Ctx
 extend (Ctx ctx) k v t = Ctx (ctx ++ [(k, v, t)])
 
+-- | Get all type names that contain the given constructor
+getTypesWithCtor :: Book -> String -> [String]
+getTypesWithCtor book ctorName = 
+  [typeName | (typeName, ctors) <- M.toList (bookTypes book), ctorName `elem` ctors]
+
 -- Type Checker
 -- ------------
 
 -- Infer the type of a term
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
-infer d span book@(Book defs names) ctx term =
+infer d span book ctx term =
   -- trace ("- infer: " ++ show d ++ " " ++ show term) $
   case term of
 
@@ -201,13 +206,21 @@ infer d span book@(Book defs names) ctx term =
     -- ---------------------- Sym
     -- ctx |- &s : enum{...}
     Sym s -> do
-      let bookEnums = [ Enu tags | (k, (_, (Sig (Enu tags) _), Set)) <- M.toList defs ]
-      case find isEnuWithTag bookEnums of
-        Just t  -> Done t
-        Nothing -> Fail $ Undefined span (normalCtx book ctx) ("@" ++ s)
-        where
-          isEnuWithTag (Enu tags) = s `elem` tags
-          isEnuWithTag _ = False
+      let typesWithCtor = getTypesWithCtor book s
+      case typesWithCtor of
+        [] -> 
+          Fail $ Undefined span (normalCtx book ctx) ("@" ++ s)
+        [_singleType] -> do
+          -- Constructor is unique, proceed with current logic
+          let bookEnums = [ Enu tags | (k, (_, (Sig (Enu tags) _), Set)) <- M.toList (bookDefs book) ]
+          case find isEnuWithTag bookEnums of
+            Just t  -> Done t
+            Nothing -> Fail $ Undefined span (normalCtx book ctx) ("@" ++ s)
+            where
+              isEnuWithTag (Enu tags) = s `elem` tags
+              isEnuWithTag _ = False
+        multipleTypes -> 
+          Fail $ AmbiguousConstructor span (normalCtx book ctx) s multipleTypes
 
     -- Can't infer EnuM
     EnuM cs e -> do
@@ -761,6 +774,14 @@ check d span book ctx term      goal =
     -- -------------------------------------------------- EnuM
     -- ctx |- λ{cs;df} : ∀x:enum{syms}. R
     (EnuM cs df, All (force book -> Enu syms) rT) -> do
+      -- Check for ambiguous constructors in pattern
+      mapM_ (\(s, _) -> 
+        let typesWithCtor = getTypesWithCtor book s
+        in case typesWithCtor of
+             [] -> return () -- Will be caught as undefined later
+             [_] -> return () -- Unique, OK
+             multipleTypes -> Fail $ AmbiguousConstructor span (normalCtx book ctx) s multipleTypes
+        ) cs
       mapM_ (\(s, t) -> check d span book ctx t (App rT (Sym s))) cs
       let covered_syms = map fst cs
       let all_covered = length covered_syms >= length syms

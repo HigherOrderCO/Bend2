@@ -42,9 +42,9 @@ subterms d term = case term of
   _             -> []
 
 hasSelfRef :: Book -> S.Set String -> String -> Term -> Bool
-hasSelfRef book@(Book defs _) visited name (Ref n i)
+hasSelfRef book visited name (Ref n i)
   | name `elem` visited = True
-  | otherwise = any (\(nam, trm) -> hasSelfRef book (S.insert nam visited) name trm) [(nam,trm) | (nam,(_,trm,typ)) <- M.toList defs, nam `elem` visited]
+  | otherwise = any (\(nam, trm) -> hasSelfRef book (S.insert nam visited) name trm) [(nam,trm) | (nam,(_,trm,typ)) <- M.toList (bookDefs book), nam `elem` visited]
 hasSelfRef book visited name term = any (hasSelfRef book visited name) (subterms 0 term)
 
 countVar :: String -> Int -> Term -> Int

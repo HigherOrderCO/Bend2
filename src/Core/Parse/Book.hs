@@ -16,7 +16,6 @@ import Text.Megaparsec.Char
 import qualified Data.Map.Strict as M
 import qualified Text.Megaparsec.Char.Lexer as L
 
-import Debug.Trace
 
 import Core.Adjust.Adjust
 import Core.Parse.Parse
@@ -107,7 +106,14 @@ parseBook = do
   -- Then parse definitions
   defs <- many parseDefinition
   let names = map fst defs
-  return $ Book (M.fromList defs) names
+  -- Extract type constructors from parser state
+  st <- get
+  let typeConstructors = M.map (map fst) (adtArities st)  -- Convert (name, arity) to just names
+  return $ Book 
+    { bookDefs = M.fromList defs
+    , bookOrder = names
+    , bookTypes = typeConstructors
+    }
 
 -- | Syntax: type Name<T, U>(i: Nat) -> Type: case @Tag1: field1: T1 case @Tag2: field2: T2
 parseType :: Parser (Name, Defn)
@@ -119,7 +125,7 @@ parseType = label "datatype declaration" $ do
   args    <- return $ params ++ indices
   retTy   <- option Set (symbol "->" *> parseTerm)
   _       <- symbol ":"
-  cases   <- many parseTypeCase
+  cases   <- many (parseTypeCase tName)
   when (null cases) $ fail "datatype must have at least one constructor case"
   -- Register the ADT constructors in the parser state
   st <- get
@@ -140,16 +146,32 @@ parseType = label "datatype declaration" $ do
       term = fullBody
   return (tName, (True, term, fullTy))
 
--- | Syntax: case @Tag: field1: Type1 field2: Type2
-parseTypeCase :: Parser (String, [(Name, Term)])
-parseTypeCase = label "datatype constructor" $ do
+-- | Syntax: case @Tag: field1: Type1 field2: Type2 or case @Type::Tag: field1: Type1 field2: Type2
+parseTypeCase :: String -> Parser (String, [(Name, Term)])
+parseTypeCase typeName = label "datatype constructor" $ do
   _    <- symbol "case"
   _    <- symbol "@"
-  tag  <- some (satisfy isNameChar)
+  -- Parse constructor name, handling both @Tag and @Type::Tag syntax
+  constructorName <- parseConstructorName
   _    <- symbol ":"
   flds <- many parseField
-  return (tag, flds)
+  return (constructorName, flds)
   where
+    -- Parse constructor name, storing full prefixed name when prefix is used
+    parseConstructorName = do
+      firstPart <- some (satisfy isNameChar)
+      maybeSecondPart <- optional $ try $ do
+        _ <- string "::"
+        secondPart <- some (satisfy isNameChar)
+        return secondPart
+      case maybeSecondPart of
+        Nothing -> return firstPart  -- Plain @Tag
+        Just constructorPart -> do
+          -- Validate that the type prefix matches the current type being defined
+          when (firstPart /= typeName) $ 
+            fail $ "Type prefix '" ++ firstPart ++ "' does not match the type being defined '" ++ typeName ++ "'"
+          -- Store the full prefixed name to avoid ambiguity
+          return $ firstPart ++ "::" ++ constructorPart  -- @Type::Tag -> store as "Type::Tag"
     -- Parse a field declaration  name : Type
     parseField :: Parser (Name, Term)
     parseField = do

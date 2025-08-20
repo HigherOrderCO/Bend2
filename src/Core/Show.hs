@@ -396,7 +396,7 @@ instance Show Term where
   show = showTerm False
 
 instance Show Book where
-  show (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
+  show book = unlines [showDefn name ((bookDefs book) M.! name) | name <- bookOrder book]
     where showDefn k (_, x, t) = k ++ " : " ++ show t ++ " = " ++ showTerm True x
 
 instance Show Span where
@@ -412,6 +412,9 @@ instance Show Error where
     IncompleteMatch span ctx -> "\x1b[1mIncompleteMatch:\x1b[0m\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     UnknownTermination term  -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
     ImportError span msg     -> "\x1b[1mImportError:\x1b[0m " ++ msg ++ show span
+    AmbiguousConstructor span ctx name types -> 
+      "\x1b[1mAmbiguousConstructor:\x1b[0m Constructor '@" ++ name ++ "' is ambiguous. It appears in types: " ++ 
+      intercalate ", " types ++ ". Use a type prefix to disambiguate.\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
 
 instance Show Ctx where
   show (Ctx ctx) = case lines of

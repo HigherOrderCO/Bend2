@@ -320,10 +320,8 @@ parseSym = label "enum symbol / constructor" $ try $ do
           when (providedArity /= expectedArity) $
             fail $ "Constructor '" ++ fullName ++ "' expects " ++ show expectedArity ++ 
                    " field(s), but got " ++ show providedArity
-      -- Extract the actual constructor name (without type hint)
-      let ctorName = case break (== ':') fullName of
-                       (_, ':':':':actualCtor) -> actualCtor
-                       _ -> fullName
+      -- Use the full name (including prefix if present) for constructor creation
+      let ctorName = fullName
       return $ buildCtor ctorName f
     
     -- Parse constructor name with optional Type:: prefix
@@ -375,17 +373,35 @@ parseSym = label "enum symbol / constructor" $ try $ do
     parseOldSymbol = try $ do
       _ <- symbol "@"
       notFollowedBy (char '{')  -- make sure we are not @{...} or @tag{...}
-      n <- lexeme $ some (satisfy isNameChar)
+      -- Parse constructor name, handling both @Tag and @Type::Tag syntax
+      fullName <- parseOldSymbolName
+      -- Use the full name (including prefix if present) for symbol creation
+      let constructorName = fullName
       -- Check arity for bare constructor (should be 0)
       getArity <- getConstructorArity
-      case getArity n of
-        Nothing -> checkAmbiguousConstructor n
+      case getArity fullName of
+        Nothing -> checkAmbiguousConstructor fullName
         Just (_, expectedArity) ->
           when (expectedArity /= 0) $
-            fail $ "Constructor '" ++ n ++ "' expects " ++ show expectedArity ++ 
-                   " field(s), but got 0. Use @" ++ n ++ "{...} with " ++ show expectedArity ++ " field(s)."
-      -- Desugar @Foo to (&Foo,())
-      return $ Tup (Sym n) One
+            fail $ "Constructor '" ++ fullName ++ "' expects " ++ show expectedArity ++ 
+                   " field(s), but got 0. Use @" ++ fullName ++ "{...} with " ++ show expectedArity ++ " field(s)."
+      -- Desugar @Foo or @Type::Foo to (&Foo,())
+      return $ Tup (Sym constructorName) One
+    
+    parseOldSymbolName = lexeme $ do
+      firstPart <- some (satisfy isNameChar)
+      maybeSecondPart <- optional $ try $ do
+        _ <- string "::"
+        secondPart <- some (satisfy isNameChar)
+        return secondPart
+      case maybeSecondPart of
+        Nothing -> return firstPart  -- Plain @Tag
+        Just constructorPart -> return (firstPart ++ "::" ++ constructorPart)  -- @Type::Tag
+    
+    extractConstructorName fullName =
+      case break (== ':') fullName of
+        (_, ':':':':constructorPart) -> constructorPart  -- Type::Constructor -> Constructor
+        _ -> fullName  -- Plain constructor
     
     buildCtor :: String -> [Term] -> Term
     buildCtor tag fs =
@@ -1196,7 +1212,7 @@ doParseTerm :: FilePath -> String -> Either String Term
 doParseTerm file input =
   case evalState (runParserT p file input) (ParserState True input [] M.empty 0 M.empty) of
     Left err  -> Left (formatError input err)
-    Right res -> Right (adjust (Book M.empty []) res)
+    Right res -> Right (adjust (Book M.empty [] M.empty) res)
   where
     p = do
       skip

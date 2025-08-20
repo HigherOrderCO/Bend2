@@ -552,8 +552,8 @@ prelude = unlines [
 
 -- Compile book to JavaScript
 compile :: Book -> String
-compile (Book defs names) =
-  let ctDefs = map (\(name, (_, term, _)) -> (name, termToCT (Book defs names) term 0)) (M.toList defs)
+compile book =
+  let ctDefs = map (\(name, (_, term, _)) -> (name, termToCT book term 0)) (M.toList (bookDefs book))
       ctBook = M.fromList ctDefs
       jsFns = concatMap (generateJS ctBook) ctDefs
   in prelude ++ jsFns

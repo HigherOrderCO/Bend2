@@ -34,8 +34,8 @@ import qualified Target.HVM as HVM
 
 -- Type-check all definitions in a book
 checkBook :: Book -> IO Book
-checkBook book@(Book defs names) = do
-  let orderedDefs = [(name, fromJust (M.lookup name defs)) | name <- names]
+checkBook book = do
+  let orderedDefs = [(name, fromJust (M.lookup name (bookDefs book))) | name <- bookOrder book]
   success <- checkAll book orderedDefs
   unless success exitFailure
   return book
@@ -146,18 +146,18 @@ listDependencies file = do
 getGenDeps :: FilePath -> IO ()
 getGenDeps file = do
   book <- parseFile file
-  let bookAdj@(Book defs names) = adjustBook book
+  let bookAdj = adjustBook book
   
   -- Find all definitions that are `try` definitions (i.e., contain a Met)
-  let tryDefs = M.filter (\(_, term, _) -> hasMet term) defs
+  let tryDefs = M.filter (\(_, term, _) -> hasMet term) (bookDefs bookAdj)
   let tryNames = M.keysSet tryDefs
 
   -- Find all reverse dependencies (examples)
-  let allDefs = M.toList defs
+  let allDefs = M.toList (bookDefs bookAdj)
   let reverseDeps = S.fromList [ name | (name, (_, term, typ)) <- allDefs, not (name `S.member` tryNames), not (S.null (S.intersection tryNames (S.union (getDeps term) (getDeps typ)))) ]
 
   -- Get all dependencies of the `try` definitions and the reverse dependencies
-  let targetDefs = M.filterWithKey (\k _ -> k `S.member` tryNames || k `S.member` reverseDeps) defs
+  let targetDefs = M.filterWithKey (\k _ -> k `S.member` tryNames || k `S.member` reverseDeps) (bookDefs bookAdj)
   let allDeps = S.unions $ map (\(_, term, typ) -> S.union (getDeps term) (getDeps typ)) (M.elems targetDefs)
 
   -- Also include the names of the try defs and reverse deps themselves
@@ -165,16 +165,16 @@ getGenDeps file = do
   let finalDepNames = S.union allNames allDeps
 
   -- Filter the book to get the definitions we want to print
-  let finalDefs = M.filterWithKey (\k _ -> k `S.member` finalDepNames) defs
-  let finalNames = filter (`S.member` finalDepNames) names
+  let finalDefs = M.filterWithKey (\k _ -> k `S.member` finalDepNames) (bookDefs bookAdj)
+  let finalNames = filter (`S.member` finalDepNames) (bookOrder bookAdj)
   
   -- Print the resulting book
-  print $ Book finalDefs finalNames
+  print $ Book finalDefs finalNames M.empty
 
 -- | Collect all refs from a Book
 collectAllRefs :: Book -> S.Set Name
-collectAllRefs (Book defs _) = 
-  S.unions $ map collectRefsFromDefn (M.elems defs)
+collectAllRefs book = 
+  S.unions $ map collectRefsFromDefn (M.elems (bookDefs book))
   where
     collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)
 

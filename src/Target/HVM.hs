@@ -15,12 +15,12 @@ import qualified Data.Set as S
 import qualified HVM.Type as HVM
 
 compile :: Book -> String
-compile book@(Book defs _) =
+compile book =
   -- TODO: Error handling
-  if M.notMember "main" defs then
+  if M.notMember "main" (bookDefs book) then
     error "No main function found"
   else
-    let ds      = map (compileDef book) (M.toList defs)
+    let ds      = map (compileDef book) (M.toList (bookDefs book))
         (ts,fs) = partitionEithers ds
         main    = "@main = " ++ showHVM 1 (termToHVM book (Ref "main" 1)) ++ "\n\n"
     in prelude ++ main ++ unlines ts ++ unlines fs
