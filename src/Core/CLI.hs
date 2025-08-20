@@ -21,7 +21,7 @@ import System.IO (hPutStrLn, stderr)
 
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Bind
-import Core.Check
+import Core.BigCheck
 import Core.Deps
 import Core.Import (autoImport)
 import Core.Parse.Book (doParseBook)

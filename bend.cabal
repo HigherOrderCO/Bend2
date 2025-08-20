@@ -27,6 +27,7 @@ library
                       Core.Bind,
                       Core.CLI,
                       Core.Check,
+                      Core.BigCheck,
                       Core.Deps,
                       Core.Equal,
                       Core.Adjust.ReduceEtas,
