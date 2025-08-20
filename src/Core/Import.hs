@@ -2,102 +2,123 @@
 
 module Core.Import (autoImport) where
 
-import Control.Monad (foldM)
 import Data.List (intercalate)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import System.Directory (doesFileExist, getCurrentDirectory)
-import System.FilePath (takeDirectory, (</>))
+import System.Directory (doesFileExist, doesDirectoryExist)
 import System.Exit (exitFailure)
+import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 
 import Core.Type
 import Core.Deps
 import Core.Parse.Book (doParseBook)
 
--- Auto-import unbound references in a Book
+-- Public API
+
 autoImport :: FilePath -> Book -> IO Book
-autoImport _ book = do
-  let deps = getBookDeps book
-  result <- importDependencies book deps S.empty
+autoImport _root book = do
+  result <- importAll book
   case result of
     Left err -> do
       hPutStrLn stderr $ "Error: " ++ err
       exitFailure
-    Right book' -> return book'
+    Right b -> pure b
 
--- Import dependencies with cycle detection
-importDependencies :: Book -> S.Set Name -> S.Set FilePath -> IO (Either String Book)
-importDependencies book refs visited
-  | S.null refs = return (Right book)
-  | otherwise = do
-      result <- foldM (importSingleDep visited) (Right (book, S.empty)) (S.toList refs)
-      case result of
-        Left err -> return (Left err)
-        Right (book', newRefs) ->
-          if S.null newRefs
-            then return (Right book')
-            else importDependencies book' newRefs visited
+-- Internal
 
--- Import a single dependency
-importSingleDep :: S.Set FilePath -> Either String (Book, S.Set Name) -> Name -> IO (Either String (Book, S.Set Name))
-importSingleDep _ (Left err) _ = return (Left err)
-importSingleDep visited (Right (book@(Book defs _), newRefs)) refName
-  | M.member refName defs = return (Right (book, newRefs))
-  | otherwise = do
-      maybeResult <- tryImportPaths refName visited
-      case maybeResult of
-        Nothing -> handleMissingImport refName book newRefs
-        Just (path, content) -> processImportedFile path content visited book newRefs
+data ImportState = ImportState
+  { stVisited :: S.Set FilePath   -- files already parsed (cycle/dup prevention)
+  , stLoaded  :: S.Set Name       -- names we consider resolved/loaded
+  , stBook    :: Book             -- accumulated book
+  }
 
--- Try different file paths for import
-tryImportPaths :: Name -> S.Set FilePath -> IO (Maybe (FilePath, String))
-tryImportPaths refName visited = do
-  let paths = generateImportPaths refName
-  tryPaths paths visited
-  where
-    tryPaths [] _ = return Nothing
-    tryPaths (path:rest) vis
-      | path `S.member` vis = tryPaths rest vis
-      | otherwise = do
-          exists <- doesFileExist path
-          if exists
-            then Just . (path,) <$> readFile path
-            else tryPaths rest vis
+importAll :: Book -> IO (Either String Book)
+importAll base = do
+  let initial = ImportState
+        { stVisited = S.empty
+        , stLoaded  = bookNames base
+        , stBook    = base
+        }
+      pending0 = getBookDeps base
+  res <- importLoop initial pending0
+  pure $ fmap stBook res
 
--- Generate possible import paths
-generateImportPaths :: Name -> [FilePath]
-generateImportPaths name =
-  [ name ++ ".bend"
-  , name </> "_.bend"
-  ]
+importLoop :: ImportState -> S.Set Name -> IO (Either String ImportState)
+importLoop st pending =
+  case S.minView pending of
+    Nothing -> pure (Right st)
+    Just (ref, rest)
+      | ref `S.member` stLoaded st -> importLoop st rest
+      | otherwise -> do
+          r <- loadRef st ref
+          case r of
+            Left err   -> pure (Left err)
+            Right st'  ->
+              -- Recompute deps on the combined book, keep processing
+              let deps' = getBookDeps (stBook st')
+                  next  = S.union rest deps'
+              in importLoop st' next
 
--- Process an imported file
-processImportedFile :: FilePath -> String -> S.Set FilePath -> Book -> S.Set Name -> IO (Either String (Book, S.Set Name))
-processImportedFile path content visited book newRefs = do
-  case doParseBook path content of
-    Left err -> return $ Left $ "Failed to parse " ++ path ++ ": " ++ err
-    Right importedBook -> do
-      let visited' = S.insert path visited
-      importResult <- importDependencies importedBook (getBookDeps importedBook) visited'
-      case importResult of
-        Left err -> return (Left err)
-        Right importedBook' -> do
-          let mergedBook = mergeBooks book importedBook'
-          let additionalRefs = getBookDeps importedBook'
-          return (Right (mergedBook, S.union newRefs additionalRefs))
+loadRef :: ImportState -> Name -> IO (Either String ImportState)
+loadRef st refName = do
+  candidates <- generateImportPaths refName
+  let visitedHit = any (`S.member` stVisited st) candidates
+  if visitedHit
+    then
+      -- Already visited one of the candidate files earlier (cycle/dup); consider it loaded.
+      pure $ Right st { stLoaded = S.insert refName (stLoaded st) }
+    else do
+      mFound <- firstExisting candidates
+      case mFound of
+        Just path -> do
+          content <- readFile path
+          case doParseBook path content of
+            Left perr -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ perr
+            Right imported -> do
+              let visited' = S.insert path (stVisited st)
+                  merged   = mergeBooks (stBook st) imported
+                  loaded'  = S.union (stLoaded st) (bookNames imported)
+              pure $ Right st { stVisited = visited', stLoaded = loaded', stBook = merged }
+        Nothing -> do
+          isDir <- doesDirectoryExist refName
+          if isDir
+            then
+              pure $ Left $ unlines
+                [ "Import error:"
+                , "  Found directory for '" ++ refName ++ "', but expected module file was not found."
+                , "  Missing file: " ++ (refName </> "_.bend")
+                ]
+            else
+              if hasSlash refName
+                then
+                  let tried = intercalate ", " candidates
+                  in pure $ Left $ "Import error: Could not find file for '" ++ refName ++ "'. Tried: " ++ tried
+                else
+                  -- Non-hierarchical names may be provided by the environment; skip without error.
+                  pure $ Right st { stLoaded = S.insert refName (stLoaded st) }
 
--- Handle missing imports
-handleMissingImport :: Name -> Book -> S.Set Name -> IO (Either String (Book, S.Set Name))
-handleMissingImport refName book newRefs
-  | '/' `elem` refName = do
-      let paths = generateImportPaths refName
-      return $ Left $
-        "Import error: Could not find file for '" ++ refName ++ "'. " ++
-        "Tried: " ++ intercalate ", " paths
-  | otherwise = return $ Right (book, newRefs)
+firstExisting :: [FilePath] -> IO (Maybe FilePath)
+firstExisting [] = pure Nothing
+firstExisting (p:ps) = do
+  ok <- doesFileExist p
+  if ok then pure (Just p) else firstExisting ps
 
--- Merge two books, preferring definitions from the first book
+-- Prefer Foo/Bar/_.bend if Foo/Bar/ is a directory; otherwise Foo/Bar.bend
+generateImportPaths :: Name -> IO [FilePath]
+generateImportPaths name = do
+  isDir <- doesDirectoryExist name
+  pure [ if isDir then name </> "_.bend" else name ++ ".bend" ]
+
+hasSlash :: String -> Bool
+hasSlash = any (== '/')
+
+bookNames :: Book -> S.Set Name
+bookNames (Book defs _) = S.fromList (M.keys defs)
+
 mergeBooks :: Book -> Book -> Book
-mergeBooks (Book defs1 names1) (Book defs2 names2) = 
+mergeBooks (Book defs1 names1) (Book defs2 names2) =
   Book (M.union defs1 defs2) (names1 ++ filter (`notElem` names1) names2)
+
+
+

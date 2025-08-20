@@ -435,6 +435,7 @@ showHVM lv tm =
     go (HVM.Lam x f)       = "λ" ++ x ++ " " ++ showHVM lv f
     go (HVM.App f x)       = "(" ++ showHVM lv f ++ " " ++ showHVM lv x ++ ")"
     go (HVM.Sup l a b)     = "&" ++ show l ++ "{" ++ showHVM lv a ++ " " ++ showHVM lv b ++ "}"
+    go (HVM.Dup 0 x y v f) = "!&0{&" ++ x ++ " &" ++ y ++ "} = " ++ showHVM lv v ++ "\n" ++ indent lv ++ showHVM lv f
     go (HVM.Dup l x y v f) = "!&" ++ show l ++ "{" ++ x ++ " " ++ y ++ "} = " ++ showHVM lv v ++ "\n" ++ indent lv ++ showHVM lv f
     go (HVM.Ctr k [])      = k
     go (HVM.Ctr k xs)      = k ++ "{" ++ unwords (map (showHVM lv) xs) ++ "}"
