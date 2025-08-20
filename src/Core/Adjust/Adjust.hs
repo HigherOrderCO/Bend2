@@ -84,7 +84,10 @@ import Core.WHNF
 -- book adjustment where recursive references aren't available yet.
 adjust :: Book -> Term -> Term
 adjust book term =
-  trace ("nfrk: " ++ show nfrk) $
+  -- trace ("term: " ++ show term) $
+  -- trace ("flat: " ++ show flat) $
+  -- trace ("npat: " ++ show npat) $
+  -- trace ("nfrk: " ++ show nfrk) $
   trace ("done: " ++ show done) $
   done
   where

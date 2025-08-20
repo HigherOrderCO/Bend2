@@ -260,14 +260,93 @@ infer d span book@(Book defs names) ctx term =
     -- ctx |- x : A
     -- ------------------ App
     -- ctx |- f(x) : B(x)
+    -- App (cut -> UniM b) x -> do
+    --   check d span book ctx x Uni
+    --   bT <- infer d span book ctx b
+    --   Done bT
+    -- App (cut -> BitM f t) x -> do
+    --   check d span book ctx x Bit
+    --   fT <- infer d span book ctx f
+    --   tT <- infer d span book ctx t
+    --   if equal d book fT tT
+    --   then Done $ fT
+    --   else Done $ App (BitM fT tT) x
+    -- App (cut -> NatM z (cut -> Lam k mt b)) x -> do
+    --   check d span book ctx x Nat
+    --   zT <- infer d span book ctx z
+    --   sT <- infer (d+1) span book (extend ctx k (Var k d) Nat) (b (Var k d))
+    --   if equal d book sT zT
+    --   then Done $ zT
+    --   else Done $ App (NatM zT (Lam k (Just Nat) (\v -> bindVarByIndex d v sT))) x
+    -- App (cut -> LstM n (cut -> Lam h mth bh)) x -> do
+    --   xT <- infer d span book ctx x
+    --   case cut xT of
+    --     Lst hT -> do
+    --       nT <- infer d span book ctx n
+    --       case cut (bh (Var h d)) of
+    --         Lam t mtt bt -> do
+    --           cT <- infer (d+2) span book (extend (extend ctx h (Var h d) hT) t (Var t (d+1)) (Lst hT)) (bt (Var t (d+1)))
+    --           if equal d book nT cT
+    --           then Done nT
+    --           else Done $ App (LstM nT (Lam h (Just hT) (\v -> bindVarByIndex d v (Lam t (Just (Lst hT)) (\v2 -> bindVarByIndex (d+1) v2 cT))))) x
+    --         _            -> Done $ Set
+    --     hT      -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> Var "_" 0))))
+    --                                                              (normal book (All hT                (Lam "_" Nothing (\_ -> Var "_" 0))))
+  -- -- Enum
+  --   App f x -> do
+  --     fT <- infer d span book ctx f
+  --     case force book fT of
+  --       All fA fB -> do
+  --         check d span book ctx x fA
+  --         Done (App fB x)
+  --       _ -> do
+  --         Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book fT)
+
     App f x -> do
-      fT <- infer d span book ctx f
-      case force book fT of
-        All fA fB -> do
-          check d span book ctx x fA
-          Done (App fB x)
-        _ -> do
-          Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book fT)
+      case cut f of
+        UniM b -> do
+          check d span book ctx x Uni
+          bT <- infer d span book ctx b
+          Done bT
+        BitM f t -> do
+          check d span book ctx x Bit
+          fT <- infer d span book ctx f
+          tT <- infer d span book ctx t
+          if equal d book fT tT
+          then Done $ fT
+          else Done $ App (BitM fT tT) x
+        NatM z (cut -> Lam k mt b) -> do
+          check d span book ctx x Nat
+          zT <- infer d span book ctx z
+          sT <- infer (d+1) span book (extend ctx k (Var k d) Nat) (b (Var k d))
+          if equal d book sT zT
+          then Done $ zT
+          else Done $ App (NatM zT (Lam k (Just Nat) (\v -> bindVarByIndex d v sT))) x
+        LstM n c -> do
+          xT <- infer d span book ctx x
+          case cut xT of
+            Lst hT -> do
+              nT <- infer d span book ctx n
+              case cut c of
+                Lam h mth bh -> do
+                  let body_h = (bh (Var h d))
+                  case cut body_h of
+                    Lam t mtt bt -> do
+                      cT <- infer (d+2) span book (extend (extend ctx h (Var h d) hT) t (Var t (d+1)) (Lst hT)) (bt (Var t (d+1)))
+                      if equal d book nT cT
+                      then Done nT
+                      else Done $ App (LstM nT (Lam h (Just hT) (\v -> bindVarByIndex d v (Lam t (Just (Lst hT)) (\v2 -> bindVarByIndex (d+1) v2 cT))))) x
+                    _ -> Fail $ CantInfer (getSpan span body_h) (normalCtx book ctx)
+                _ -> Fail $ CantInfer (getSpan span c) (normalCtx book ctx)
+            hT -> Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book hT)
+        f -> do
+          fT <- infer d span book ctx f
+          case force book fT of
+            All fA fB -> do
+              check d span book ctx x fA
+              Done (App fB x)
+            _ -> do
+              Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book fT)
 
     -- ctx |- t : Set
     -- ctx |- a : t
@@ -987,12 +1066,17 @@ check d span book ctx term      goal =
     (App (SupM l f) x, _) -> do
       xT <- infer d span book ctx x
       check d span book ctx f (All xT (Lam "_" Nothing (\_ -> All xT (Lam "_" Nothing (\_ -> goal)))))
+    
+
+    (App (EmpM) x, _) -> do
+      check d span book ctx x Emp
 
     -- Default case: try to infer and verify
     (term, _) -> do
       let (fn, xs) = collectApps term []
       if isLam fn then do
-        Fail $ Unsupported span (normalCtx book ctx)
+        verify d span book ctx term goal
+        -- Fail $ Unsupported span (normalCtx book ctx)
       else do
         verify d span book ctx term goal
 
@@ -1000,8 +1084,13 @@ check d span book ctx term      goal =
 verify :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result ()
 verify d span book ctx term goal = do
   t <- infer d span book ctx term
-  -- if trace ("-verify: " ++ show term ++ " :: " ++ show goal) $ equal d book t goal
-  if equal d book t goal
+  if
+    trace ("-verify: " ++ show term ++ " :: " ++ show goal ++ " ::?:: " ++ show t) $
+    equal d book t goal
     then Done ()
     else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book t)
 
+
+getSpan :: Span -> Term -> Span
+getSpan span (Loc l _) = l
+getSpan span _         = span
