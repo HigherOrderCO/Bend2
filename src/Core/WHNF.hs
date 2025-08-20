@@ -142,12 +142,12 @@ whnfSigM book x f =
     x'      -> App (SigM f) x'
 
 -- Normalizes an enum match
-whnfEnuM :: Book -> Term -> [(String,Term)] -> Term -> Term
+whnfEnuM :: Book -> Term -> [(String,Term)] -> Maybe Term -> Term
 whnfEnuM book x c f =
   case whnf book x of
     Sym s -> case lookup s c of
       Just t  -> whnf book t
-      Nothing -> whnf book (App f (Sym s))
+      Nothing -> maybe (App (EnuM c f) x) (\v -> whnf book (App v (Sym s))) f
     x' -> App (EnuM c f) x'
 
 -- Normalizes a superposition match
@@ -433,7 +433,7 @@ normal book term =
     LstM n c    -> LstM (normal book n) (normal book c)
     Enu s       -> Enu s
     Sym s       -> Sym s
-    EnuM c e    -> EnuM (map (\(s, t) -> (s, normal book t)) c) (normal book e)
+    EnuM c e    -> EnuM (map (\(s, t) -> (s, normal book t)) c) (fmap (normal book) e)
     Sig a b     -> Sig (normal book a) (normal book b)
     Tup a b     -> Tup (normal book a) (normal book b)
     SigM f      -> SigM (normal book f)

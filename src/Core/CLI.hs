@@ -197,7 +197,7 @@ hasMet term = case term of
   Lst t       -> hasMet t
   Con h t     -> hasMet h || hasMet t
   LstM n c    -> hasMet n || hasMet c
-  EnuM cs e   -> any (hasMet . snd) cs || hasMet e
+  EnuM cs e   -> any (hasMet . snd) cs || maybe True hasMet e
   Op2 _ a b   -> hasMet a || hasMet b
   Op1 _ a     -> hasMet a
   Sig a b     -> hasMet a || hasMet b

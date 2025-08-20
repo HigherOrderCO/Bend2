@@ -19,7 +19,7 @@ freeVars ctx tm = case tm of
   Lst t       -> freeVars ctx t
   Con h t     -> S.union (freeVars ctx h) (freeVars ctx t)
   LstM n c    -> S.union (freeVars ctx n) (freeVars ctx c)
-  EnuM c e    -> S.union (S.unions (map (freeVars ctx . snd) c)) (freeVars ctx e)
+  EnuM c e    -> S.union (S.unions (map (freeVars ctx . snd) c)) (foldMap (freeVars ctx) e)
   Op2 _ a b   -> S.union (freeVars ctx a) (freeVars ctx b)
   Op1 _ a     -> freeVars ctx a
   Sig a b     -> S.union (freeVars ctx a) (freeVars ctx b)

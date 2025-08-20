@@ -83,7 +83,7 @@ flattenPats d span book term       = case term of
   (LstM n c)    -> LstM (flattenPats d span book n) (flattenPats d span book c)
   (Enu s)       -> Enu s
   (Sym s)       -> Sym s
-  (EnuM c e)    -> EnuM [(s, flattenPats d span book t) | (s, t) <- c] (flattenPats d span book e)
+  (EnuM c e)    -> EnuM [(s, flattenPats d span book t) | (s, t) <- c] (fmap (flattenPats d span book) e)
   (Sig a b)     -> Sig (flattenPats d span book a) (flattenPats d span book b)
   (Tup a b)     -> Tup (flattenPats d span book a) (flattenPats d span book b)
   (SigM f)      -> SigM (flattenPats d span book f)

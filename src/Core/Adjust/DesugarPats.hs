@@ -40,7 +40,7 @@ desugarPats d span (Con h t)       = Con (desugarPats d span h) (desugarPats d s
 desugarPats d span (LstM n c)      = LstM (desugarPats d span n) (desugarPats d span c)
 desugarPats d span (Enu s)         = Enu s
 desugarPats d span (Sym s)         = Sym s
-desugarPats d span (EnuM c e)      = EnuM [(s, desugarPats d span t) | (s, t) <- c] (desugarPats d span e)
+desugarPats d span (EnuM c e)      = EnuM [(s, desugarPats d span t) | (s, t) <- c] (fmap (desugarPats d span) e)
 desugarPats d span (Sig a b)       = Sig (desugarPats d span a) (desugarPats d span b)
 desugarPats d span (Tup a b)       = Tup (desugarPats d span a) (desugarPats d span b)
 desugarPats d span (SigM f)        = SigM (desugarPats d span f)
@@ -177,13 +177,15 @@ match d span x ms cs@(([(cut -> Sym _)], _) : _) =
   let (cBranches, defBranch) = collect cs
   in apps d (map snd ms) $ App (EnuM cBranches defBranch) x
   where
-    collect :: [Case] -> ([(String, Term)], Term)
-    collect [] = ([], Lam "_" Nothing $ \_ -> lam d (map fst ms) $ One)
+    collect :: [Case] -> ([(String, Term)], Maybe Term)
+    collect [] = ([], Nothing)  -- TODO: verify this function with Maybe Term for default
     collect (([(cut -> Sym s)], rhs) : rest) =
       let (cs, def) = collect rest
       in ((s, lam d (map fst ms) $ desugarPats d span rhs) : cs, def)
     collect (([(cut -> Var k _)], rhs) : _) =
-      ([], Lam k Nothing $ \_ -> lam d (map fst ms) $ desugarPats (d+1) span rhs)
+      case cut rhs of
+        (Pat ss  ms [])  -> ([], Nothing)
+        rhs              -> ([], Just $ Lam k Nothing $ \_ -> lam d (map fst ms) $ desugarPats (d+1) span rhs)
     collect (c:_) = errorWithSpan span "Invalid pattern: invalid Sym case"
 
 -- match x { &L{a,b}: s }

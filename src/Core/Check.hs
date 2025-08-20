@@ -749,12 +749,14 @@ check d span book ctx term      goal =
     -- ----------------------------------------------- EnuM-Eql
     -- ctx |- λ{cs;df} : ∀p:enum{syms}{&s1==&s2}. R(p)
     (EnuM cs df, All (force book -> Eql (force book -> Enu syms) (force book -> Sym s1) (force book -> Sym s2)) rT) -> do
+    -- λ{cs;df} :: enum{from_cs}{s1 == s2} -> rT
       if s1 == s2
         then case lookup s1 cs of
           Just t -> do
             check d span book ctx t (App rT Rfl)
-          Nothing -> do
-            check d span book ctx df (All (Enu syms) (Lam "_" Nothing (\v -> App rT v)))
+          Nothing -> case df of
+            Just df' -> check d span book ctx df' (All (Enu syms) (Lam "_" Nothing (\v -> App rT v)))
+            Nothing  -> Fail $ IncompleteMatch span (normalCtx book ctx) -- TODO: CHECK THIS CLAUSE
         else Done ()
 
     -- ∀(s,t) ∈ cs. ctx |- t : R(&s)
@@ -777,12 +779,13 @@ check d span book ctx term      goal =
         then do
           case df of
             -- if applying a variable to the lambda results in a ()
-            (cut -> Lam k Nothing (unlam k d -> One)) -> do
+            -- (cut -> Lam k Nothing (unlam k d -> One)) -> do
+            Nothing  -> do
               Fail $ IncompleteMatch span (normalCtx book ctx)
-            otherwise -> do
+            Just df' -> do
               let enu_type = Enu syms
               let lam_goal = All enu_type (Lam "_" Nothing (\v -> App rT v))
-              check d span book ctx df lam_goal
+              check d span book ctx df' lam_goal
         else return ()
 
     -- Type mismatch for EnuM

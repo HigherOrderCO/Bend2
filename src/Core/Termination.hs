@@ -35,7 +35,7 @@ subterms d term = case term of
   UniM f        -> [f]
   LstM n c      -> [n, c]
   SigM f        -> [f]
-  EnuM bs d     -> map snd bs ++ [d]
+  EnuM bs d     -> map snd bs ++ foldMap (:[]) d
   SupM l f      -> [l, f]
   Log s x       -> [s, x]
   Pat ms mv cs  -> ms ++ map snd mv ++ concatMap (\(as, b) -> as ++ [b]) cs

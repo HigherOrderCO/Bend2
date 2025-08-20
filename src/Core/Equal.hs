@@ -75,7 +75,10 @@ cmp red d book a b =
     (LstM na ca     , LstM nb cb     ) -> eql red d book na nb && eql red d book ca cb
     (Enu sa         , Enu sb         ) -> sa == sb
     (Sym sa         , Sym sb         ) -> sa == sb
-    (EnuM ca da     , EnuM cb db     ) -> length ca == length cb && all (\ ((s1,t1), (s2,t2)) -> s1 == s2 && eql red d book t1 t2) (zip ca cb) && eql red d book da db
+    (EnuM ca da     , EnuM cb db     ) -> length ca == length cb && all (\ ((s1,t1), (s2,t2)) -> s1 == s2 && eql red d book t1 t2) (zip ca cb) && case (da,db) of
+      (Nothing, Nothing)   -> True
+      (Just dat, Just dbt) -> eql red d book dat dbt
+      _                    -> False
     (Sig aa ba      , Sig ab bb      ) -> eql red d book aa ab && eql red d book ba bb
     (Tup aa ba      , Tup ab bb      ) -> eql red d book aa ab && eql red d book ba bb
     (SigM fa        , SigM fb        ) -> eql red d book fa fb

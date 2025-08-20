@@ -753,8 +753,9 @@ check d span book ctx term      goal =
         then case lookup s1 cs of
           Just t -> do
             check d span book ctx t (App rT Rfl)
-          Nothing -> do
-            check d span book ctx df (All (Enu syms) (Lam "_" Nothing (\v -> App rT v)))
+          Nothing -> case df of
+            Just df' -> check d span book ctx df' (All (Enu syms) (Lam "_" Nothing (\v -> App rT v)))
+            Nothing  -> Fail $ IncompleteMatch span (normalCtx book ctx) -- TODO: CHECK THIS CLAUSE
         else Done ()
 
     -- ∀(s,t) ∈ cs. ctx |- t : R(&s)
@@ -769,12 +770,13 @@ check d span book ctx term      goal =
       if not all_covered
         then do
           case df of
-            (cut -> Lam k Nothing (unlam k d -> One)) -> do
+            -- (cut -> Lam k Nothing (unlam k d -> One)) -> do
+            Nothing  -> do -- TODO: check this rule
               Fail $ IncompleteMatch span (normalCtx book ctx)
-            otherwise -> do
+            Just df' -> do
               let enu_type = Enu syms
               let lam_goal = All enu_type (Lam "_" Nothing (\v -> App rT v))
-              check d span book ctx df lam_goal
+              check d span book ctx df' lam_goal
         else return ()
 
     -- Type mismatch for EnuM

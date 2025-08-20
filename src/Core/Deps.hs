@@ -47,7 +47,7 @@ collectDeps bound term = case term of
   LstM n c    -> S.union (collectDeps bound n) (collectDeps bound c)
   Enu _       -> S.empty
   Sym _       -> S.empty
-  EnuM cs d   -> S.union (S.unions (map (collectDeps bound . snd) cs)) (collectDeps bound d)
+  EnuM cs d   -> S.union (S.unions (map (collectDeps bound . snd) cs)) (foldMap (collectDeps bound) d)
   Num _       -> S.empty
   Val _       -> S.empty
   Op2 _ a b   -> S.union (collectDeps bound a) (collectDeps bound b)

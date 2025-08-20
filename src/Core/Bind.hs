@@ -43,7 +43,7 @@ binder lv term ctx vars = case term of
   LstM n c    -> LstM (binder lv n ctx vars) (binder lv c ctx vars)
   Enu s       -> Enu s
   Sym s       -> Sym s
-  EnuM c e    -> EnuM (map (\(s, t) -> (s, binder lv t ctx vars)) c) (binder lv e ctx vars)
+  EnuM c e    -> EnuM (map (\(s, t) -> (s, binder lv t ctx vars)) c) (fmap (\x -> binder lv x ctx vars) e)
   Sig a b     -> Sig (binder lv a ctx vars) (binder lv b ctx vars)
   Tup a b     -> Tup (binder lv a ctx vars) (binder lv b ctx vars)
   SigM f      -> SigM (binder lv f ctx vars)
@@ -108,7 +108,7 @@ bindVar match val term = go term where
     LstM n c    -> LstM (go n) (go c)
     Enu s       -> Enu s
     Sym s       -> Sym s
-    EnuM c e    -> EnuM [(s, go t) | (s, t) <- c] (go e)
+    EnuM c e    -> EnuM [(s, go t) | (s, t) <- c] (fmap go e)
     Sig a b     -> Sig (go a) (go b)
     Tup a b     -> Tup (go a) (go b)
     SigM f      -> SigM (go f)

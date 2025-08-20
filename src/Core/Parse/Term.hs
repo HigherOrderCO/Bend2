@@ -1013,7 +1013,7 @@ parseLamMatch = label "lambda match" $ do
         t <- parseTerm
         _ <- parseSemi
         return (s, t)
-      def <- option One $ try $ do
+      def <- optional $ try $ do
         notFollowedBy (symbol "}")
         notFollowedBy (symbol "@")
         notFollowedBy (symbol "&")
@@ -1151,7 +1151,7 @@ parseEnuMCases scrut = do
     t <- parseTerm
     _ <- parseSemi
     return (s, t)
-  def <- option One $ try $ do
+  def <- optional $ try $ do
     notFollowedBy (symbol "}")
     notFollowedBy (symbol "@")
     notFollowedBy (symbol "&")
