@@ -320,8 +320,11 @@ parseSym = label "enum symbol / constructor" $ try $ do
           when (providedArity /= expectedArity) $
             fail $ "Constructor '" ++ fullName ++ "' expects " ++ show expectedArity ++ 
                    " field(s), but got " ++ show providedArity
-      -- Use the prefixed constructor name directly
-      return $ buildCtor fullName f
+      -- Extract the actual constructor name (without type hint)
+      let ctorName = case break (== ':') fullName of
+                       (_, ':':':':actualCtor) -> actualCtor
+                       _ -> fullName
+      return $ buildCtor ctorName f
     
     -- Parse constructor name with optional Type:: prefix
     parseConstructorName = do
@@ -334,7 +337,7 @@ parseSym = label "enum symbol / constructor" $ try $ do
         Nothing -> return firstPart
         Just ctorName -> return (firstPart ++ "::" ++ ctorName)
     
-    -- Check for unprefixed constructor and provide helpful error
+    -- Check for ambiguous constructor and provide helpful error
     checkAmbiguousConstructor ctorName = do
       st <- get
       let adts = adtArities st
@@ -345,17 +348,20 @@ parseSym = label "enum symbol / constructor" $ try $ do
       -- Find all matching constructors across types
       let allMatches = [(typeName, arity) | 
                         (typeName, ctors) <- M.toList adts,
-                        (prefixedCtorName, arity) <- ctors,
-                        let actualCtor = case break (== ':') prefixedCtorName of
-                                           (_, ':':':':actualName) -> actualName
-                                           _ -> prefixedCtorName,
-                        actualCtor == baseName]
+                        (ctorName', arity) <- ctors,
+                        ctorName' == baseName]
       case allMatches of
-        [] -> fail $ "Constructor `@" ++ baseName ++ "` not found."
-        matches ->
-          fail $ "Constructor name must be prefixed. Options:\n" ++
-                 unlines ["- @" ++ typeName ++ "::" ++ baseName | 
-                         (typeName, _) <- matches]
+        [] -> return () -- Will be caught by type checker
+        matches | length matches > 1 ->
+          let arities = map snd matches
+              allSame = all (== head arities) arities
+          in if not allSame
+             then fail $ "Ambiguous constructor name: `" ++ baseName ++ "{..}`. " ++
+                        "Please prefix it with its type name. Options:\n" ++
+                        unlines ["- " ++ typeName ++ "::" ++ baseName ++ "{..}" | 
+                                (typeName, _) <- matches]
+             else return () -- Same arity everywhere, OK
+        _ -> return ()
     
     -- Parse new &tag bare symbol syntax  
     parseNewSymbol = try $ do
@@ -369,29 +375,17 @@ parseSym = label "enum symbol / constructor" $ try $ do
     parseOldSymbol = try $ do
       _ <- symbol "@"
       notFollowedBy (char '{')  -- make sure we are not @{...} or @tag{...}
-      -- Parse constructor name with optional Type:: prefix
-      firstPart <- lexeme $ some (satisfy isNameChar)
-      maybeType <- optional $ try $ do
-        _ <- string "::"
-        secondPart <- some (satisfy isNameChar)
-        skip
-        return secondPart
-      let n = case maybeType of
-                Nothing -> firstPart
-                Just ctorName -> firstPart ++ "::" ++ ctorName
-      -- Check arity for constructor (should be 0)
+      n <- lexeme $ some (satisfy isNameChar)
+      -- Check arity for bare constructor (should be 0)
       getArity <- getConstructorArity
       case getArity n of
-        Nothing -> do
-          checkAmbiguousConstructor n
-        Just (Just typeName, arity) -> do
-          when (arity /= 0) $
-            fail $ "Constructor '" ++ n ++ "' expects " ++ show arity ++ 
-                   " field(s), but got 0. Use @" ++ n ++ "{...} with " ++ show arity ++ " field(s)."
-          -- Use the prefixed name for the symbol
-          return $ Tup (Sym n) One
-        Just (Nothing, _) -> 
-          fail "Should not reach here - all constructors should require prefixes"
+        Nothing -> checkAmbiguousConstructor n
+        Just (_, expectedArity) ->
+          when (expectedArity /= 0) $
+            fail $ "Constructor '" ++ n ++ "' expects " ++ show expectedArity ++ 
+                   " field(s), but got 0. Use @" ++ n ++ "{...} with " ++ show expectedArity ++ " field(s)."
+      -- Desugar @Foo to (&Foo,())
+      return $ Tup (Sym n) One
     
     buildCtor :: String -> [Term] -> Term
     buildCtor tag fs =

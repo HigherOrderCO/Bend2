@@ -7,7 +7,7 @@ module Core.Parse.Book
   ) where
 
 import Control.Monad (when)
-import Control.Monad.State.Strict (State, get, put, evalState, execState)
+import Control.Monad.State.Strict (State, get, put, evalState)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (intercalate)
 import Data.Void
@@ -123,18 +123,17 @@ parseType = label "datatype declaration" $ do
   when (null cases) $ fail "datatype must have at least one constructor case"
   -- Register the ADT constructors in the parser state
   st <- get
-  let constructorArities = [(tName ++ "::" ++ tag, length flds) | (tag, flds) <- cases]
+  let constructorArities = [(tag, length flds) | (tag, flds) <- cases]
       newAdtArities = M.insert tName constructorArities (adtArities st)
   put st { adtArities = newAdtArities }
   let tags = map fst cases
-      prefixedTags = map (tName ++) $ map ("::" ++) tags
       mkFields :: [(Name, Term)] -> Term
       mkFields []             = Uni
       mkFields ((fn,ft):rest) = Sig ft (Lam fn (Just ft) (\_ -> mkFields rest))
       --   match ctr: case @Tag: …
-      branches v = Pat [v] [] [([Sym (tName ++ "::" ++ tag)], mkFields flds) | (tag, flds) <- cases]
+      branches v = Pat [v] [] [([Sym tag], mkFields flds) | (tag, flds) <- cases]
       -- The body of the definition (see docstring).
-      body0 = Sig (Enu prefixedTags) (Lam "ctr" (Just $ Enu prefixedTags) (\v -> branches v))
+      body0 = Sig (Enu tags) (Lam "ctr" (Just $ Enu tags) (\v -> branches v))
       -- Wrap the body with lambdas for the parameters.
       nest (n, ty) (tyAcc, bdAcc) = (All ty  (Lam n (Just ty) (\_ -> tyAcc)) , Lam n (Just ty) (\_ -> bdAcc))
       (fullTy, fullBody) = foldr nest (retTy, body0) args
@@ -229,9 +228,8 @@ doParseBook :: FilePath -> String -> Either String Book
 doParseBook file input =
   case evalState (runParserT p file input) (ParserState True input [] M.empty 0 M.empty) of
     Left err  -> Left (formatError input err)
-    Right res -> 
-      let (ParserState _ _ _ _ _ adtArities') = execState (runParserT p file input) (ParserState True input [] M.empty 0 M.empty)
-      in Right res
+    Right res -> Right res
+      -- in Right (trace (show book) book)
   where
     p = do
       skip
