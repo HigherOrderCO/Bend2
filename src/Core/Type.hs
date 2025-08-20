@@ -161,7 +161,11 @@ data Term
 -- Book of Definitions
 type Inj  = Bool -- "is injective" flag. improves pretty printing
 type Defn = (Inj, Term, Type)
-data Book = Book (M.Map Name Defn) [Name]
+data Book = Book 
+  { bookDefs :: M.Map Name Defn
+  , bookOrder :: [Name]
+  , bookTypes :: M.Map Name [String]  -- Type name -> constructor names
+  }
 
 -- Substitution Map
 type Subs = [(Term,Term)]
@@ -187,6 +191,7 @@ data Error
   | IncompleteMatch Span Ctx
   | UnknownTermination Term
   | ImportError Span String
+  | AmbiguousConstructor Span Ctx Name [Name]
 
 data Result a
   = Done a
@@ -236,7 +241,10 @@ data LHS where
 -- -----
 
 getDefn :: Book -> Name -> Maybe Defn
-getDefn (Book defs _) name = M.lookup name defs
+getDefn book name = M.lookup name (bookDefs book)
+
+getTypeConstructors :: Book -> Name -> Maybe [String]
+getTypeConstructors book typeName = M.lookup typeName (bookTypes book)
 
 cut :: Term -> Term
 cut (Loc _ t) = cut t
