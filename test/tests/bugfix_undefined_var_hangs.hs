@@ -13,7 +13,7 @@ def main() -> Nat:
 main :: IO ()
 main = testFileWithTimeout undefined_var_hangs
   "Undefined variable on main hangs" (\out err -> do
-    assert (err `has` "Undefined")
+    assert (err `has` "Unbound")
     assert (err `has` "a")
     assert (not (err == ""))) 1
 
