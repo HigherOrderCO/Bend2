@@ -29,11 +29,32 @@ import Core.WHNF
 extend :: Ctx -> Name -> Term -> Term -> Ctx
 extend (Ctx ctx) k v t = Ctx (ctx ++ [(k, v, t)])
 
--- Check if a Sigma type represents a constructor (first component is an Enum)
+-- Check if a Sigma type represents a constructor
+-- Constructor types are sigma lists that:
+-- 1. Start with an Enum (constructor tag)
+-- 2. End with Unit (by convention)
 isConstructorSigma :: Book -> Term -> Bool
-isConstructorSigma book (Sig a _) = case force book a of
-  Enu _ -> True
+isConstructorSigma book (Sig a b) = case force book a of
+  Enu _ -> endsWithUnit b 0
   _     -> False
+  where
+    -- Check if the sigma chain ends with Unit (type or value)
+    endsWithUnit :: Term -> Int -> Bool
+    endsWithUnit _ depth | depth > 10 = False -- Prevent infinite recursion
+    endsWithUnit (Lam _ _ f) d = endsWithUnit (f (Var "_" 0)) (d+1)
+    endsWithUnit (App f _) d = endsWithUnit f (d+1)
+    endsWithUnit Uni _ = True  -- Unit type
+    endsWithUnit One _ = True  -- Unit value ()
+    endsWithUnit (Sig _ b') d = endsWithUnit b' (d+1)
+    -- Handle EnuM (enum match) - check all branches
+    endsWithUnit (EnuM cases df) d = 
+      all (\(_, branch) -> endsWithUnit branch (d+1)) cases &&
+      case df of
+        Lam _ _ f -> endsWithUnit (f (Var "_" 0)) (d+1)
+        _ -> endsWithUnit df (d+1)
+    -- Handle Use expressions
+    endsWithUnit (Use _ _ f) d = endsWithUnit (f (Var "_" 0)) (d+1)
+    endsWithUnit _ _ = False
 isConstructorSigma _ _ = False
 
 -- Type Checker
