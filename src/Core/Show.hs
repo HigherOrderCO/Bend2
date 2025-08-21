@@ -402,14 +402,18 @@ instance Show Book where
 instance Show Span where
   show span = "\n\x1b[1mLocation:\x1b[0m \x1b[2m(line " ++ show (fst $ spanBeg span) ++ ", column " ++ show (snd $ spanBeg span) ++ ")\x1b[0m\n" ++ highlightError (spanBeg span) (spanEnd span) (spanSrc span)
 
+showHint :: Maybe String -> String
+showHint Nothing = ""
+showHint (Just h) = "\x1b[1mHint:\x1b[0m " ++ h ++ "\n"
+
 instance Show Error where
   show err = case err of
-    CantInfer span ctx       -> "\x1b[1mCantInfer:\x1b[0m\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    Unsupported span ctx     -> "\x1b[1mUnsupported:\x1b[0m\nCurrently, Bend doesn't support matching on non-var expressions.\nThis will be added later. For now, please split this definition.\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    Undefined span ctx name  -> "\x1b[1mUndefined:\x1b[0m " ++ name ++ "\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    TypeMismatch span ctx goal typ -> "\x1b[1mMismatch:\x1b[0m\n- Goal: " ++ showTerm True goal ++ "\n- Type: " ++ showTerm True typ ++ "\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    TermMismatch span ctx a b -> "\x1b[1mMismatch:\x1b[0m\n- " ++ showTerm True a ++ "\n- " ++ showTerm True b ++ "\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    IncompleteMatch span ctx -> "\x1b[1mIncompleteMatch:\x1b[0m\n\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    CantInfer span ctx hint       -> "\x1b[1mCantInfer:\x1b[0m\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    Unsupported span ctx hint     -> "\x1b[1mUnsupported:\x1b[0m\nCurrently, Bend doesn't support matching on non-var expressions.\nThis will be added later. For now, please split this definition.\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    Undefined span ctx name hint  -> "\x1b[1mUndefined:\x1b[0m " ++ name ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    TypeMismatch span ctx goal typ hint -> "\x1b[1mMismatch:\x1b[0m\n- Goal: " ++ showTerm True goal ++ "\n- Type: " ++ showTerm True typ ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    TermMismatch span ctx a b hint -> "\x1b[1mMismatch:\x1b[0m\n- " ++ showTerm True a ++ "\n- " ++ showTerm True b ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    IncompleteMatch span ctx hint -> "\x1b[1mIncompleteMatch:\x1b[0m\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     UnknownTermination term  -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
     ImportError span msg     -> "\x1b[1mImportError:\x1b[0m " ++ msg ++ show span
 

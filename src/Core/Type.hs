@@ -179,12 +179,12 @@ data Span = Span
 
 -- Errors
 data Error
-  = CantInfer Span Ctx
-  | Unsupported Span Ctx
-  | Undefined Span Ctx Name
-  | TypeMismatch Span Ctx Term Term
-  | TermMismatch Span Ctx Term Term
-  | IncompleteMatch Span Ctx
+  = CantInfer Span Ctx (Maybe String)
+  | Unsupported Span Ctx (Maybe String)
+  | Undefined Span Ctx Name (Maybe String)
+  | TypeMismatch Span Ctx Term Term (Maybe String)
+  | TermMismatch Span Ctx Term Term (Maybe String)
+  | IncompleteMatch Span Ctx (Maybe String)
   | UnknownTermination Term
   | ImportError Span String
 
