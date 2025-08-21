@@ -361,7 +361,7 @@ infer d span book@(Book defs names) ctx term =
                           -- check that aT and bT are types, and if so, proceed to infer the type of `body` (here denoted bb)
                           check d span book ctx aT Set
                           check (d+1) span book (extend ctx kaT (Var kaT d) aT) bT Set
-                          infer d span book (extend (extend ctx a (Var a d) aT) b (Var b (d+1)) bT) (bb (Var b (d+1))) 
+                          infer (d+2) span book (extend (extend ctx a (Var a d) aT) b (Var b (d+1)) bT) (bb (Var b (d+1))) 
 
                         _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
                     _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
