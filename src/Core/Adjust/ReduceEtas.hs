@@ -48,12 +48,13 @@ reduceEtas d t = case t of
   -- Check for the lambda-inject pattern: λx. ... (λ{...} x)
   Lam n ty f ->
     case isEtaLong n d (f (Var n d)) of
-      Just (lmat, inj) ->
+      Just (lmat, inj, hadTrust) ->
         let t'  = injectInto inj n lmat in
         let t'' = reduceEtas d t' in
-        -- trace ("ETA:\n> " ++ show t ++ "\n> " ++ show t' ++ "\n> " ++ show t'') $
-        t''
-      Nothing          -> Lam n (fmap (reduceEtas d) ty) (\v -> reduceEtas (d+1) (f v))
+        -- If a top-level `trust` was encountered on the path to the match,
+        -- preserve it as an outer wrapper around the reduced case-tree.
+        if hadTrust then Tst t'' else t''
+      Nothing                    -> Lam n (fmap (reduceEtas d) ty) (\v -> reduceEtas (d+1) (f v))
   
   -- Recursive cases for all other constructors
   Var n i      -> Var n i
@@ -64,6 +65,7 @@ reduceEtas d t = case t of
   Use k v f    -> Use k (reduceEtas d v) (\v' -> reduceEtas (d+1) (f v'))
   Set          -> Set
   Chk a b      -> Chk (reduceEtas d a) (reduceEtas d b)
+  Tst a        -> Tst (reduceEtas d a)
   Emp          -> Emp
   EmpM         -> EmpM
   Uni          -> Uni
@@ -108,26 +110,30 @@ reduceEtas d t = case t of
   Rwt e f      -> Rwt (reduceEtas d e) (reduceEtas d f)
 
 -- Check if a term matches the eta-long pattern: ... (λ{...} x)
--- Returns the lambda-match and an injection function
-isEtaLong :: Name -> Int -> Term -> Maybe (Term, Term -> Term)
-isEtaLong target depth = go id depth where
-  go :: (Term -> Term) -> Int -> Term -> Maybe (Term, Term -> Term)
-  go inj d term = case cut term of
+-- Returns the lambda-match, an injection function, and whether a `trust`
+-- marker was seen along the way (to be preserved outside after reduction).
+isEtaLong :: Name -> Int -> Term -> Maybe (Term, Term -> Term, Bool)
+isEtaLong target depth = go id depth False where
+  go :: (Term -> Term) -> Int -> Bool -> Term -> Maybe (Term, Term -> Term, Bool)
+  go inj d hadT term = case cut term of
     -- Found intermediate lambda - add to injection
     Lam n ty f -> 
-      go (\h -> inj (Lam n ty (\_ -> h))) (d+1) (f (Var n d))
+      go (\h -> inj (Lam n ty (\_ -> h))) (d+1) hadT (f (Var n d))
     
     -- Found Let - add to injection
     Let k mt v f ->
-      go (\h -> inj (Let k mt v (\_ -> h))) (d+1) (f (Var k d))
+      go (\h -> inj (Let k mt v (\_ -> h))) (d+1) hadT (f (Var k d))
     
     -- Found Use - add to injection
     Use k v f ->
-      go (\h -> inj (Use k v (\_ -> h))) (d+1) (f (Var k d))
+      go (\h -> inj (Use k v (\_ -> h))) (d+1) hadT (f (Var k d))
     
     -- Found Chk - add to injection
     Chk x t ->
-      go (\h -> inj (Chk h t)) d x
+      go (\h -> inj (Chk h t)) d hadT x
+    -- Found Tst - record and continue, but don't push it inside branches
+    Tst x ->
+      go inj d True x
     
     -- Found Loc: keep the location on the lambda-match itself instead of
     -- pushing it into the body. This ensures that errors during the check of
@@ -139,64 +145,65 @@ isEtaLong target depth = go id depth where
     
     -- Found Log - add to injection
     Log s x ->
-      go (\h -> inj (Log s h)) d x
+      go (\h -> inj (Log s h)) d hadT x
 
     -- Pass through single-body lambda-matches (commuting conversion)
     UniM b ->
-      case go id d b of
-        Just (lmat, injB) -> Just (lmat, \h -> inj (UniM (injB h)))
+      case go id d hadT b of
+        Just (lmat, injB, tB) -> Just (lmat, \h -> inj (UniM (injB h)), tB)
         Nothing           -> Nothing
 
     SigM b ->
-      case go id d b of
-        Just (lmat, injB) -> Just (lmat, \h -> inj (SigM (injB h)))
+      case go id d hadT b of
+        Just (lmat, injB, tB) -> Just (lmat, \h -> inj (SigM (injB h)), tB)
         Nothing           -> Nothing
 
     SupM l b ->
-      case go id d b of
-        Just (lmat, injB) -> Just (lmat, \h -> inj (SupM l (injB h)))
+      case go id d hadT b of
+        Just (lmat, injB, tB) -> Just (lmat, \h -> inj (SupM l (injB h)), tB)
         Nothing           -> Nothing
 
     EqlM b ->
-      case go id d b of
-        Just (lmat, injB) -> Just (lmat, \h -> inj (EqlM (injB h)))
+      case go id d hadT b of
+        Just (lmat, injB, tB) -> Just (lmat, \h -> inj (EqlM (injB h)), tB)
         Nothing           -> Nothing
 
     -- Conservative multi-arm pass-through: only if all arms agree on a common λ-match shape
     BitM t f ->
-      case (go id d t, go id d f) of
-        (Just (l1, injT), Just (l2, injF))
+      case (go id d hadT t, go id d hadT f) of
+        (Just (l1, injT, tT), Just (l2, injF, tF))
           | sameLambdaShape l1 l2 ->
-              Just (l1, \h -> inj (BitM (injT h) (injF h)))
+              Just (l1, \h -> inj (BitM (injT h) (injF h)), tT || tF)
         _ -> Nothing
 
     NatM z s ->
-      case (go id d z, go id d s) of
-        (Just (l1, injZ), Just (l2, injS))
+      case (go id d hadT z, go id d hadT s) of
+        (Just (l1, injZ, tZ), Just (l2, injS, tS))
           | sameLambdaShape l1 l2 ->
-              Just (l1, \h -> inj (NatM (injZ h) (injS h)))
+              Just (l1, \h -> inj (NatM (injZ h) (injS h)), tZ || tS)
         _ -> Nothing
 
     LstM n c ->
-      case (go id d n, go id d c) of
-        (Just (l1, injN), Just (l2, injC))
+      case (go id d hadT n, go id d hadT c) of
+        (Just (l1, injN, tN), Just (l2, injC, tC))
           | sameLambdaShape l1 l2 ->
-              Just (l1, \h -> inj (LstM (injN h) (injC h)))
+              Just (l1, \h -> inj (LstM (injN h) (injC h)), tN || tC)
         _ -> Nothing
 
     EnuM cs e ->
-      let rs = [(s, go id d v) | (s,v) <- cs]
-          re = go id d e
+      let rs = [(s, go id d hadT v) | (s,v) <- cs]
+          re = go id d hadT e
       in
       if all (isJust . snd) rs && isJust re then
-        let rcs    = [(s, fromJust m) | (s,m) <- rs]
-            (l0, _) = fromJust re
-            shapes = [lmShape l | (_, (l,_)) <- rcs] ++ [lmShape l0]
+        let rcs       = [(s, fromJust m) | (s,m) <- rs]
+            (l0, _, _) = fromJust re
+            shapes = [lmShape l | (_, (l,_,_)) <- rcs] ++ [lmShape l0]
         in case sequence shapes of
              Just (sh0:rest) | all (== sh0) rest ->
-               let injCs = [(s, injB) | (s, (_, injB)) <- rcs]
-                   (lmatE, injE) = fromJust re
-               in Just (lmatE, \h -> inj (EnuM [(s, injB h) | (s, injB) <- injCs] (injE h)))
+               let injCs          = [(s, injB) | (s, (_, injB, _)) <- rcs]
+                   (lmatE, injE, tE) = fromJust re
+                   tAny          = tE || or [t | (_, (_,_,t)) <- rcs]
+               in Just (lmatE, \h -> inj (EnuM [(s, injB h) | (s, injB) <- injCs] (injE h)), tAny)
              _ -> Nothing
       else Nothing
 
@@ -205,9 +212,9 @@ isEtaLong target depth = go id depth where
       case (f, cut arg) of
         -- Check if f is a lambda-match (possibly wrapped in Loc) and arg is our target variable
         (lmat, Var v_n _) | v_n == target && isLambdaMatch lmat ->
-          Just (lmat, inj)
+          Just (lmat, inj, hadT)
         -- Otherwise, pass through the application
-        _ -> go (\h -> inj (app h arg)) d f
+        _ -> go (\h -> inj (app h arg)) d hadT f
     
     -- Any other form doesn't match our pattern
     _ -> Nothing

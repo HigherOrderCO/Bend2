@@ -22,6 +22,7 @@ desugarPats d span (Let k t v f)   = Let k (fmap (desugarPats d span) t) (desuga
 desugarPats d span (Use k v f)     = Use k (desugarPats d span v) (\x -> desugarPats (d+1) span (f x))
 desugarPats d span Set             = Set
 desugarPats d span (Chk x t)       = Chk (desugarPats d span x) (desugarPats d span t)
+desugarPats d span (Tst x)         = Tst (desugarPats d span x)
 desugarPats d span Emp             = Emp
 desugarPats d span EmpM            = EmpM
 desugarPats d span Uni             = Uni

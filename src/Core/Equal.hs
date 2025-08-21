@@ -56,6 +56,7 @@ cmp red d book a b =
     (Use ka va fa   , Use kb vb fb   ) -> eql red d book va vb && eql red d book (fa va) (fb vb)
     (Set            , Set            ) -> True
     (Chk xa ta      , Chk xb tb      ) -> eql red d book xa xb && eql red d book ta tb
+    (Tst xa         , Tst xb         ) -> eql red d book xa xb
     (Emp            , Emp            ) -> True
     (EmpM           , EmpM           ) -> True
     (Uni            , Uni            ) -> True

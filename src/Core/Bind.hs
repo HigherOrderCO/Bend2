@@ -24,6 +24,7 @@ binder lv term ctx vars = case term of
   Fix k f     -> Fix k (\x -> binder (lv+1) (f (Sub x)) (ctx++[x]) (M.insert k x vars))
   Set         -> Set
   Chk x t     -> Chk (binder lv x ctx vars) (binder lv t ctx vars)
+  Tst x       -> Tst (binder lv x ctx vars)
   Emp         -> Emp
   EmpM        -> EmpM
   Uni         -> Uni
@@ -89,6 +90,7 @@ bindVar match val term = go term where
     Use k v f   -> Use k (go v) (\x -> go (f (Sub x)))
     Set         -> Set
     Chk x t     -> Chk (go x) (go t)
+    Tst x       -> Tst (go x)
     Emp         -> Emp
     EmpM        -> EmpM
     Uni         -> Uni

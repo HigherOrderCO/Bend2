@@ -17,13 +17,13 @@ def Vec(A: Set, N: Nat) -> Set:
   any ctr: @{@Nil,@Cons}.
   match ctr:
     case @Nil: # Nil
-      any e : Nat{N == 0}.
+      any e : Nat{N == 0n}.
       Unit
     case @Cons: # Cons
       any n : Nat.
       any h : A.
       any t : Vec(A,n).
-      any e : Nat{N == 1+n}.
+      any e : Nat{N == 1n+n}.
       Unit
 ```
 
@@ -116,8 +116,8 @@ We start by writing the type of induction on vectors:
 def VecInd
   ( A: Set
   , P: all N:Nat xs:Vec(A,N). Set
-  , N: P(0,(@Nil,{==},()))
-  , C: all n:Nat h:A t:Vec(A,n) . P(n,t) -> P(1+n,(@Cons,n,h,t,{==},()))
+  , N: P(0n,(@Nil,{==},()))
+  , C: all n:Nat h:A t:Vec(A,n) . P(n,t) -> P(1n+n,(@Cons,n,h,t,{==},()))
   , N: Nat
   , x: Vec(A,N)
   ) -> P(N,x):
@@ -170,8 +170,8 @@ a `with` statement:
 def VecInd
   ( A: Set
   , P: all N:Nat xs:Vec(A,N). Set
-  , N: P(0,(@Nil,{==},()))
-  , C: all n:Nat h:A t:Vec(A,n) . P(n,t) -> P(1+n,(@Cons,n,h,t,{==},()))
+  , N: P(0n,(@Nil,{==},()))
+  , C: all n:Nat h:A t:Vec(A,n) . P(n,t) -> P(1n+n,(@Cons,n,h,t,{==},()))
   , N: Nat
   , x: Vec(A,N)
   ) -> P(N,x):
@@ -409,8 +409,8 @@ goal, completing the proof. We can write it compactly, as:
 def VecInd
   ( A: Set
   , P: all N:Nat xs:Vec(A,N). Set
-  , N: P(0,(@Nil,{==},()))
-  , C: all n:Nat h:A t:Vec(A,n) . P(n,t) -> P(1+n,(@Cons,n,h,t,{==},()))
+  , N: P(0n,(@Nil,{==},()))
+  , C: all n:Nat h:A t:Vec(A,n) . P(n,t) -> P(1n+n,(@Cons,n,h,t,{==},()))
   , N: Nat
   , x: Vec(A,N)
   ) -> P(N,x):
@@ -438,12 +438,12 @@ The Vector type can be declared as:
 ```python
 type Vec<A: Set>(N: Nat):
   case @Nil:
-    e: N == 0
+    e: Nat{N == 0n}
   case @Cons:
     n: Nat
     h: A
     t: Vec(A, n)
-    e: N == 1+n
+    e: Nat{N == 1n+n}
 ```
 
 This will desugar to the same `def Vec ...` declaration we wrote before.

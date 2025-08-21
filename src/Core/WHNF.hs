@@ -39,6 +39,7 @@ whnfGo book term =
     Ref k i     -> whnfRef book k i
     Fix k f     -> whnfFix book k f
     Chk x _     -> whnf book x
+    Tst x       -> whnf book x
     App f x     -> whnfApp book f x
     Loc _ t     -> whnf book t
     Op2 o a b   -> whnfOp2 book o a b
@@ -414,6 +415,7 @@ normal book term =
     Use k v f   -> Use k (normal book v) (\x -> normal book (f (Sub x)))
     Set         -> Set
     Chk x t     -> Chk (normal book x) (normal book t)
+    Tst x       -> Tst (normal book x)
     Emp         -> Emp
     EmpM        -> EmpM
     Uni         -> Uni

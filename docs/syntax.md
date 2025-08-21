@@ -1,248 +1,184 @@
 # Bend Syntax Reference
 
-Bend has a Python-inspired syntax, Haskell-like semantics, and Lean-like type system.
+Bend has Python-like surface syntax, Haskell-like semantics (pure/functional), and Lean-like dependent types and proofs. This document reflects the actual parser and examples in this repository.
 
-## Comments
+## Lexical
 
-```python
-# Single line comment
-```
+- Comments:
+  - Line: `# …`
+  - Block: `{- … -}` (nests not supported)
+- Identifiers: letters, digits, `_`, and `/`; cannot start with a digit. Slash supports hierarchical names like `Nat/add`.
+- Reserved words: `match`, `case`, `else`, `elif`, `if`, `end`, `all`, `any`, `finally`, `import`, `as`, `and`, `or`, `def`, `log`, `gen`, `enum`, `assert`, `lambda`.
+- Whitespace and newlines are significant for certain constructs (indented `case` blocks). Most forms also have a braced `{ … }` alternative.
 
-## Basic Types
+## Built‑ins and Literals
 
-### Primitives
+- Universes and basic types/values:
+  - `Set`
+  - `Empty`
+  - `Unit`, value `()`
+  - `Bool`, values `False`, `True`
+  - `Nat`, literals like `0n`, `1n`, `2n`, `42n`
+  - Eraser: `*` (erasable value placeholder)
+  - Numeric types: `U64`, `I64`, `F64`, `Char`
+    - Unsigned integer: `123`, `0xFF`, `0b1011` → `U64`
+    - Signed integer: `+123`, `-456`, `+0x1F` → `I64`
+    - Float: `3.14`, `-2.0` → `F64`
+    - Char: `'a'`, `'\n'`, `'\u0041'` → `Char`
+    - String: `"hello"` desugars to a `Char[]` list: `'h' <> 'e' <> … <> []`
+- Lists:
+  - Empty: `[]`
+  - Literal: `[a, b, c]` (desugars via cons)
+  - Cons: `head <> tail`
+  - Type: `T[]`
+- Enums:
+  - Type: `enum{&A, &B, &C}`
+  - Tag literal: `&Tag` (preferred).
+ - Superposition: `&L{a, b}` builds a labeled superposition of `a` and `b` with label `L` (advanced; also has eliminator forms in `λ{…}` and `~ … { … }`).
 
-```python
-Set      # Type universe
-Empty    # Empty type
-Unit     # Unit type
-()       # Unit value
-Bool     # Boolean type  
-False    # Boolean false
-True     # Boolean true
-Nat      # Natural number type
-0n       # Zero
-123n     # Natural number literals
-U64      # Unsigned Integer (64-bit)
-I64      # Integer (64-bit)
-F64      # Float (64-bit)
-123      # U64 literal
-+123     # I64 literal
-123.0    # F64 literal
-```
+## Terms and Types
 
-### Enums
-
-```python
-enum{&A, &B, &C} # Enum type
-&Tag             # Enum value
-```
-
-### Compound Types
-
-```python
-T[]             # List of T
-A -> B          # Function type (sugar for all _:A. B)
-A & B           # Product type (sugar for any _:A. B)
-all x:A. B      # Dependent function type (Πx:A. B)
-all x:A y:B. C  # Multi-argument dependent function
-any x:A. B      # Dependent pair type (Σx:A. B)
-any x:A y:B. C  # Multi-argument dependent pair
-T{a == b}       # Propositional Equality type
-```
-
-Note: `∀` and `Σ` can be used as `all` and `any`.
+- Function type: `A -> B` (sugar for `all _:A. B`)
+- Product type: `A & B` (sugar for `any _:A. B`)
+- Dependent function: `all x:A. B` (also `∀ x:A. B`)
+- Dependent pair: `any x:A. B` (also `Σ x:A. B`)
+- Annotation: `x :: T`
+- Equality type: `T{a == b}`; inequality `T{a != b}` is sugar for `Not (T{a==b})`
+- Reflexivity proof: `{==}` or `finally`
+- Negation (as def): `Not(A: Set) = A -> Empty`
 
 ## Variables and Bindings
 
-```python
-x               # Variable
-x = v           # Assignment (untyped)
-x : T = v       # Assignment (typed)
-```
+- Assignment: `x = v; body` or `x : T = v; body` (semicolon optional before a following top‑level or block delimiter). Assignment targets must be variables; attempting to assign to literals/types is a parse error.
+- Pattern binding: `pattern = value; body` desugars to a one‑case `match`.
 
-## Functions
+## Functions and Application
 
-```python
-lambda x. e        # Lambda abstraction
-lambda x y z. e    # Multi-argument lambda
-f(a, b, c)         # Function application
+- Lambda: `lambda x. body` or `λ x. body`
+  - Multiple binders: `lambda x y z. body`
+  - Typed binders: `lambda (x: T) (y: U). body`
+  - Pattern binders are supported; they desugar to a match on an introduced fresh variable.
+- Application: `f(a, b, c)` or parenthesized `(f a b c)`
+- Polymorphic application: `f<T, U>(args ...)` desugars to term application of type params first.
+- Fixed point: `μ f. body` (rarely needed directly; available for completeness).
 
-# Function definition sugar:
-def f(x: A, y: B) -> C:
-  body
-```
+## Control Flow and Matching
 
-Note: All functions take exactly one argument. Multi-argument syntax is sugar for curried functions.
+- If: `if cond: then_branch else: else_branch` (Boolean eliminator)
+- Match (indented form):
+  ```py
+  match x y:
+    with a = val, b           # optional “with” moves; bind or alias values
+    case pat1 pat2:
+      body1
+    case pat1' pat2':
+      body2
+  ```
+- Match (braced form):
+  ```py
+  match x { case pat: body; case pat': body' }
+  ```
+- Eliminator lambdas: low‑level matches that you can write explicitly:
+  - `λ{(): u}` (Unit), `λ{False: f; True: t}` (Bool)
+  - `λ{0n: z; 1n+: s}` (Nat)
+  - `λ{[]: n; <>: c}` (List)
+  - `λ{(,): p}` (Pair)
+  - `λ{{==}: k}` (Equality)
+  - `λ{@A: a; @B: b}` or `λ{&A: a; &B: b}` (Enum)
+- Expression‑match with `~` (applies an eliminator to a scrutinee):
+  ```py
+  ~ xs { []: n; <>: c }
+  ~ b  { False: f; True: t }
+  ~ n  { 0n: z; 1n+: s }
+  ~ x  { (): u }
+  ~ e  { {{==}: k} }
+  ~ t  { @A: a; @B: b; default }
+  ```
+  The braces form supports optional semicolons `;` between arms. An empty `{}` is valid for `Empty`.
+- Forks: `fork L: a elif: b elif: c else: d` builds a right‑associated chain `Frk L a (Frk L b (… d))`.
+- Rewrite: `rewrite e body` rewrites under equality proof `e`.
+- Absurd: `absurd x` is sugar for `match x {}`.
+- Return: `return t` is syntactic sugar for just `t`.
+- Logging: `log s t` (string/list of chars for `s`) evaluates `t` and emits a log.
+- View: `view(name)` enables viewing of named function when pretty‑printing (debug utility).
 
-Note: `λ` can be used as `lambda`.
+## Numeric Operators
 
-## Pattern Matching
+- Binary: `+`, `-`, `*`, `/`, `%`, `**` (pow), `^` or `xor` (xor), `and`, `or`, comparisons `<`, `<=`, `>`, `>=`, strict eq `===`, strict neq `!==`, bit shifts `<<`, `>>`.
+- Unary: `-x`, `not x`.
+- Special Nat sugar: when the left operand of `+` is a Nat literal, `k n + t` is parsed as `k` Peano successors on `t`. In patterns, write `1n + p` (or via eliminator `1n+` in λ/`~` forms).
 
-### Simple Patterns
+## Datatypes (Sugar)
 
-```python
-# Booleans
-if cond:
-  trueCase
-else:
-  falseCase
+Datatype declarations synthesize constructors and an encoded dependent pair:
 
-# Natural numbers  
-match n:
-  case 0:
-    zeroCase
-  case 1 + p:
-    succCase
-```
-
-### General Pattern Matching
-
-```python
-match x y ...:
-  with a = val0
-  with b = val1
-  ...
-  case pat1 pat2 ...:
-    body1
-  case pat3 pat4 ...:
-    body2
-  ...
-```
-
-The `with` clause linearizes a variable (useful to control HVM output).
-
-### Eliminators (Low-level)
-
-Pattern matches desugar to native eliminators, which can also be used directly:
-
-```python
-λ{(): e}              # Unit eliminator
-λ{False: f; True: t}  # Bool eliminator  
-λ{0: z; +: s}         # Nat eliminator
-λ{[]: n; <>: c}       # List eliminator
-λ{(,): f}             # Pair eliminator
-λ{{==}: f}            # Equality eliminator
-λ{&A: a; &B: b}       # Enum eliminator
-```
-
-## Data Constructors
-
-### Lists
-
-```python
-[]              # Empty list
-[1, 2, 3]       # List literal
-h <> t          # Cons
-```
-
-### Tuples
-
-```python
-(a, b)          # Tuples
-(a, b, c)       # Nested tuples: (a, (b, c))
-```
-
-### Equality
-
-```python
-finally         # Reflexivity proof
-```
-
-## Type Annotations
-
-```python
-x :: T          # Type hint
-```
-
-## Simple Datatypes
-
-Declaration:
-
-```python
+```py
 type Maybe<A: Set>:
   case @None:
   case @Some:
     value: A
-```
 
-Constructor:
-
-```python
-@None{}      # desugars to (@None,())
-@Some{value} # desugars to (@Some,value,())
-```
-
-Pattern-Matching:
-
-```python
-match x:
-  case @None{}:
-    ...
-  case @Some{value}:
-    ...
-```
-
-## Inductive Datatypes
-
-Declaration:
-
-```python
-# Same as:
-# data Vec (A : Set) : Nat → Set where
-#   nil  : Vec A zero
-#   cons : ∀ {n} → A → Vec A n → Vec A (suc n)
 type Vec<A: Set>(N: Nat) -> Set:
   case @Nil:
-    e: Nat{N == 0}
+    e: Nat{N == 0n}
   case @Cons:
     n: Nat
     h: A
-    t: Vec(A, n)
-    e: Nat{N == 1+n}
+    t: Vec(A,n)
+    e: Nat{N == 1n+n}
 ```
 
-This desugars to a function that returns a dependent pair:
-- First component: an enum tag (@Nil or @Cons)
-- Second component: a record of fields based on the constructor
+- Constructors:
+  - Full: `@Some{value}` → `(&Some,(value,()))`
+  - Bare: `@None` allowed only for arity‑0; otherwise use `@Tag{…}`.
+  - Disambiguation: if different types share a constructor name, use `@Type::Tag{…}`.
+- Patterns accept the same forms: `case @Some{value}: …` or zero‑arity `case @None:`.
+- Constructor arity is checked statically at parse time using declarations above.
 
-## Constructors
+## Definitions
 
-```python
-@Cons{head,tail}
-```
+- Function or value:
+  ```py
+  def name : Type = term
+  def name(x: A, y: B) -> Ret:
+    body
+  def name<A,B>(x: A) -> Ret:       # generic params become implicit Set‑typed args
+    body
+  ```
+- Datatype: `type …` as above.
+- Metavariable context (synthesis playground):
+  ```py
+  try goal : Type { ctx_term0, ctx_term1, ... }
+  try goal<A>(x: T) -> U { ctx... }
+  ```
+  Creates a hole named `goal` with explicit type and an optional context list.
+- Assertions (compile‑time equality checks):
+  ```py
+  assert A == B : T
+  ```
+  Desugars to a fresh top‑level definition `E<N> : T{A==B} = {==}`. Fails if unsatisfiable later in checking.
 
-Note: this desugars to `(&Cons,head,tail,())`; similarly for all constructors.
+## Imports and Namespaces
 
-## Imports
+- Names can contain `/`: e.g., `Nat/add`.
+- Import aliasing:
+  ```py
+  import Path/To/Lib as Lib
+  ```
+  After this, `Lib/foo` resolves to `Path/To/Lib/foo` (and `Lib` alone to the directory root). Aliasing applies before reserved‑word checks.
+- Auto‑import by reference: using a name like `Foo/bar` triggers loading `Foo/bar.bend` or `Foo/bar/_.bend` if not already in scope.
 
-Bend automatically imports definitions from corresponding file names.
+## Notes on Indentation and Braces
 
-For example, in the file:
+- `match` and `case` support either:
+  - Indented form: a colon `:` after `match …` and each `case …:`; out‑denting ends the block.
+  - Braced form: `match … { case …: body; case …: body }` with optional semicolons.
+- Eliminator forms `λ{…}` and `~ scrut { … }` accept semicolons between arms; the closing `}` ends the form.
 
-```python
-def main() -> Nat:
-  Foo/bar(123)
-```
+## Examples
 
-Bend will automatically import `Foo/bar` from one of:
-- `./Foo/bar.bend`
-- `./Foo/bar/_.bend`
+- See `examples/main.bend` and `examples/prompt.bend` for idiomatic patterns, proofs (`rewrite`, `{==}`), datatypes, and higher‑level programming.
 
-[WanShi](https://github.com/HigherOrderCO/WanShi) is a monorepo where each file includes only ONE Bend definition.
+## Type Inference
 
-Example: `WanShi/Nat/add.bend` includes the `Nat/add` definition.
-
-# Inference
-
-Bend has no inference. That means every polymorphic application must be explicit. Example:
-
-```python
-List/map<U64,Nat>([1,2,3], U64/to_nat)
-```
-
-The explicit `<Char,Char>` specialization is mandatory.
-
-# Examples
-
-See the [Examples/](https://github.com/HigherOrderCO/Bend2/tree/main/examples) directory.
+- Polymorphic applications must be explicit: `List/map<U64,Nat>(f, xs)`; type arguments are not inferred.

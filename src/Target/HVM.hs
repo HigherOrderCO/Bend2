@@ -117,6 +117,7 @@ termToHVM book term = go term where
   go (Use k v f)   = termToHVM book (f v)  -- Inline directly, no binding
   go Set           = HVM.Era
   go (Chk v t)     = termToHVM book v
+  go (Tst v)       = termToHVM book v
   go Emp           = HVM.Era
   go EmpM          = HVM.Lam "x$" HVM.Era
   go Uni           = HVM.Era
@@ -480,8 +481,6 @@ showHVM lv tm =
     prettyLst (HVM.Ctr "#Cons" [h, t]) acc = prettyLst t (showHVM lv h : acc)
     prettyLst (HVM.Ctr "#Nil" [])      acc = Just $ "[" ++ unwords (reverse acc) ++ "]"
     prettyLst _ _ = Nothing
-
-
 
 
 

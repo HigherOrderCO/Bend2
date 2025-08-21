@@ -28,6 +28,7 @@ collectDeps bound term = case term of
   Use k v f   -> S.union (collectDeps bound v) (collectDeps (S.insert k bound) (f (Var k 0)))
   Set         -> S.empty
   Chk x t     -> S.union (collectDeps bound x) (collectDeps bound t)
+  Tst x       -> collectDeps bound x
   Emp         -> S.empty
   EmpM        -> S.empty
   Uni         -> S.empty

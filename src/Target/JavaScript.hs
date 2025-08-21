@@ -71,6 +71,7 @@ termToCT book term dep = case term of
   Use k v f    -> termToCT book (f v) dep  -- Inline directly, no binding
   Set          -> CEra
   Chk x _      -> termToCT book x dep
+  Tst x        -> termToCT book x dep
   Emp          -> CEra
   EmpM         -> CLam "x$" (\_ -> CEra)
   Uni          -> CEra

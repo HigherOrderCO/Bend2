@@ -34,6 +34,7 @@ desugarFrksGo book d ctx (Let k t v f) = Let k (fmap (desugarFrksGo book d ctx) 
 desugarFrksGo book d ctx (Use k v f)   = Use k (desugarFrksGo book d ctx v) (\x -> desugarFrksGo book (d+1) ((k,d):ctx) (f x))
 desugarFrksGo book d ctx Set           = Set
 desugarFrksGo book d ctx (Chk x t)     = Chk (desugarFrksGo book d ctx x) (desugarFrksGo book d ctx t)
+desugarFrksGo book d ctx (Tst x)       = Tst (desugarFrksGo book d ctx x)
 desugarFrksGo book d ctx Emp           = Emp
 desugarFrksGo book d ctx EmpM          = EmpM
 desugarFrksGo book d ctx Uni           = Uni

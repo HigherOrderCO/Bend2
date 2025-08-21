@@ -41,6 +41,7 @@ parseTermIni = choice
   , parseRewrite
   , parseAbsurd
   , parseFrk
+  , parseTrust
   , parseLog
   , parseAll
   , parseSig
@@ -361,12 +362,12 @@ parsePat = label "pattern match" $ do
   pure pat
   where
     -- Parse 'with' statements
-    parseWith = try $ do
-      _ <- symbol "with"
-      sepEndBy (do
-        x <- name
+    parseWith = do
+      _ <- try $ symbol "with"
+      many (do
+        x <- try name
         v <- option (Var x 0) (try (symbol "=" >> parseTerm))
-        return (x, v)) (symbol ",")
+        return (x, v))
 
 -- | Syntax: case pattern1 pattern2: body
 -- Indentation-sensitive clause list (stops when out-dented)
@@ -431,6 +432,13 @@ parseLog = label "log" $ do
   s <- parseTerm
   x <- parseTerm
   return $ Log s x
+
+-- | Syntax: trust term
+parseTrust :: Parser Term
+parseTrust = label "trust" $ do
+  _ <- try $ keyword "trust"
+  t <- parseTerm
+  return $ Tst t
 
 -- | Syntax: view(functionName)
 parseView :: Parser Term

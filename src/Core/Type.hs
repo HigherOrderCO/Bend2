@@ -82,6 +82,7 @@ data Term
 
   -- Annotation
   | Chk Term Type -- x::t
+  | Tst Term      -- trust x
 
   -- Empty
   | Emp  -- Empty
@@ -287,6 +288,7 @@ collectVars t = case t of
   Let k t v f -> maybe [] collectVars t ++ collectVars v ++ collectVars (f (Var k 0))
   Use k v f -> collectVars v ++ collectVars (f (Var k 0))
   Chk x t -> collectVars x ++ collectVars t
+  Tst x -> collectVars x
   UniM f -> collectVars f
   BitM f t -> collectVars f ++ collectVars t
   NatM z s -> collectVars z ++ collectVars s

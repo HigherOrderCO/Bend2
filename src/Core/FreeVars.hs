@@ -12,6 +12,7 @@ freeVars ctx tm = case tm of
   Let k t v f -> S.unions [foldMap (freeVars ctx) t, freeVars ctx v, freeVars (S.insert k ctx) (f (Var k 0))]
   Use k v f   -> S.union (freeVars ctx v) (freeVars (S.insert k ctx) (f (Var k 0)))
   Chk v t     -> S.union (freeVars ctx v) (freeVars ctx t)
+  Tst v       -> freeVars ctx v
   UniM f      -> freeVars ctx f
   BitM f t    -> S.union (freeVars ctx f) (freeVars ctx t)
   Suc n       -> freeVars ctx n

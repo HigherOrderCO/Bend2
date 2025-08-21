@@ -20,6 +20,7 @@ subterms d term = case term of
   Let k t v f   -> maybe [] (:[]) t ++ [v, f (Var k d)]
   Use k v f     -> [v, f (Var k d)]
   Chk v t       -> [v, t]
+  Tst v         -> [v]
   Suc n         -> [n]
   Con h t       -> [h, t]
   Tup a b       -> [a, b]

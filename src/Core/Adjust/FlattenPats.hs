@@ -64,6 +64,7 @@ flattenPats d span book term       = case term of
   (Use k v f)   -> Use k (flattenPats d span book v) (\x -> flattenPats (d+1) span book (f x))
   Set           -> Set
   (Chk x t)     -> Chk (flattenPats d span book x) (flattenPats d span book t)
+  (Tst x)       -> Tst (flattenPats d span book x)
   Emp           -> Emp
   EmpM          -> EmpM
   Uni           -> Uni

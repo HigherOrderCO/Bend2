@@ -35,6 +35,7 @@ rewriteGo d book old neo val =
     Use k v f   -> Use k (rewrite d book old neo v) (\x -> rewrite d book old neo (f x))
     Set         -> Set
     Chk x t     -> Chk (rewrite d book old neo x) (rewrite d book old neo t)
+    Tst x       -> Tst (rewrite d book old neo x)
     Emp         -> Emp
     EmpM        -> EmpM
     Uni         -> Uni
