@@ -35,7 +35,6 @@ extend (Ctx ctx) k v t = Ctx (ctx ++ [(k, v, t)])
 -- Infer the type of a term
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
 infer d span book@(Book defs names) ctx term =
-  trace ("- infer: " ++ show d ++ " " ++ show term) $
   case term of
 
     -- x : T in ctx
@@ -477,7 +476,6 @@ inferOp1Type d span book ctx op ta = case op of
 check :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result ()
 check d span book ctx (Loc l t) goal = check d l book ctx t goal 
 check d span book ctx term      goal =
-  trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
   case (term, force book goal) of
     -- ctx |- 
     -- ----------- Era
@@ -599,7 +597,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for EmpM
     (EmpM, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Emp (Lam "_" Nothing (\_ -> Set))))
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Emp (Lam "_" Nothing (\_ -> Var "?" 0))))
 
     -- ctx |- f : R({==})
     -- -------------------------------------- UniM-Eql
@@ -651,7 +649,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for BitM
     (BitM f t, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Bit (Lam "_" Nothing (\_ -> Set))))
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Bit (Lam "_" Nothing (\_ -> Var "?" 0))))
 
     -- ctx |- z : R({==})
     -- ------------------------------------------- NatM-Eql-Zer-Zer
@@ -687,7 +685,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for NatM
     (NatM z s, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Nat (Lam "_" Nothing (\_ -> Set))))
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Nat (Lam "_" Nothing (\_ -> Var "?" 0))))
 
     -- ctx |- n : R({==})
     -- ------------------------------------------ LstM-Eql-Nil-Nil
@@ -725,7 +723,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for LstM
     (LstM n c, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> Set))))
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> Var "?" 0))))
 
     -- s ∈ tags
     -- ---------------------- Sym
@@ -778,7 +776,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for EnuM
     (EnuM cs df, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu []) (Lam "_" Nothing (\_ -> Set))))
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu []) (Lam "_" Nothing (\_ -> Var "?" 0))))
 
     -- ctx |- f : ∀xp:A{x1==x2}. ∀yp:B(x1){y1==y2}. R((xp,yp))
     -- ------------------------------------------------------- SigM-Eql
@@ -796,7 +794,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for SigM
     (SigM f, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Sig (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0))) (Lam "_" Nothing (\_ -> Set))))
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Sig (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0))) (Lam "_" Nothing (\_ -> Var "?" 0))))
 
     -- ctx |- a : A
     -- ctx |- b : B(a)
@@ -923,7 +921,7 @@ check d span book ctx term      goal =
       case force book goal of
         All xT rT -> do
           check d span book ctx f (All xT (Lam "p" Nothing (\p -> All xT (Lam "q" Nothing (\q -> App rT (Sup l p q))))))
-        _ -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> Set))))
+        _ -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> Var "?" 0))))
 
     -- ctx |- l : U64
     -- ctx |- a : T

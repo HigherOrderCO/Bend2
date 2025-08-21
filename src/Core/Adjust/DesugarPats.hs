@@ -179,9 +179,24 @@ match d span x ms (([p], u) : _) | isUnitPat p =
 -- match x { (a,b): p }
 -- --------------------
 -- ~x { (,): λa. λb. p }
-match d span x ms (([(cut -> Tup a b)], p) : _) =
-  apps d (map snd ms) $ App (SigM if_tup) x
-  where if_tup = Lam (patOf d a) Nothing $ \_ -> Lam (patOf (d+1) b) Nothing $ \_ -> lam d (map fst ms) $ desugarPats (d+2) span p
+-- Preserve location for tuple patterns
+match d span x ms (([tup], p) : _) | isTupPat tup =
+  let mloc = tupPatLoc tup in
+  let (a, b) = tupPatFields tup in
+  let if_tup = Lam (patOf d a) Nothing $ \_ -> Lam (patOf (d+1) b) Nothing $ \_ -> lam d (map fst ms) $ desugarPats (d+2) span p in
+  let sigm = maybe (SigM if_tup) (\sp -> Loc sp (SigM if_tup)) mloc in
+  apps d (map snd ms) $ App sigm x
+  where
+    isTupPat :: Term -> Bool
+    isTupPat (cut -> Tup _ _) = True
+    isTupPat _ = False
+    tupPatLoc :: Term -> Maybe Span
+    tupPatLoc (Loc sp (cut -> Tup _ _)) = Just sp
+    tupPatLoc _ = Nothing
+    tupPatFields :: Term -> (Term, Term)
+    tupPatFields (cut -> Tup a b) = (a, b)
+    tupPatFields (Loc _ (cut -> Tup a b)) = (a, b)
+    tupPatFields _ = error "tupPatFields: not a tuple"
 
 -- match x { @S1: b1 ; @S2: b2 ; ... ; k: d }
 -- ------------------------------------------

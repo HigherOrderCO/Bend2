@@ -128,9 +128,10 @@ flattenPat d span book pat =
       Pat [s] moves [([ct], flattenPats (d+length fs) span book picks), ([var d], flattenPats (d+1) span book drops)] where
         p        = cut pp
         (ct0,fs) = ctrOf d p
-        -- Preserve location if the pattern was a located unit '()'
+        -- Preserve location if the pattern was a located unit '()' or tuple
         ct       = case (ct0, pp) of
                      (One, Loc sp (cut -> One)) -> Loc sp One
+                     (Tup a b, Loc sp (cut -> Tup _ _)) -> Loc sp (Tup a b)
                      _                           -> ct0
         (ps,ds)  = peelCtrCol d span book ct cs
         moves    = ms
@@ -184,9 +185,13 @@ peelCtrCol d span book (cut->k) ((((cut->p):ps),rhs):cs) =
     (Nil      , Var k _)   -> ((ps, bindVarByName k Nil rhs) : picks , ((p:ps),rhs) : drops)
     (Con _ _  , Con h t)   -> (((h:t:ps), rhs) : picks , drops)
     (Con _ _  , Var k _)   -> (((Var (k++"h") 0:Var (k++"t") 0:ps), bindVarByName k (Con (Var (k++"h") 0) (Var (k++"t") 0)) rhs) : picks , ((p:ps),rhs) : drops)
+    (Loc sp One, One    )   -> ((ps, rhs) : picks , drops)
     (One      , One    )   -> ((ps, rhs) : picks , drops)
+    (Loc sp One, Var k _)   -> ((ps, bindVarByName k One rhs) : picks , ((p:ps),rhs) : drops)
     (One      , Var k _)   -> ((ps, bindVarByName k One rhs) : picks , ((p:ps),rhs) : drops)
+    (Loc sp (Tup _ _), Tup a b) -> (((a:b:ps), rhs) : picks , drops)
     (Tup _ _  , Tup a b)   -> (((a:b:ps), rhs) : picks , drops)
+    (Loc sp (Tup _ _), Var k _) -> (((Var (k++"x") 0:Var (k++"y") 0:ps), bindVarByName k (Tup (Var (k++"x") 0) (Var (k++"y") 0)) rhs) : picks , ((p:ps),rhs) : drops)
     (Tup _ _  , Var k _)   -> (((Var (k++"x") 0:Var (k++"y") 0:ps), bindVarByName k (Tup (Var (k++"x") 0) (Var (k++"y") 0)) rhs) : picks , ((p:ps),rhs) : drops)
     (Sym s    , Sym s' )
                | s == s'   -> ((ps, rhs) : picks , drops)
