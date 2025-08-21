@@ -790,11 +790,29 @@ check d span book ctx term      goal =
     -- ----------------------------------- SigM
     -- ctx |- λ{(,):f} : ∀p:ΣA.B. R
     (SigM f, All (force book -> Sig a b) rT) -> do
-      check d span book ctx f $ All a (Lam "x" Nothing (\h -> All (App b h) (Lam "y" Nothing (\t -> App rT (Tup h t)))))
+      -- Check if this is constructor matching (first component is Enum)
+      let isConstructor = case force book a of
+            Enu _ -> True
+            _ -> False
+      -- Try to check the body
+      case check d span book ctx f $ All a (Lam "x" Nothing (\h -> All (App b h) (Lam "y" Nothing (\t -> App rT (Tup h t))))) of
+        Done () -> Done ()
+        Fail err -> if isConstructor
+          then Fail $ case err of
+            TypeMismatch s c g t _ -> TypeMismatch s c g t (Just "Are you putting extra or missing constructor fields?")
+            _ -> err
+          else Fail err
 
     -- Type mismatch for SigM
     (SigM f, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Sig (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0))) (Lam "_" Nothing (\_ -> Var "?" 0)))) (Just "Are you putting extra or missing constructor fields?")
+      -- Check if the expected type involves constructors
+      let isConstructorContext = case force book goal of
+            All (force book -> Sig (force book -> Enu _) _) _ -> True
+            _ -> False
+      let hint = if isConstructorContext
+                 then Just "Are you putting extra or missing constructor fields?"
+                 else Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Sig (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0))) (Lam "_" Nothing (\_ -> Var "?" 0)))) hint
 
     -- ctx |- a : A
     -- ctx |- b : B(a)
