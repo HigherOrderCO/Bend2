@@ -308,6 +308,7 @@ infer d span book@(Book defs names) ctx term =
           check d span book ctx x Uni
           bT <- infer d span book ctx b
           Done bT
+
         BitM f t -> do
           check d span book ctx x Bit
           fT <- infer d span book ctx f
@@ -315,6 +316,7 @@ infer d span book@(Book defs names) ctx term =
           if equal d book fT tT
           then Done $ fT
           else Done $ App (BitM fT tT) x
+
         NatM z (cut -> Lam k mt b) -> do
           check d span book ctx x Nat
           zT <- infer d span book ctx z
@@ -322,6 +324,7 @@ infer d span book@(Book defs names) ctx term =
           if equal d book sT zT
           then Done $ zT
           else Done $ App (NatM zT (Lam k (Just Nat) (\v -> bindVarByIndex d v sT))) x
+
         LstM n c -> do
           xT <- infer d span book ctx x
           case cut xT of
@@ -339,6 +342,31 @@ infer d span book@(Book defs names) ctx term =
                     _ -> Fail $ CantInfer (getSpan span body_h) (normalCtx book ctx)
                 _ -> Fail $ CantInfer (getSpan span c) (normalCtx book ctx)
             hT -> Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book hT)
+
+        SigM g -> do -- TODO: complete the Tup case \/
+          case cut x of
+            -- can't infer a dependent type from a single tuple
+            Tup _ _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
+            -- is `(App (SigM g) x)` some `λ{(,): λa.λb. body}(x)` with `x : Some_Dependent_Pair_Type`?
+            x_cut -> case cut g of
+              Lam a mta ab -> case cut (ab (Var a d)) of
+                Lam b mtb bb -> do
+                  xT <- infer d span book ctx x
+                  case cut xT of
+                    Sig aT bFunc -> do
+                      -- if so, use the the dependent type of x (i.e. Σa:aT.bT(a)) to infer about the type of `body` with `b : bT(a)`
+                      case cut bFunc of
+                        Lam kaT mtatv bFuncBod -> do
+                          let bT = (App bFunc (Var kaT d))
+                          -- check that aT and bT are types, and if so, proceed to infer the type of `body` (here denoted bb)
+                          check d span book ctx aT Set
+                          check (d+1) span book (extend ctx kaT (Var kaT d) aT) bT Set
+                          infer d span book (extend (extend ctx a (Var a d) aT) b (Var b (d+1)) bT) (bb (Var b (d+1))) 
+
+                        _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
+                    _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
+                _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
+              _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
         f -> do
           fT <- infer d span book ctx f
           case force book fT of
