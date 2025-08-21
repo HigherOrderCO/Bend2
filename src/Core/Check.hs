@@ -35,7 +35,7 @@ extend (Ctx ctx) k v t = Ctx (ctx ++ [(k, v, t)])
 -- Infer the type of a term
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
 infer d span book@(Book defs names) ctx term =
-  -- trace ("- infer: " ++ show d ++ " " ++ show term) $
+  trace ("- infer: " ++ show d ++ " " ++ show term) $
   case term of
 
     -- x : T in ctx
@@ -477,7 +477,7 @@ inferOp1Type d span book ctx op ta = case op of
 check :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result ()
 check d span book ctx (Loc l t) goal = check d l book ctx t goal 
 check d span book ctx term      goal =
-  -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
+  trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
   case (term, force book goal) of
     -- ctx |- 
     -- ----------- Era
@@ -615,7 +615,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for UniM
     (UniM f, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Uni (Lam "_" Nothing (\_ -> Set))))
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Uni (Lam "_" Nothing (\_ -> Var "?" 0))))
 
     -- ctx |- f : R({==})
     -- ------------------------------------------------------ BitM-Eql-Bt0-Bt0

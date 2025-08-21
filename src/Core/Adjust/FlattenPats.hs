@@ -121,14 +121,19 @@ flattenPat d span book pat =
       -- trace (">> var: " ++ show pat) $
       flattenPats d span book $ Pat ss ms (joinVarCol (d+1) span book s (((Var k i:ps),rhs):cs))
       -- flattenPats d span book $ Pat ss (ms++[(k,s)]) (joinVarCol (d+1) (Var k 0) (((Var k i:ps),rhs):cs))
-    flattenPatGo d book pat@(Pat (s:ss) ms cs@((((cut->p):_),_):_)) =
+    flattenPatGo d book pat@(Pat (s:ss) ms cs@(((pp:ps0),rhs0):cs0)) =
       -- trace (">> ctr: " ++ show p ++ " " ++ show pat
           -- ++ "\n>> - picks: " ++ show picks
           -- ++ "\n>> - drops: " ++ show drops) $
       Pat [s] moves [([ct], flattenPats (d+length fs) span book picks), ([var d], flattenPats (d+1) span book drops)] where
-        (ct,fs) = ctrOf d p
-        (ps,ds) = peelCtrCol d span book ct cs
-        moves   = ms
+        p        = cut pp
+        (ct0,fs) = ctrOf d p
+        -- Preserve location if the pattern was a located unit '()'
+        ct       = case (ct0, pp) of
+                     (One, Loc sp (cut -> One)) -> Loc sp One
+                     _                           -> ct0
+        (ps,ds)  = peelCtrCol d span book ct cs
+        moves    = ms
         -- moves   = ms ++ map (\ (s,i) -> (patOf (d+i) s, s)) (zip ss [0..])
         picks   = Pat (fs   ++ ss) ms ps
         drops   = Pat (var d : ss) ms ds

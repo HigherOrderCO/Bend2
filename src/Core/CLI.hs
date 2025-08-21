@@ -28,6 +28,7 @@ import Core.Parse.Book (doParseBook)
 import Core.Type
 import Core.Show
 import Core.WHNF
+-- debug import removed
 
 import qualified Target.JavaScript as JS
 import qualified Target.HVM as HVM
@@ -93,6 +94,8 @@ processFile :: FilePath -> IO ()
 processFile file = do
   book <- parseFile file
   let bookAdj = adjustBook book
+  -- debug removed
+  -- debug removed
   bookChk <- checkBook bookAdj
   runMain bookChk
 

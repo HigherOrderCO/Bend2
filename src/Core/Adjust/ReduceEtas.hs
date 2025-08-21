@@ -129,9 +129,13 @@ isEtaLong target depth = go id depth where
     Chk x t ->
       go (\h -> inj (Chk h t)) d x
     
-    -- Found Loc - add to injection
+    -- Found Loc: keep the location on the lambda-match itself instead of
+    -- pushing it into the body. This ensures that errors during the check of
+    -- the resulting λ-match are attributed to the original source span.
     Loc s x ->
-      go (\h -> inj (Loc s h)) d x
+      case go inj d x of
+        Just (lmat, injB) -> Just (Loc s lmat, injB)
+        Nothing           -> Nothing
     
     -- Found Log - add to injection
     Log s x ->
@@ -198,8 +202,8 @@ isEtaLong target depth = go id depth where
 
     -- Found application - check if it's (λ{...} x) or if we can pass through
     App f arg ->
-      case (cut f, cut arg) of
-        -- Check if f is a lambda-match and arg is our target variable
+      case (f, cut arg) of
+        -- Check if f is a lambda-match (possibly wrapped in Loc) and arg is our target variable
         (lmat, Var v_n _) | v_n == target && isLambdaMatch lmat ->
           Just (lmat, inj)
         -- Otherwise, pass through the application
@@ -213,6 +217,8 @@ isEtaLong target depth = go id depth where
 -- Inject the injection function into each case of a lambda-match
 injectInto :: (Term -> Term) -> Name -> Term -> Term
 injectInto inj scrutName term = case term of
+  -- Preserve location on the lambda-match node while injecting inside
+  Loc sp t -> Loc sp (injectInto inj scrutName t)
   -- Empty match - no cases to inject into
   EmpM -> EmpM
   
@@ -295,6 +301,7 @@ isLambdaMatch term = case term of
   SigM _   -> True
   SupM _ _ -> True
   EqlM _   -> True
+  Loc _ t  -> isLambdaMatch t
   _        -> False
 
 -- Shapes of lambda-matches, used to conservatively commute multi-arm frames

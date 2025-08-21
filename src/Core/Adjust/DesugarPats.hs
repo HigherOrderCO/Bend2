@@ -11,6 +11,7 @@ import Core.Show
 import Core.Type
 import Core.WHNF
 import qualified Data.Set as S
+import Debug.Trace (trace)
 
 desugarPats :: Int -> Span -> Term -> Term
 desugarPats d span (Var n i)       = Var n i
@@ -160,8 +161,20 @@ match d span x ms (([(cut -> Con h t)], c) : ([(cut -> Var k i)], v) : _) =
 -- match x { (): u }
 -- -----------------
 -- ~x { (): u }
-match d span x ms cs@(([(cut -> One)], u) : _) =
-  apps d (map snd ms) $ App (UniM (lam d (map fst ms) $ desugarPats d span u)) x
+-- Preserve location from the unit pattern: if the case pattern is a located
+-- '()', then the generated λ{(): ...} inherits that original location.
+match d span x ms (([p], u) : _) | isUnitPat p =
+  let mloc = unitPatLoc p in
+  let body = lam d (map fst ms) $ desugarPats d span u in
+  let uni  = maybe (UniM body) (\sp -> Loc sp (UniM body)) mloc in
+  apps d (map snd ms) $ App uni x
+  where
+    isUnitPat :: Term -> Bool
+    isUnitPat (cut -> One) = True
+    isUnitPat _            = False
+    unitPatLoc :: Term -> Maybe Span
+    unitPatLoc (Loc sp (cut -> One)) = Just sp
+    unitPatLoc _                         = Nothing
 
 -- match x { (a,b): p }
 -- --------------------

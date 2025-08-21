@@ -300,14 +300,21 @@ parseSym = label "enum symbol / constructor" $ try $ do
     , parseOldSymbol    -- @tag -> (&tag,())
     ]
   where
-    -- Parse @tag{...} constructor syntax (unchanged)
+    -- Parse @tag{...} constructor syntax with precise location propagation
+    -- We capture two spans:
+    -- - spTag: the span of "@tag" (for the &tag symbol)
+    -- - spCtor: the span of the whole constructor "@tag{...}" (for the trailing ())
     parseConstructor = try $ do
-      _ <- symbol "@"
-      n <- some (satisfy isNameChar)
-      _ <- symbol "{"
-      f <- sepEndBy parseTerm (symbol ",")
-      _ <- symbol "}"
-      return $ buildCtor n f
+      (spCtor, (spTag, tag, fields)) <- withSpan $ do
+        (spTag, tag) <- withSpan $ do
+          _ <- symbol "@"
+          n <- some (satisfy isNameChar)
+          pure n
+        _ <- symbol "{"
+        fs <- sepEndBy parseTerm (symbol ",")
+        _ <- symbol "}"
+        pure (spTag, tag, fs)
+      return $ buildCtorWithSpans spTag spCtor tag fields
     
     -- Parse new &tag bare symbol syntax  
     parseNewSymbol = try $ do
@@ -317,18 +324,24 @@ parseSym = label "enum symbol / constructor" $ try $ do
       skip
       return $ Sym n
     
-    -- Parse old @tag bare symbol syntax and desugar to (&tag,())
+    -- Parse old @tag bare symbol syntax and desugar to (&tag,()) with location on both
     parseOldSymbol = try $ do
-      _ <- symbol "@"
-      notFollowedBy (char '{')  -- make sure we are not @{...} or @tag{...}
-      n <- lexeme $ some (satisfy isNameChar)
-      -- Desugar @Foo to (&Foo,())
-      return $ Tup (Sym n) One
+      (spTag, tag) <- withSpan $ do
+        _ <- symbol "@"
+        notFollowedBy (char '{')  -- make sure we are not @{...} or @tag{...}
+        lexeme $ some (satisfy isNameChar)
+      -- Desugar @Foo to (&Foo,()) and attach the span to both the symbol and the unit
+      let sym = Loc spTag (Sym tag)
+      let one = Loc spTag One
+      return $ Tup sym one
     
-    buildCtor :: String -> [Term] -> Term
-    buildCtor tag fs =
-      let tup = foldr Tup One fs       -- Build (f1,(f2,(...,()))
-      in  Tup (Sym tag) tup            -- (&Tag,(f1,(f2,(...,()))))
+    -- Build (&tag, (f1, (f2, ... , Loc spCtor ())))
+    buildCtorWithSpans :: Span -> Span -> String -> [Term] -> Term
+    buildCtorWithSpans spTag spCtor tag fs =
+      let end  = Loc spCtor One
+          tup  = foldr Tup end fs
+          sym  = Loc spTag (Sym tag)
+      in Tup sym tup
 
 -- | Syntax: match expr: case pat: body | match expr { case pat: body }
 parsePat :: Parser Term
