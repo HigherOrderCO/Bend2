@@ -204,7 +204,10 @@ match d span x ms (([tup], p) : _) | isTupPat tup =
 -- ~x { @S1:b1 ; @S2:b2 ; ... ; d }
 match d span x ms cs@(([(cut -> Sym _)], _) : _) =
   let (cBranches, defBranch) = collect cs
-  in apps d (map snd ms) $ App (EnuM cBranches defBranch) x
+      enumMatch = case span of
+        Span (0,0) (0,0) _ _ -> EnuM cBranches defBranch  -- noSpan case
+        _                    -> Loc span (EnuM cBranches defBranch)
+  in apps d (map snd ms) $ App enumMatch x
   where
     collect :: [Case] -> ([(String, Term)], Term)
     collect [] = ([], Lam "_" Nothing $ \_ -> lam d (map fst ms) $ One)

@@ -135,13 +135,11 @@ isEtaLong target depth = go id depth False where
     Tst x ->
       go inj d True x
     
-    -- Found Loc: keep the location on the lambda-match itself instead of
-    -- pushing it into the body. This ensures that errors during the check of
-    -- the resulting λ-match are attributed to the original source span.
+    -- Found Loc - check if it wraps a lambda-match
     Loc s x ->
-      case go inj d hadT x of
-        Just (lmat, injB, hadT') -> Just (Loc s lmat, injB, hadT')
-        Nothing                   -> Nothing
+      if isLambdaMatch x
+        then go inj d hadT (Loc s x)  -- Don't inject Loc if it wraps a lambda-match
+        else go (\h -> inj (Loc s h)) d hadT x  -- Otherwise, add to injection
     
     -- Found Log - add to injection
     Log s x ->
@@ -209,9 +207,13 @@ isEtaLong target depth = go id depth False where
 
     -- Found application - check if it's (λ{...} x) or if we can pass through
     App f arg ->
-      case (f, cut arg) of
-        -- Check if f is a lambda-match (possibly wrapped in Loc) and arg is our target variable
-        (lmat, Var v_n _) | v_n == target && isLambdaMatch lmat ->
+      case (f, cut f, cut arg) of
+        -- Check if f is a Loc-wrapped lambda-match and arg is our target variable
+        -- Keep the Loc wrapper on the lambda-match
+        (Loc s lmat, _, Var v_n _) | v_n == target && isLambdaMatch lmat ->
+          Just (Loc s lmat, inj, hadT)
+        -- Check if f is a lambda-match and arg is our target variable
+        (_, lmat, Var v_n _) | v_n == target && isLambdaMatch lmat ->
           Just (lmat, inj, hadT)
         -- Otherwise, pass through the application
         _ -> go (\h -> inj (app h arg)) d hadT f
@@ -224,8 +226,9 @@ isEtaLong target depth = go id depth False where
 -- Inject the injection function into each case of a lambda-match
 injectInto :: (Term -> Term) -> Name -> Term -> Term
 injectInto inj scrutName term = case term of
-  -- Preserve location on the lambda-match node while injecting inside
-  Loc sp t -> Loc sp (injectInto inj scrutName t)
+  -- If the lambda-match is wrapped in Loc, preserve it
+  Loc s lmat -> Loc s (injectInto inj scrutName lmat)
+  
   -- Empty match - no cases to inject into
   EmpM -> EmpM
   
