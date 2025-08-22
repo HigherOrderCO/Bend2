@@ -134,7 +134,10 @@ infer d span book@(Book defs names) ctx term =
 
     -- Can't infer UniM
     UniM f -> do
-      Fail $ CantInfer span (normalCtx book ctx)
+      fT <- infer d span book ctx f
+      -- Done $ All Uni (Lam "_" (Just Uni) (\_ -> fT))
+      Done $ All Uni (UniM fT) 
+      -- Fail $ CantInfer span (normalCtx book ctx)
 
     -- ctx |-
     -- ----------------- Bit
@@ -156,7 +159,10 @@ infer d span book@(Book defs names) ctx term =
 
     -- Can't infer BitM
     BitM f t -> do
-      Fail $ CantInfer span (normalCtx book ctx)
+      fT <- infer d span book ctx f
+      tT <- infer d span book ctx t
+      Done $ All Bit (BitM fT tT)
+      -- Fail $ CantInfer span (normalCtx book ctx)
 
     -- ctx |-
     -- ---------------- Nat
@@ -179,7 +185,16 @@ infer d span book@(Book defs names) ctx term =
 
     -- Can't infer NatM
     NatM z s -> do
-      Fail $ CantInfer span (normalCtx book ctx)
+      case cut s of
+        Lam p mtp bp -> do
+          zT <- infer d span book ctx z
+          sT <- infer d span book (extend ctx p (Var p d) Nat) (bp (Var p d))
+          Done $ All Nat (NatM zT sT)
+        _ -> do
+          zT <- infer d span book ctx z
+          sT <- infer d span book ctx s
+          Done $ All Nat (NatM zT sT)
+      -- Fail $ CantInfer span (normalCtx book ctx)
 
     -- ctx |- T : Set
     -- ---------------- Lst
@@ -278,7 +293,7 @@ infer d span book@(Book defs names) ctx term =
         UniM b -> do
           check d span book ctx x Uni
           -- bT <- infer d span book ctx b
-          bT <- infer d span book (specializeCtx book x One ctx) b
+          bT <- infer d span book (specializeCtx book x Bt0 ctx) b
           Done bT
 
         BitM f t -> do
@@ -329,7 +344,7 @@ infer d span book@(Book defs names) ctx term =
                 Lam a mta ab ->
                   case cut (ab (Var a d)) of
                     Lam b mtb bb -> do
-                      -- xTinfer <- infer d span book ctx x 
+                      xTinfer <- infer d span book ctx x 
                       xTinfer <- infer d span book ctx x 
                       let xT = case cut xTinfer of -- when the Sig is from modeling an ADT, use the ADT explicitly
                             Ref k i -> case getDefn book k of
