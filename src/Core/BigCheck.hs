@@ -8,7 +8,7 @@ module Core.BigCheck where
 import Control.Monad (unless)
 import Control.Monad (unless, foldM)
 import Data.List (find)
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, fromMaybe, listToMaybe)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 import qualified Data.Map as M
@@ -17,7 +17,7 @@ import qualified Data.Set as S
 import Debug.Trace
 
 import Core.Bind
-import Core.Equal
+import Core.BigEqual
 import Core.Rewrite
 import Core.Type
 import Core.Show
@@ -28,6 +28,15 @@ import Core.WHNF
 
 extend :: Ctx -> Name -> Term -> Term -> Ctx
 extend (Ctx ctx) k v t = Ctx (ctx ++ [(k, v, t)])
+
+specializeCtx :: Book -> Term -> Term -> Ctx -> Ctx
+specializeCtx book (cut -> Var nam idx) val (Ctx ctxList) = Ctx (map specializeEntry ctxList)
+ where
+   specializeEntry (k, v, typ) = 
+     let substitutedType = bindVarByIndex idx val typ
+         normalizedType = normal book substitutedType
+     in (k, v, normalizedType)
+specializeCtx book _ _ ctx = ctx
 
 -- Type Checker
 -- ------------
@@ -185,7 +194,10 @@ infer d span book@(Book defs names) ctx term =
 
     -- Can't infer Con
     Con h t -> do
-      Fail $ CantInfer span (normalCtx book ctx)
+      hT <- infer d span book ctx h
+      check d span book ctx t (Lst hT)
+      Done $ Lst hT
+      -- Fail $ CantInfer span (normalCtx book ctx)
 
     -- Can't infer LstM
     LstM n c -> do
@@ -227,9 +239,10 @@ infer d span book@(Book defs names) ctx term =
     -- --------------------- Tup
     -- ctx |- (a,b) : Σx:A.B
     Tup a b -> do
-      aT <- infer d span book ctx a
-      bT <- infer d span book ctx b
-      Done (Sig aT (Lam "_" Nothing (\_ -> bT)))
+      Fail $ CantInfer span (normalCtx book ctx)
+      -- aT <- infer d span book ctx a
+      -- bT <- infer d span book ctx b
+      -- Done (Sig aT (Lam "_" Nothing (\_ -> bT)))
 
     -- Can't infer SigM
     SigM f -> do
@@ -260,59 +273,20 @@ infer d span book@(Book defs names) ctx term =
     -- ctx |- x : A
     -- ------------------ App
     -- ctx |- f(x) : B(x)
-    -- App (cut -> UniM b) x -> do
-    --   check d span book ctx x Uni
-    --   bT <- infer d span book ctx b
-    --   Done bT
-    -- App (cut -> BitM f t) x -> do
-    --   check d span book ctx x Bit
-    --   fT <- infer d span book ctx f
-    --   tT <- infer d span book ctx t
-    --   if equal d book fT tT
-    --   then Done $ fT
-    --   else Done $ App (BitM fT tT) x
-    -- App (cut -> NatM z (cut -> Lam k mt b)) x -> do
-    --   check d span book ctx x Nat
-    --   zT <- infer d span book ctx z
-    --   sT <- infer (d+1) span book (extend ctx k (Var k d) Nat) (b (Var k d))
-    --   if equal d book sT zT
-    --   then Done $ zT
-    --   else Done $ App (NatM zT (Lam k (Just Nat) (\v -> bindVarByIndex d v sT))) x
-    -- App (cut -> LstM n (cut -> Lam h mth bh)) x -> do
-    --   xT <- infer d span book ctx x
-    --   case cut xT of
-    --     Lst hT -> do
-    --       nT <- infer d span book ctx n
-    --       case cut (bh (Var h d)) of
-    --         Lam t mtt bt -> do
-    --           cT <- infer (d+2) span book (extend (extend ctx h (Var h d) hT) t (Var t (d+1)) (Lst hT)) (bt (Var t (d+1)))
-    --           if equal d book nT cT
-    --           then Done nT
-    --           else Done $ App (LstM nT (Lam h (Just hT) (\v -> bindVarByIndex d v (Lam t (Just (Lst hT)) (\v2 -> bindVarByIndex (d+1) v2 cT))))) x
-    --         _            -> Done $ Set
-    --     hT      -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> Var "_" 0))))
-    --                                                              (normal book (All hT                (Lam "_" Nothing (\_ -> Var "_" 0))))
-  -- -- Enum
-  --   App f x -> do
-  --     fT <- infer d span book ctx f
-  --     case force book fT of
-  --       All fA fB -> do
-  --         check d span book ctx x fA
-  --         Done (App fB x)
-  --       _ -> do
-  --         Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book fT)
-
     App f x -> do
       case cut f of
         UniM b -> do
           check d span book ctx x Uni
-          bT <- infer d span book ctx b
+          -- bT <- infer d span book ctx b
+          bT <- infer d span book (specializeCtx book x One ctx) b
           Done bT
 
         BitM f t -> do
           check d span book ctx x Bit
-          fT <- infer d span book ctx f
-          tT <- infer d span book ctx t
+          -- fT <- infer d span book ctx f
+          -- tT <- infer d span book ctx t
+          fT <- infer d span book (specializeCtx book x Bt0 ctx) f
+          tT <- infer d span book (specializeCtx book x Bt1 ctx) t
           if equal d book fT tT
           then Done $ fT
           else Done $ App (BitM fT tT) x
@@ -320,7 +294,8 @@ infer d span book@(Book defs names) ctx term =
         NatM z (cut -> Lam k mt b) -> do
           check d span book ctx x Nat
           zT <- infer d span book ctx z
-          sT <- infer (d+1) span book (extend ctx k (Var k d) Nat) (b (Var k d))
+          -- sT <- infer (d+1) span book (extend ctx k (Var k d) Nat) (b (Var k d))
+          sT <- infer (d+1) span book (extend (specializeCtx book x (Suc (Var k d)) ctx) k (Var k d) Nat) (b (Var k d))
           if equal d book sT zT
           then Done $ zT
           else Done $ App (NatM zT (Lam k (Just Nat) (\v -> bindVarByIndex d v sT))) x
@@ -335,7 +310,8 @@ infer d span book@(Book defs names) ctx term =
                   let body_h = (bh (Var h d))
                   case cut body_h of
                     Lam t mtt bt -> do
-                      cT <- infer (d+2) span book (extend (extend ctx h (Var h d) hT) t (Var t (d+1)) (Lst hT)) (bt (Var t (d+1)))
+                      -- cT <- infer (d+2) span book (extend (extend ctx h (Var h d) hT) t (Var t (d+1)) (Lst hT)) (bt (Var t (d+1)))
+                      cT <- infer (d+2) span book (extend (extend (specializeCtx book x (Con (Var h d) (Var t (d+1))) ctx) h (Var h d) hT) t (Var t (d+1)) (Lst hT)) (bt (Var t (d+1)))
                       if equal d book nT cT
                       then Done nT
                       else Done $ App (LstM nT (Lam h (Just hT) (\v -> bindVarByIndex d v (Lam t (Just (Lst hT)) (\v2 -> bindVarByIndex (d+1) v2 cT))))) x
@@ -348,25 +324,65 @@ infer d span book@(Book defs names) ctx term =
             -- can't infer a dependent type from a single tuple
             Tup _ _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
             -- is `(App (SigM g) x)` some `λ{(,): λa.λb. body}(x)` with `x : Some_Dependent_Pair_Type`?
-            x_cut -> case cut g of
-              Lam a mta ab -> case cut (ab (Var a d)) of
-                Lam b mtb bb -> do
-                  xT <- infer d span book ctx x
-                  case cut xT of
-                    Sig aT bFunc -> do
-                      -- if so, use the the dependent type of x (i.e. Σa:aT.bT(a)) to infer about the type of `body` with `b : bT(a)`
-                      case cut bFunc of
-                        Lam kaT mtatv bFuncBod -> do
-                          let bT = (App bFunc (Var kaT d))
-                          -- check that aT and bT are types, and if so, proceed to infer the type of `body` (here denoted bb)
-                          check d span book ctx aT Set
-                          check (d+1) span book (extend ctx kaT (Var kaT d) aT) bT Set
-                          infer (d+2) span book (extend (extend ctx a (Var a d) aT) b (Var b (d+1)) bT) (bb (Var b (d+1))) 
+            x_cut ->
+              case cut g of
+                Lam a mta ab ->
+                  case cut (ab (Var a d)) of
+                    Lam b mtb bb -> do
+                      -- xTinfer <- infer d span book ctx x 
+                      xTinfer <- infer d span book ctx x 
+                      let xT = case cut xTinfer of -- when the Sig is from modeling an ADT, use the ADT explicitly
+                            Ref k i -> case getDefn book k of
+                              Just (_,cut -> y@(Sig (cut -> Enu _) _),_) -> y
+                              _ -> normal book xTinfer
+                            _ -> normal book xTinfer
+                          
+                      -- traceM ("inferring " ++ show term ++ " with typeof(" ++ show x ++"): " ++ show xT)
+                      case cut xT of
+                        Sig aT bFunc -> do
+                          -- if so, use the the dependent type of x (i.e. Σa:aT.bT(a)) to infer about the type of `body` with `b : bT(a)`
+                          case cut bFunc of
+                            Lam kaT mtatv bFuncBod -> do
+                              -- traceM ("bT in SIG: " ++ show (App bFunc (Var a d)) ++ " --from-- " ++ show term ++ "\n-ctx:\n"++show ctx ++ "\n")
+                              let bT = (App bFunc (Var a d))
+                              -- check that aT and bT are types, and if so, proceed to infer the type of `body` (here denoted bb)
+                              check d span book ctx aT Set
+                              check (d+1) span book (extend ctx a (Var a d) aT) bT Set
+                              infer (d+2) span book (extend (extend ctx a (Var a d) aT) b (Var b (d+1)) (normal book bT)) (bb (Var b (d+1))) 
 
-                        _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
-                    _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
-                _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
-              _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
+                            _ -> Fail $ CantInfer (getSpan span bFunc) (normalCtx book ctx)
+                        App f' x' | equal d book x' x -> do
+                          Fail $ CantInfer (getSpan span term) (normalCtx book ctx)
+                        _ -> do
+                          -- traceM ("Will fail infer " ++ show term ++ " with xT = " ++ show (normal book xT) ++ " and ctx: \n" ++ show ctx)
+                          Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (Var "Σ_:_ . _" 0) xT
+                    _ -> Fail $ CantInfer (getSpan span (ab (Var a d))) (normalCtx book ctx)
+                _ -> Fail $ CantInfer (getSpan span g) (normalCtx book ctx)
+
+        EnuM cs Nothing -> do
+          xT <- infer d span book ctx x
+          case normal book xT of
+            Enu syms -> do
+              let mbY = listToMaybe [(ks,func) | (_, (_, Sig (Enu ks) func, _)) <- M.toList defs, ks == syms]
+              case mbY of 
+                Just (ks, func) | ks == syms -> do
+                  -- traceM ("about to infer all csTypes with\n ks: " ++ show ks ++ "\n func: " ++ show func)
+                  -- traceM (" cases: " ++ show cs)
+                  -- traceM (" term: " ++ show term)
+                  csTypes <- mapM (\(s, t) -> do { ty <- infer d span book (specializeCtx book x (Sym s) ctx) t; return (s, ty) }) cs
+                  traceM (" csTypes: " ++ show csTypes ++ "\n")
+                  Done $ App (EnuM csTypes Nothing) x
+
+                  -- let allEqual = case csTypes of { [] -> True; ((_,t):rest) -> all (\(_,t') -> equal d book t t') rest }
+                  --     res = App (EnuM csTypes Nothing) x
+                  -- if allEqual
+                  -- then Done res
+                  -- else Done res
+                _ -> do
+                  traceM ("can't infer EnuM: " ++ show term ++ " after finding mbY = " ++ show mbY)
+                  Fail $ CantInfer (getSpan span term) (normalCtx book ctx)
+            _ -> Fail $ CantInfer (getSpan span term) (normalCtx book ctx)
+
         f -> do
           fT <- infer d span book ctx f
           case force book fT of
@@ -610,6 +626,7 @@ check d span book ctx term      goal =
     -- ctx |- f(v) : T
     -- -------------------------- Use
     -- ctx |- (use k = v ; f) : T
+    -- (Use k v f, _) -> trace ("- propagating: Use " ++ k ++ " = " ++ show v) $ do
     (Use k v f, _) -> do
       check d span book ctx (f v) goal
 
@@ -1113,7 +1130,8 @@ verify :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result ()
 verify d span book ctx term goal = do
   t <- infer d span book ctx term
   if
-    trace ("-verify: " ++ show term ++ " :: " ++ show goal ++ " ::?:: " ++ show t) $
+    -- trace ("-verify: " ++ show term ++ " :: " ++ show goal ++ " ::?:: " ++ show t) $
+    trace ("-verify: " ++ show (normal book term) ++ " :: " ++ show (normal book goal) ++ " ::?:: " ++ show (normal book t)) $
     equal d book t goal
     then Done ()
     else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book t)

@@ -30,6 +30,7 @@ library
                       Core.BigCheck,
                       Core.Deps,
                       Core.Equal,
+                      Core.BigEqual,
                       Core.Adjust.ReduceEtas,
                       Core.Adjust.FlattenPats,
                       Core.Adjust.DesugarPats,
