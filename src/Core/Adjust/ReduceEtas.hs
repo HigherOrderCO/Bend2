@@ -139,9 +139,9 @@ isEtaLong target depth = go id depth False where
     -- pushing it into the body. This ensures that errors during the check of
     -- the resulting λ-match are attributed to the original source span.
     Loc s x ->
-      case go inj d x of
-        Just (lmat, injB) -> Just (Loc s lmat, injB)
-        Nothing           -> Nothing
+      case go inj d hadT x of
+        Just (lmat, injB, hadT') -> Just (Loc s lmat, injB, hadT')
+        Nothing                   -> Nothing
     
     -- Found Log - add to injection
     Log s x ->

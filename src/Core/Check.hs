@@ -124,7 +124,7 @@ infer d span book@(Book defs names) ctx term =
 
     -- Can't infer Trust
     Tst _ -> do
-      Fail $ CantInfer span (normalCtx book ctx)
+      Fail $ CantInfer span (normalCtx book ctx) Nothing
 
     -- ctx |-
     -- ---------------- Set
