@@ -797,20 +797,29 @@ check d span book ctx term      goal =
     -- -------------------------------------------------- EnuM
     -- ctx |- λ{cs;df} : ∀x:enum{syms}. R
     (EnuM cs df, All (force book -> Enu syms) rT) -> do
+      mapM_ (\(s, t) -> check d span book ctx (Sym s) (Enu syms)) cs  
+
       mapM_ (\(s, t) -> check d span book ctx t (App rT (Sym s))) cs
+
       let covered_syms = map fst cs
       let all_covered = length covered_syms >= length syms
                      && all (`elem` syms) covered_syms
       if not all_covered
         then do
-          case df of
-            (cut -> Lam k Nothing (unlam k d -> One)) -> do
-              Fail $ IncompleteMatch span (normalCtx book ctx) Nothing
-            otherwise -> do
+          if isDefaultOne df
+            then Fail $ IncompleteMatch span (normalCtx book ctx) Nothing
+            else do
               let enu_type = Enu syms
               let lam_goal = All enu_type (Lam "_" Nothing (\v -> App rT v))
               check d span book ctx df lam_goal
         else return ()
+      where
+        isDefaultOne :: Term -> Bool
+        isDefaultOne term = go (cut term) where
+          go (Lam _ Nothing f) = go (f (Var "_" 0))
+          go (Use _ _ f) = go (f (Var "_" 0))
+          go One = True
+          go _ = False
 
     -- Type mismatch for EnuM
     (EnuM cs df, _) -> do
