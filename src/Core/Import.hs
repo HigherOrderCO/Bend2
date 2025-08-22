@@ -114,11 +114,15 @@ hasSlash :: String -> Bool
 hasSlash = any (== '/')
 
 bookNames :: Book -> S.Set Name
-bookNames (Book defs _) = S.fromList (M.keys defs)
+bookNames book = S.fromList (M.keys (bookDefs book))
 
 mergeBooks :: Book -> Book -> Book
-mergeBooks (Book defs1 names1) (Book defs2 names2) =
-  Book (M.union defs1 defs2) (names1 ++ filter (`notElem` names1) names2)
+mergeBooks book1 book2 =
+  Book 
+    { bookDefs = M.union (bookDefs book1) (bookDefs book2)
+    , bookOrder = bookOrder book1 ++ filter (`notElem` bookOrder book1) (bookOrder book2)
+    , bookTypes = M.union (bookTypes book1) (bookTypes book2)
+    }
 
 
 

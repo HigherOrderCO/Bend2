@@ -84,7 +84,12 @@ import Core.WHNF
 -- book adjustment where recursive references aren't available yet.
 adjust :: Book -> Term -> Term
 adjust book term =
-  -- trace ("done: " ++ show done) $
+  -- trace ("ADJUST input: " ++ show term) $
+  -- trace ("ADJUST flat: " ++ show flat) $
+  -- trace ("ADJUST npat: " ++ show npat) $
+  -- trace ("ADJUST nfrk: " ++ show nfrk) $
+  -- trace ("ADJUST etas: " ++ show etas) $
+  -- trace ("ADJUST done: " ++ show done) $
   done
   where
     flat = flattenPats 0 noSpan book term
@@ -112,22 +117,22 @@ type AdjustState = (Book, S.Set Name)
 -- This is crucial for functions like `flatten` which may look up references.
 -- After adjusting all definitions, it checks for free variables.
 adjustBook :: Book -> Book
-adjustBook book@(Book defs names) =
-  let adjustedBook = fst $ execState (mapM_ (adjustDef book S.empty adjust) (M.keys defs)) (Book M.empty names, S.empty)
+adjustBook book =
+  let adjustedBook = fst $ execState (mapM_ (adjustDef book S.empty adjust) (M.keys (bookDefs book))) (Book M.empty (bookOrder book) (bookTypes book), S.empty)
   in adjustedBook -- checkFreeVarsInBook disabled: not in main branch
 
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
 adjustBookWithPats :: Book -> Book
-adjustBookWithPats book@(Book defs names) =
-  let adjustedBook = fst $ execState (mapM_ (adjustDef book S.empty adjustWithPats) (M.keys defs)) (Book M.empty names, S.empty)
+adjustBookWithPats book =
+  let adjustedBook = fst $ execState (mapM_ (adjustDef book S.empty adjustWithPats) (M.keys (bookDefs book))) (Book M.empty (bookOrder book) (bookTypes book), S.empty)
   in adjustedBook -- checkFreeVarsInBook disabled: not in main branch
 
 -- | Checks all definitions in a book for free variables.
 -- This should be called after all adjustments are complete.
 checkFreeVarsInBook :: Book -> Book
-checkFreeVarsInBook book@(Book defs names) =
+checkFreeVarsInBook book =
   case [ (name, frees) | 
-         (name, (_, term, typ)) <- M.toList defs,
+         (name, (_, term, typ)) <- M.toList (bookDefs book),
          let freeInTerm = freeVars S.empty term,
          let freeInType = freeVars S.empty typ,
          let frees = S.union freeInTerm freeInType,
@@ -171,7 +176,7 @@ adjustDef book visiting adjustFn name = do
 
         -- 4. Update the state with the newly adjusted definition.
         -- The name is added to the `adjustedSet` to mark it as complete.
-        modify $ \(Book adjMap names, doneSet) ->
-          let newAdjMap  = M.insert name (inj, adjTerm, adjType) adjMap
+        modify $ \(adjBook, doneSet) ->
+          let newAdjMap  = M.insert name (inj, adjTerm, adjType) (bookDefs adjBook)
               newDoneSet = S.insert name doneSet
-          in (Book newAdjMap names, newDoneSet)
+          in (Book newAdjMap (bookOrder adjBook) (bookTypes adjBook), newDoneSet)
