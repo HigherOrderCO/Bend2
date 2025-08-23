@@ -193,13 +193,12 @@ infer d span book@(Book defs names) ctx term =
       check d span book ctx n Nat
       Done Nat
 
-    -- Can't infer NatM
     NatM z s -> do
       case cut s of
         Lam p mtp bp -> do
           zT <- infer d span book ctx z
           sT <- infer d span book (extend ctx p (Var p d) Nat) (bp (Var p d))
-          Done $ All Nat (NatM zT sT)
+          Done $ All Nat (NatM zT (Lam p (Just Nat) (\_ -> sT)))
         _ -> do
           zT <- infer d span book ctx z
           sT <- infer d span book ctx s
@@ -325,24 +324,24 @@ infer d span book@(Book defs names) ctx term =
         --   then Done $ zT
         --   else Done $ App (NatM zT (Lam k (Just Nat) (\v -> bindVarByIndex d v sT))) x
         --
-        LstM n c -> do
-          xT <- infer d span book ctx x
-          case cut xT of
-            Lst hT -> do
-              nT <- infer d span book ctx n
-              case cut c of
-                Lam h mth bh -> do
-                  let body_h = (bh (Var h d))
-                  case cut body_h of
-                    Lam t mtt bt -> do
-                      -- cT <- infer (d+2) span book (extend (extend ctx h (Var h d) hT) t (Var t (d+1)) (Lst hT)) (bt (Var t (d+1)))
-                      cT <- infer (d+2) span book (extend (extend (specializeCtx book x (Con (Var h d) (Var t (d+1))) ctx) h (Var h d) hT) t (Var t (d+1)) (Lst hT)) (bt (Var t (d+1)))
-                      if equal d book nT cT
-                      then Done nT
-                      else Done $ App (LstM nT (Lam h (Just hT) (\v -> bindVarByIndex d v (Lam t (Just (Lst hT)) (\v2 -> bindVarByIndex (d+1) v2 cT))))) x
-                    _ -> Fail $ CantInfer (getSpan span body_h) (normalCtx book ctx)
-                _ -> Fail $ CantInfer (getSpan span c) (normalCtx book ctx)
-            hT -> Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book hT)
+        -- LstM n c -> do
+        --   xT <- infer d span book ctx x
+        --   case cut xT of
+        --     Lst hT -> do
+        --       nT <- infer d span book ctx n
+        --       case cut c of
+        --         Lam h mth bh -> do
+        --           let body_h = (bh (Var h d))
+        --           case cut body_h of
+        --             Lam t mtt bt -> do
+        --               -- cT <- infer (d+2) span book (extend (extend ctx h (Var h d) hT) t (Var t (d+1)) (Lst hT)) (bt (Var t (d+1)))
+        --               cT <- infer (d+2) span book (extend (extend (specializeCtx book x (Con (Var h d) (Var t (d+1))) ctx) h (Var h d) hT) t (Var t (d+1)) (Lst hT)) (bt (Var t (d+1)))
+        --               if equal d book nT cT
+        --               then Done nT
+        --               else Done $ App (LstM nT (Lam h (Just hT) (\v -> bindVarByIndex d v (Lam t (Just (Lst hT)) (\v2 -> bindVarByIndex (d+1) v2 cT))))) x
+        --             _ -> Fail $ CantInfer (getSpan span body_h) (normalCtx book ctx)
+        --         _ -> Fail $ CantInfer (getSpan span c) (normalCtx book ctx)
+        --     hT -> Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book hT)
         --
         -- SigM g -> do -- TODO: complete the Tup case \/
         --   case cut x of
@@ -626,6 +625,7 @@ check :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result ()
 check d span book ctx (Loc l t) goal = check d l book ctx t goal 
 check d span book ctx term      goal =
   -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
+  -- trace ("- check: " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
   -- trace ("- ctx:\n" ++ show ctx) $
   case (term, force book goal) of
     -- ctx |- 
@@ -1150,17 +1150,68 @@ check d span book ctx term      goal =
       check d span book (rewriteCtx d book x Zer ctx) z (rewrite d book x Zer goal)
       case cut s of
         Lam p mtb bp -> do
-          check (d+1) span book (extend ctx p (Var p d) Nat) (rewrite d book x (Suc (Var p d)) (bp (Var p d))) (rewrite d book x (Suc (Var p d)) goal)
+          let ctxWithP     = (extend ctx p (Var p d) Nat)
+          let ctxWithSucP  = (rewriteCtx (d+1) book x (Suc (Var p d)) ctxWithP)
+          let bodyWithSucP = (rewrite (d+1) book x (Suc (Var p d)) (bp (Var p d)))
+          let goalWithSucP = (rewrite (d+1) book x (Suc (Var p d)) goal)
+          check (d+1) span book ctxWithSucP bodyWithSucP goalWithSucP
         _ -> do
           check d span book ctx s (All Nat (Lam "_" Nothing (\_ -> goal)))
+    
+    (App (cut -> LstM z s) x, _) -> do -- TODO: perhaps add a case for x = [], checking only `z`
+      xT <- infer d span book ctx x
+      check d span book (rewriteCtx d book x Nil ctx) z (rewrite d book x Nil goal)
+      case cut $ normal book xT of 
+        Lst hT ->
+          case cut s of
+            Lam h mth bh -> do
+              case cut (bh (Var h d)) of
+                Lam t mtt bt -> do
+                  let hV = (Var h d)
+                  let tV = (Var t (d+1))
+                  let ctxWithHT      = extend (extend ctx h hV hT) t tV (Lst hT)
+                  let ctxWithConsHT  = (rewriteCtx (d+2) book x (Con hV tV) ctxWithHT)
+                  let bodyWithConsHT = (rewrite (d+2) book x (Con hV tV) (bt (Var t (d+1))))
+                  let goalWithConsHT = (rewrite (d+2) book x (Con hV tV) goal)
+                  check (d+2) span book ctxWithConsHT bodyWithConsHT goalWithConsHT
+                _ -> do
+                  check d span book ctx s (All hT (Lam "_" Nothing (\_ -> (All (Lst hT) (Lam "_" Nothing (\_ -> goal))))))
+            _ -> do
+              check d span book ctx s (All hT (Lam "_" Nothing (\_ -> (All (Lst hT) (Lam "_" Nothing (\_ -> goal))))))
+        xT -> Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book xT)
     
     (App (cut -> SigM g) x, _) -> do
       xT <- infer d span book ctx x
       case cut xT of
-        Sig aT (cut -> Lam a mta bTFunc) -> do
-          let bT = App (Lam a mta bTFunc) (Var a d)
-          check d span book ctx g (All aT (Lam a (Just aT) (\_ -> All bT (Lam "_" Nothing (\_ -> goal)))))
+        Sig aT bTFunc@(cut -> Lam y mty yb) -> do
+          case cut g of
+            Lam l mtl lb -> do
+              let bT = App bTFunc (Var l d)
+              check d span book ctx g (All aT (Lam l Nothing (\_ -> All bT (Lam "_" Nothing (\_ -> goal)))))
+            _ -> verify d span book ctx term goal
         _ -> verify d span book ctx term goal
+    
+    -- (App (cut -> EnuM cs Nothing) x, _) -> do -- TODO: perhaps add a case for x = [], checking only `z`
+    --   xT <- infer d span book ctx x
+    --   check d span book (rewriteCtx d book x Nil ctx) z (rewrite d book x Nil goal)
+    --   case cut $ normal book xT of 
+    --     Lst hT ->
+    --       case cut s of
+    --         Lam h mth bh -> do
+    --           case cut (bh (Var h d)) of
+    --             Lam t mtt bt -> do
+    --               let hV = (Var h d)
+    --               let tV = (Var t (d+1))
+    --               let ctxWithHT      = extend (extend ctx h hV hT) t tV (Lst hT)
+    --               let ctxWithConsHT  = (rewriteCtx (d+2) book x (Con hV tV) ctxWithHT)
+    --               let bodyWithConsHT = (rewrite (d+2) book x (Con hV tV) (bt (Var t (d+1))))
+    --               let goalWithConsHT = (rewrite (d+2) book x (Con hV tV) goal)
+    --               check (d+2) span book ctxWithConsHT bodyWithConsHT goalWithConsHT
+    --             _ -> do
+    --               check d span book ctx s (All hT (Lam "_" Nothing (\_ -> (All (Lst hT) (Lam "_" Nothing (\_ -> goal))))))
+    --         _ -> do
+    --           check d span book ctx s (All hT (Lam "_" Nothing (\_ -> (All (Lst hT) (Lam "_" Nothing (\_ -> goal))))))
+    --     xT -> Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book xT)
 
     -- Default case: try to infer and verify
     (term, _) -> do
@@ -1177,7 +1228,7 @@ verify d span book ctx term goal = do
   t <- infer d span book ctx term
   if
     -- trace ("-verify: " ++ show term ++ " :: " ++ show goal ++ " ::?:: " ++ show t) $
-    trace ("-verify: " ++ show (normal book term) ++ " :: " ++ show (normal book goal) ++ " ::?:: " ++ show (normal book t)) $
+    -- trace ("-verify: " ++ show (normal book term) ++ " :: " ++ show (normal book goal) ++ " ::?:: " ++ show (normal book t)) $
     equal d book t goal
     then Done ()
     else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book t)
