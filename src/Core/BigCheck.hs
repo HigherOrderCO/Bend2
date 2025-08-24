@@ -263,10 +263,10 @@ infer d span book@(Book defs names) ctx term =
     -- --------------------- Tup
     -- ctx |- (a,b) : Σx:A.B
     Tup a b -> do
-      -- Fail $ CantInfer span (normalCtx book ctx)
-      aT <- infer d span book ctx a
-      bT <- infer d span book ctx b
-      Done (Sig aT (Lam "_" Nothing (\_ -> bT)))
+      Fail $ CantInfer span (normalCtx book ctx)
+      -- aT <- infer d span book ctx a
+      -- bT <- infer d span book ctx b
+      -- Done (Sig aT (Lam "_" Nothing (\_ -> bT)))
 
     -- Can't infer SigM
     SigM f -> do
@@ -1140,6 +1140,10 @@ check d span book ctx term      goal =
     (App (cut -> EmpM) x, _) -> do
       check d span book ctx x Emp
     
+    (App (cut -> UniM f) x, _) -> do
+      check d span book ctx x Uni
+      check d span book (rewriteCtx d book x One ctx) f (rewrite d book x One goal)
+
     (App (cut -> BitM f t) x, _) -> do
       check d span book ctx x Bit
       check d span book (rewriteCtx d book x Bt0 ctx) f (rewrite d book x Bt0 goal)
@@ -1181,15 +1185,51 @@ check d span book ctx term      goal =
         xT -> Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book xT)
     
     (App (cut -> SigM g) x, _) -> do
-      xT <- infer d span book ctx x
-      case cut xT of
+      xTinfer <- infer d span book ctx x
+      let xT = derefADT xTinfer
+      case cut $ normal book xT of
         Sig aT bTFunc@(cut -> Lam y mty yb) -> do
           case cut g of
             Lam l mtl lb -> do
-              let bT = App bTFunc (Var l d)
-              check d span book ctx g (All aT (Lam l Nothing (\_ -> All bT (Lam "_" Nothing (\_ -> goal)))))
-            _ -> verify d span book ctx term goal
-        _ -> verify d span book ctx term goal
+              case cut (lb (Var l d)) of
+                Lam r mtr rb -> do
+                  let lV = Var l d
+                  let rV = Var r (d+1)
+                  let tupV = Tup lV rV
+                  let bT = App bTFunc lV 
+                  let ctxWithPair = extend (extend ctx l lV aT) r rV bT
+                  let ctxRewritten = rewriteCtx (d+2) book x tupV ctxWithPair
+                  let bodyRewritten = rewrite (d+2) book x tupV (rb rV)
+                  let goalRewritten = rewrite (d+2) book x tupV goal
+                  check (d+2) span book ctxRewritten bodyRewritten goalRewritten
+                _ -> do
+                  let bT = App bTFunc (Var l d)
+                  check d span book ctx g (All aT (Lam l Nothing (\_ -> All bT (Lam "_" Nothing (\_ -> goal)))))
+            _ -> do
+              verify d span book ctx term goal
+        _ -> do
+          verify d span book ctx term goal
+        where
+          derefADT trm = case cut trm of
+            Ref k i ->
+              let xTbody = getDefn book k in
+              case xTbody of
+                Just (_, cut -> bod@(Sig (cut -> Enu _) _), _) -> bod
+                _ -> trm
+            _ -> trm
+    
+    (App (cut -> EnuM cs Nothing) x, _) -> do
+      xT <- infer d span book ctx x
+      case cut xT of
+        Enu syms ->
+          if equal d book (Enu syms) (Enu [s | s <- map ((\(s,t) -> s)) cs])
+            then do
+              mapM_ (\(s, t) -> 
+                check d span book (rewriteCtx d book x (Sym s) ctx) t (rewrite d book x (Sym s) goal)) cs
+            else do
+              verify d span book ctx term goal
+        _ -> do
+          verify d span book ctx term goal
     
     -- (App (cut -> EnuM cs Nothing) x, _) -> do -- TODO: perhaps add a case for x = [], checking only `z`
     --   xT <- infer d span book ctx x
