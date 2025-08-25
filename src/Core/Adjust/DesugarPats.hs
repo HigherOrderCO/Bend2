@@ -214,7 +214,7 @@ match d span book x ms cs@(([(cut -> Sym _)], _) : _) =
       specializedBranches = cBranches ++ 
         (case defVar of
           Nothing -> []
-          Just (k, defBody) -> map (\ctr -> (ctr, specializeDef d k ctr defBody)) missingCtrs)
+          Just (k, defBody) -> map (\ctr -> (ctr, specializeDef d k ctr defBody x)) missingCtrs)
       -- Create the final default branch (should not be reached if all constructors are covered)
       -- If we have all constructors covered, use Nothing for default
       allCovered = not (null allConstructors) && 
@@ -240,9 +240,9 @@ match d span book x ms cs@(([(cut -> Sym _)], _) : _) =
     collect (c:_) = errorWithSpan span "Invalid pattern: invalid Sym case"
     
     -- Specialize default case for a specific constructor
-    specializeDef :: Int -> String -> String -> Term -> Term
-    specializeDef depth varName ctrName body =
-      lam depth (map fst ms) $ Use varName (Sym ctrName) $ \_ -> body
+    specializeDef :: Int -> String -> String -> Term -> Term -> Term
+    specializeDef depth varName ctrName body scrutinee =
+      lam depth (map fst ms) $ App (Lam varName Nothing $ \_ -> Use varName (Sym ctrName) $ \_ -> body) scrutinee
     
     -- Find all constructors for a type given one constructor name
     findTypeConstructors :: Book -> String -> [String]

@@ -84,7 +84,9 @@ import Core.WHNF
 -- book adjustment where recursive references aren't available yet.
 adjust :: Book -> Term -> Term
 adjust book term =
-  -- trace ("done: " ++ show done) $
+  trace ("flat: " ++ show flat) $
+  trace ("npat: " ++ show npat) $
+  trace ("done: " ++ show done) $
   done
   where
     flat = flattenPats 0 noSpan book term
