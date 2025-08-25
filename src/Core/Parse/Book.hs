@@ -120,8 +120,8 @@ parseBook = do
       typeConstructors = M.fromList constructorMappings
   return $ Book (M.fromList orderedDefs) names typeConstructors
 
--- | Parse type and return both the definition and constructor mapping
-parseTypeWithConstructors :: Parser ((Name, Defn), (Name, [String]))
+-- | Parse type and return both the definition and constructor mapping with arities
+parseTypeWithConstructors :: Parser ((Name, Defn), (Name, [(String, Int)]))
 parseTypeWithConstructors = label "datatype declaration with constructors" $ do
   _       <- symbol "type"
   tName   <- name
@@ -145,8 +145,8 @@ parseTypeWithConstructors = label "datatype declaration with constructors" $ do
       (fullTy, fullBody) = foldr nest (retTy, body0) args
       term = fullBody
       defn = (True, term, fullTy)
-      constructorNames = map fst cases
-  return ((tName, defn), (tName, constructorNames))
+      constructorNamesWithArities = [(tag, length flds) | (tag, flds) <- cases]
+  return ((tName, defn), (tName, constructorNamesWithArities))
 
 
 -- | Syntax: case @Tag: field1: Type1 field2: Type2

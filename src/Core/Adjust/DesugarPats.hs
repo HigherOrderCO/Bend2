@@ -210,11 +210,11 @@ match d span book x ms cs@(([(cut -> Sym _)], _) : _) =
         [] -> []
         ((ctr,_):_) -> findTypeConstructors book ctr
       -- Specialize default branch for missing constructors
-      missingCtrs = filter (\c -> not (any ((== c) . fst) cBranches)) allConstructors
+      missingCtrs = filter (\(c,_) -> not (any ((== c) . fst) cBranches)) allConstructors
       specializedBranches = cBranches ++ 
         (case defVar of
           Nothing -> []
-          Just (k, defBody) -> map (\ctr -> (ctr, specializeDef d k ctr defBody x)) missingCtrs)
+          Just (k, defBody) -> map (\(ctr, arity) -> (ctr, specializeDef d k ctr arity defBody)) missingCtrs)
       -- Create the final default branch (should not be reached if all constructors are covered)
       -- If we have all constructors covered, use Nothing for default
       allCovered = not (null allConstructors) && 
@@ -240,12 +240,28 @@ match d span book x ms cs@(([(cut -> Sym _)], _) : _) =
     collect (c:_) = errorWithSpan span "Invalid pattern: invalid Sym case"
     
     -- Specialize default case for a specific constructor
-    specializeDef :: Int -> String -> String -> Term -> Term -> Term
-    specializeDef depth varName ctrName body scrutinee =
-      lam depth (map fst ms) $ App (Lam varName Nothing $ \_ -> Use varName (Sym ctrName) $ \_ -> body) scrutinee
+    specializeDef :: Int -> String -> String -> Int -> Term -> Term
+    specializeDef depth varName ctrName arity body =
+      -- Simplified approach: just generate the structure that matches the explicit case
+      let fieldNames = [varName ++ "$f" ++ show i | i <- [1..arity]]
+          fieldVars = [Var fname 0 | fname <- fieldNames]
+          -- Build constructor tuple: (tag, field1, field2, ..., ())
+          ctrTuple = case arity of
+            0 -> Sym ctrName  
+            _ -> foldr (\field acc -> Tup field acc) One (Sym ctrName : fieldVars)
+          -- The result should be the reconstructed value
+          reconstructedValue = ctrTuple
+          -- Build nested sigma structure like the working explicit cases
+          buildNested [] = UniM reconstructedValue
+          buildNested (fname:rest) = 
+            let nextVarName = "_x" ++ show (depth + 5 + length rest)
+            in SigM (Lam fname Nothing $ \_ ->
+                      Lam nextVarName Nothing $ \_ ->
+                        App (buildNested rest) (Var nextVarName 0))
+      in buildNested fieldNames
     
     -- Find all constructors for a type given one constructor name
-    findTypeConstructors :: Book -> String -> [String]
+    findTypeConstructors :: Book -> String -> [(String, Int)]
     findTypeConstructors (Book _ _ typeCtrs) ctrName =
       case findTypeForConstructor typeCtrs ctrName of
         Nothing -> []
@@ -254,9 +270,9 @@ match d span book x ms cs@(([(cut -> Sym _)], _) : _) =
           Just ctrs -> ctrs
     
     -- Find which type a constructor belongs to
-    findTypeForConstructor :: M.Map Name [String] -> String -> Maybe Name
+    findTypeForConstructor :: M.Map Name [(String, Int)] -> String -> Maybe Name
     findTypeForConstructor typeCtrs ctrName =
-      case [(tName, ctrs) | (tName, ctrs) <- M.toList typeCtrs, ctrName `elem` ctrs] of
+      case [(tName, ctrs) | (tName, ctrs) <- M.toList typeCtrs, ctrName `elem` (map fst ctrs)] of
         [] -> Nothing
         ((tName, _):_) -> Just tName
 

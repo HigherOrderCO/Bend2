@@ -92,7 +92,7 @@ adjust book term =
     flat = flattenPats 0 noSpan book term
     npat = desugarPats 0 noSpan book flat
     nfrk = desugarFrks book 0 npat
-    etas = reduceEtas 0 nfrk
+    etas = reduceEtas 0 (bind nfrk)
     done = bind etas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.

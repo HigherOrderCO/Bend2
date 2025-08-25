@@ -162,7 +162,7 @@ data Term
 -- Book of Definitions
 type Inj  = Bool -- "is injective" flag. improves pretty printing
 type Defn = (Inj, Term, Type)
-type TypeConstructors = M.Map Name [String] -- type name -> list of constructor names
+type TypeConstructors = M.Map Name [(String, Int)] -- type name -> list of (constructor name, arity)
 data Book = Book (M.Map Name Defn) [Name] TypeConstructors
 
 -- Substitution Map
