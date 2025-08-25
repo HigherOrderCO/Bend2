@@ -7,6 +7,7 @@
 module Core.Adjust.DesugarPats where
 
 import Core.Bind
+import Core.FreeVars
 import Core.Show
 import Core.Type
 import Core.WHNF
@@ -214,7 +215,7 @@ match d span book x ms cs@(([(cut -> Sym _)], _) : _) =
       specializedBranches = cBranches ++ 
         (case defVar of
           Nothing -> []
-          Just (k, defBody) -> map (\(ctr, arity) -> (ctr, specializeDef d k ctr arity defBody)) missingCtrs)
+          Just (k, defBody) -> map (\(ctr, arity) -> (ctr, specializeDef d ms k ctr arity defBody)) missingCtrs)
       -- Create the final default branch (should not be reached if all constructors are covered)
       -- If we have all constructors covered, use Nothing for default
       allCovered = not (null allConstructors) && 
@@ -240,25 +241,34 @@ match d span book x ms cs@(([(cut -> Sym _)], _) : _) =
     collect (c:_) = errorWithSpan span "Invalid pattern: invalid Sym case"
     
     -- Specialize default case for a specific constructor
-    specializeDef :: Int -> String -> String -> Int -> Term -> Term
-    specializeDef depth varName ctrName arity body =
-      -- Simplified approach: just generate the structure that matches the explicit case
+    specializeDef :: Int -> [Move] -> String -> String -> Int -> Term -> Term
+    specializeDef depth ms varName ctrName arity body =
       let fieldNames = [varName ++ "$f" ++ show i | i <- [1..arity]]
           fieldVars = [Var fname 0 | fname <- fieldNames]
           -- Build constructor tuple: (tag, field1, field2, ..., ())
           ctrTuple = case arity of
             0 -> Sym ctrName  
             _ -> foldr (\field acc -> Tup field acc) One (Sym ctrName : fieldVars)
-          -- The result should be the reconstructed value
-          reconstructedValue = ctrTuple
-          -- Build nested sigma structure like the working explicit cases
-          buildNested [] = UniM reconstructedValue
-          buildNested (fname:rest) = 
-            let nextVarName = "_x" ++ show (depth + 5 + length rest)
+          -- Use binding to reconstruct the value
+          -- Check if the body contains the variable name - if so, it likely returns the variable
+          containsVar = varName `S.member` freeVars S.empty body
+          specBody = if containsVar
+            then Use varName ctrTuple $ \_ -> Var varName 0  -- Body contains variable, return bound var
+            else Use varName ctrTuple $ \x -> bindVarByName varName x body  -- Body doesn't use variable
+          -- Build the sigma chain exactly like explicit constructor cases
+          -- Pattern: (λ{(,):λfield1. λ_xN. (λ{(,):λfield2. λ_xM. ... (λ{():specBody})(_xM))(_xN)})(_x2)
+          buildSigmaChain [] nextVarNum = 
+            -- Final case: λ{():specBody}
+            UniM specBody
+          buildSigmaChain (fname:rest) nextVarNum = 
+            let nextVarName = "_x" ++ show nextVarNum
+                restChain = buildSigmaChain rest (nextVarNum + 1)
             in SigM (Lam fname Nothing $ \_ ->
                       Lam nextVarName Nothing $ \_ ->
-                        App (buildNested rest) (Var nextVarName 0))
-      in buildNested fieldNames
+                        App restChain (Var nextVarName 0))
+      in case arity of
+           0 -> lam depth (map fst ms) $ App (UniM specBody) (Var "_x2" 0)
+           _ -> lam depth (map fst ms) $ App (buildSigmaChain fieldNames (depth + 5)) (Var "_x2" 0)
     
     -- Find all constructors for a type given one constructor name
     findTypeConstructors :: Book -> String -> [(String, Int)]
