@@ -398,7 +398,9 @@ instance Show Term where
   show = showTerm False
 
 instance Show Book where
-  show (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
+  show (Book defs names constructors) = unlines $ 
+    [showDefn name (defs M.! name) | name <- names] ++
+    ["-- Type constructors: " ++ show constructors]
     where showDefn k (_, x, t) = k ++ " : " ++ show t ++ " = " ++ showTerm True x
 
 instance Show Span where

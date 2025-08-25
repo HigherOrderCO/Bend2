@@ -162,7 +162,8 @@ data Term
 -- Book of Definitions
 type Inj  = Bool -- "is injective" flag. improves pretty printing
 type Defn = (Inj, Term, Type)
-data Book = Book (M.Map Name Defn) [Name]
+type TypeConstructors = M.Map Name [String] -- type name -> list of constructor names
+data Book = Book (M.Map Name Defn) [Name] TypeConstructors
 
 -- Substitution Map
 type Subs = [(Term,Term)]
@@ -237,7 +238,7 @@ data LHS where
 -- -----
 
 getDefn :: Book -> Name -> Maybe Defn
-getDefn (Book defs _) name = M.lookup name defs
+getDefn (Book defs _ _) name = M.lookup name defs
 
 cut :: Term -> Term
 cut (Loc _ t) = cut t

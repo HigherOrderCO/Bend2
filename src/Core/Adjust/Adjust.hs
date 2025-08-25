@@ -88,7 +88,7 @@ adjust book term =
   done
   where
     flat = flattenPats 0 noSpan book term
-    npat = desugarPats 0 noSpan flat
+    npat = desugarPats 0 noSpan book flat
     nfrk = desugarFrks book 0 npat
     etas = reduceEtas 0 nfrk
     done = bind etas
@@ -112,20 +112,20 @@ type AdjustState = (Book, S.Set Name)
 -- This is crucial for functions like `flatten` which may look up references.
 -- After adjusting all definitions, it checks for free variables.
 adjustBook :: Book -> Book
-adjustBook book@(Book defs names) =
-  let adjustedBook = fst $ execState (mapM_ (adjustDef book S.empty adjust) (M.keys defs)) (Book M.empty names, S.empty)
+adjustBook book@(Book defs names constructors) =
+  let adjustedBook = fst $ execState (mapM_ (adjustDef book S.empty adjust) (M.keys defs)) (Book M.empty names constructors, S.empty)
   in adjustedBook -- checkFreeVarsInBook disabled: not in main branch
 
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
 adjustBookWithPats :: Book -> Book
-adjustBookWithPats book@(Book defs names) =
-  let adjustedBook = fst $ execState (mapM_ (adjustDef book S.empty adjustWithPats) (M.keys defs)) (Book M.empty names, S.empty)
+adjustBookWithPats book@(Book defs names constructors) =
+  let adjustedBook = fst $ execState (mapM_ (adjustDef book S.empty adjustWithPats) (M.keys defs)) (Book M.empty names constructors, S.empty)
   in adjustedBook -- checkFreeVarsInBook disabled: not in main branch
 
 -- | Checks all definitions in a book for free variables.
 -- This should be called after all adjustments are complete.
 checkFreeVarsInBook :: Book -> Book
-checkFreeVarsInBook book@(Book defs names) =
+checkFreeVarsInBook book@(Book defs names constructors) =
   case [ (name, frees) | 
          (name, (_, term, typ)) <- M.toList defs,
          let freeInTerm = freeVars S.empty term,
@@ -171,7 +171,7 @@ adjustDef book visiting adjustFn name = do
 
         -- 4. Update the state with the newly adjusted definition.
         -- The name is added to the `adjustedSet` to mark it as complete.
-        modify $ \(Book adjMap names, doneSet) ->
+        modify $ \(Book adjMap names constructors, doneSet) ->
           let newAdjMap  = M.insert name (inj, adjTerm, adjType) adjMap
               newDoneSet = S.insert name doneSet
-          in (Book newAdjMap names, newDoneSet)
+          in (Book newAdjMap names constructors, newDoneSet)

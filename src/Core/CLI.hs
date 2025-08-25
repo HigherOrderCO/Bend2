@@ -35,7 +35,10 @@ import qualified Target.HVM as HVM
 
 -- Type-check all definitions in a book
 checkBook :: Book -> IO Book
-checkBook book@(Book defs names) = do
+checkBook book@(Book defs names constructors) = do
+  putStrLn "=== FINAL BOOK ==="
+  print book
+  putStrLn "=================="
   let orderedDefs = [(name, fromJust (M.lookup name defs)) | name <- names]
   success <- checkAll book orderedDefs
   unless success exitFailure
@@ -149,7 +152,7 @@ listDependencies file = do
 getGenDeps :: FilePath -> IO ()
 getGenDeps file = do
   book <- parseFile file
-  let bookAdj@(Book defs names) = adjustBook book
+  let bookAdj@(Book defs names constructors) = adjustBook book
   
   -- Find all definitions that are `try` definitions (i.e., contain a Met)
   let tryDefs = M.filter (\(_, term, _) -> hasMet term) defs
@@ -172,11 +175,11 @@ getGenDeps file = do
   let finalNames = filter (`S.member` finalDepNames) names
   
   -- Print the resulting book
-  print $ Book finalDefs finalNames
+  print $ Book finalDefs finalNames M.empty
 
 -- | Collect all refs from a Book
 collectAllRefs :: Book -> S.Set Name
-collectAllRefs (Book defs _) = 
+collectAllRefs (Book defs _ _) = 
   S.unions $ map collectRefsFromDefn (M.elems defs)
   where
     collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)

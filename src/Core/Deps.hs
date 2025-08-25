@@ -11,7 +11,7 @@ getDeps :: Term -> S.Set Name
 getDeps = collectDeps S.empty
 
 getBookDeps :: Book -> S.Set Name
-getBookDeps (Book defs _) = S.unions $ map getDefnDeps (M.toList defs) where
+getBookDeps (Book defs _ _) = S.unions $ map getDefnDeps (M.toList defs) where
   getDefnDeps :: (Name, Defn) -> S.Set Name
   getDefnDeps (name, (_, term, typ)) = S.union (getDeps term) (getDeps typ)
 

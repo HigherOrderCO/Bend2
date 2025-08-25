@@ -62,7 +62,7 @@ isConstructorSigma _ _ = False
 
 -- Infer the type of a term
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
-infer d span book@(Book defs names) ctx term =
+infer d span book@(Book defs names constructors) ctx term =
   case term of
 
     -- x : T in ctx

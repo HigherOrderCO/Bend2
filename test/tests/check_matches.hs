@@ -4,6 +4,16 @@ import Test
 
 matches :: String
 matches = """
+# Custom algebraic data types
+type Boolean():
+  case @Tr:
+  case @Fl:
+
+type Nats():
+  case @Zero:
+  case @Succ: p : Nats
+
+
 # f functions - Single argument, single pattern match on each type
 # Tests basic pattern matching for each type in the language
 def f1(u: Unit) -> Unit:
@@ -36,19 +46,11 @@ def f7(eq: Nat{0n == 0n}) -> Nat:
   match eq:
     case {==}: 0n
 
-# Custom algebraic data types
-type Boolean():
-  case @Tr:
-  case @Fl:
 
 def f8(b: Boolean) -> Unit:
   match b:
     case @Tr: ()
     case @Fl: ()
-
-type Nats():
-  case @Zero:
-  case @Succ: p : Nats
 
 def f9(m : Nats) -> Unit:
   match m:

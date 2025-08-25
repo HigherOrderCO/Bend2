@@ -26,10 +26,10 @@ import Core.Show
 
 -- | Book parsing
 
--- | Syntax: def name : Type = term | type Name<T>(i) -> Type: cases | name : Type = term | try name : Type | assert A == B : T
+-- | Syntax: def name : Type = term | try name : Type | assert A == B : T  
 parseDefinition :: Parser (Name, Defn)
 parseDefinition = do
-  (name, defn) <- choice [ parseType , parseDef , parseTry , parseAssert ]
+  (name, defn) <- choice [ parseDef , parseTry , parseAssert ]
   return $ (name, defn)
 
 -- | Syntax: def name : Type = term | def name(x: T1, y: T2) -> RetType: body
@@ -99,15 +99,49 @@ parseImport = do
   alias <- name
   addImportMapping alias path
 
--- | Syntax: import statements followed by definitions
+-- | Syntax: import statements, then type definitions, then other definitions
 parseBook :: Parser Book
 parseBook = do
   -- Parse all import statements first
   _ <- many (try parseImport)
-  -- Then parse definitions
+  -- Then parse all type definitions
+  typeResults <- many (try parseTypeWithConstructors)
+  -- Then parse other definitions (def, try, assert)  
   defs <- many parseDefinition
-  let names = map fst defs
-  return $ Book (M.fromList defs) names
+  let types = map fst typeResults
+      constructorMappings = map snd typeResults
+      allDefs = types ++ defs
+      names = map fst allDefs
+      typeConstructors = M.fromList constructorMappings
+  return $ Book (M.fromList allDefs) names typeConstructors
+
+-- | Parse type and return both the definition and constructor mapping
+parseTypeWithConstructors :: Parser ((Name, Defn), (Name, [String]))
+parseTypeWithConstructors = label "datatype declaration with constructors" $ do
+  _       <- symbol "type"
+  tName   <- name
+  params  <- option [] $ angles (sepEndBy (parseArg True) (symbol ","))
+  indices <- option [] $ parens (sepEndBy (parseArg False) (symbol ","))
+  args    <- return $ params ++ indices
+  retTy   <- option Set (symbol "->" *> parseTerm)
+  _       <- symbol ":"
+  cases   <- many parseTypeCase
+  when (null cases) $ fail "datatype must have at least one constructor case"
+  let tags = map fst cases
+      mkFields :: [(Name, Term)] -> Term
+      mkFields []             = Uni
+      mkFields ((fn,ft):rest) = Sig ft (Lam fn (Just ft) (\_ -> mkFields rest))
+      --   match ctr: case @Tag: …
+      branches v = Pat [v] [] [([Sym tag], mkFields flds) | (tag, flds) <- cases]
+      -- The body of the definition (see docstring).
+      body0 = Sig (Enu tags) (Lam "ctr" (Just $ Enu tags) (\v -> branches v))
+      -- Wrap the body with lambdas for the parameters.
+      nest (n, ty) (tyAcc, bdAcc) = (All ty  (Lam n (Just ty) (\_ -> tyAcc)) , Lam n (Just ty) (\_ -> bdAcc))
+      (fullTy, fullBody) = foldr nest (retTy, body0) args
+      term = fullBody
+      defn = (True, term, fullTy)
+      constructorNames = map fst cases
+  return ((tName, defn), (tName, constructorNames))
 
 -- | Syntax: type Name<T, U>(i: Nat) -> Type: case @Tag1: field1: T1 case @Tag2: field2: T2
 parseType :: Parser (Name, Defn)
@@ -221,10 +255,9 @@ parseAssert = do
 -- | Parse a book from a string, returning an error message on failure
 doParseBook :: FilePath -> String -> Either String Book
 doParseBook file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0) of
+  case evalState (runParserT p file input) (ParserState True input [] M.empty 0 []) of
     Left err  -> Left (formatError input err)
     Right res -> Right res
-      -- in Right (trace (show book) book)
   where
     p = do
       skip
