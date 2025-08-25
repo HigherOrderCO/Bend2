@@ -112,9 +112,9 @@ data Term
   | LstM Term Term -- λ{[]:n;<>:c}
 
   -- Enum
-  | Enu [String]              -- {&foo,&bar...}
-  | Sym String                -- &foo
-  | EnuM [(String,Term)] Term -- λ{&foo:f;&bar:b;...d}
+  | Enu [String]                    -- {&foo,&bar...}
+  | Sym String                      -- &foo
+  | EnuM [(String,Term)] (Maybe Term) -- λ{&foo:f;&bar:b;...d}
 
   -- Numbers
   | Num NTyp           -- CHR | U64 | I64 | F64
@@ -296,7 +296,7 @@ collectVars t = case t of
   Lst t -> collectVars t
   Con h t -> collectVars h ++ collectVars t
   LstM n c -> collectVars n ++ collectVars c
-  EnuM cs d -> concatMap (collectVars . snd) cs ++ collectVars d
+  EnuM cs d -> concatMap (collectVars . snd) cs ++ maybe [] collectVars d
   Op2 _ a b -> collectVars a ++ collectVars b
   Op1 _ a -> collectVars a
   Sig t f -> collectVars t ++ collectVars f

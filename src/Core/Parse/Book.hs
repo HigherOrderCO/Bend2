@@ -143,31 +143,6 @@ parseTypeWithConstructors = label "datatype declaration with constructors" $ do
       constructorNames = map fst cases
   return ((tName, defn), (tName, constructorNames))
 
--- | Syntax: type Name<T, U>(i: Nat) -> Type: case @Tag1: field1: T1 case @Tag2: field2: T2
-parseType :: Parser (Name, Defn)
-parseType = label "datatype declaration" $ do
-  _       <- symbol "type"
-  tName   <- name
-  params  <- option [] $ angles (sepEndBy (parseArg True) (symbol ","))
-  indices <- option [] $ parens (sepEndBy (parseArg False) (symbol ","))
-  args    <- return $ params ++ indices
-  retTy   <- option Set (symbol "->" *> parseTerm)
-  _       <- symbol ":"
-  cases   <- many parseTypeCase
-  when (null cases) $ fail "datatype must have at least one constructor case"
-  let tags = map fst cases
-      mkFields :: [(Name, Term)] -> Term
-      mkFields []             = Uni
-      mkFields ((fn,ft):rest) = Sig ft (Lam fn (Just ft) (\_ -> mkFields rest))
-      --   match ctr: case @Tag: …
-      branches v = Pat [v] [] [([Sym tag], mkFields flds) | (tag, flds) <- cases]
-      -- The body of the definition (see docstring).
-      body0 = Sig (Enu tags) (Lam "ctr" (Just $ Enu tags) (\v -> branches v))
-      -- Wrap the body with lambdas for the parameters.
-      nest (n, ty) (tyAcc, bdAcc) = (All ty  (Lam n (Just ty) (\_ -> tyAcc)) , Lam n (Just ty) (\_ -> bdAcc))
-      (fullTy, fullBody) = foldr nest (retTy, body0) args
-      term = fullBody
-  return (tName, (True, term, fullTy))
 
 -- | Syntax: case @Tag: field1: Type1 field2: Type2
 parseTypeCase :: Parser (String, [(Name, Term)])

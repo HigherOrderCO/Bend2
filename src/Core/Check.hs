@@ -50,8 +50,9 @@ isConstructorSigma book (Sig a b) = case force book a of
     endsWithUnit (EnuM cases df) d = 
       all (\(_, branch) -> endsWithUnit branch (d+1)) cases &&
       case df of
-        Lam _ _ f -> endsWithUnit (f (Var "_" 0)) (d+1)
-        _ -> endsWithUnit df (d+1)
+        Just (Lam _ _ f) -> endsWithUnit (f (Var "_" 0)) (d+1)
+        Just df' -> endsWithUnit df' (d+1)
+        Nothing -> True
     -- Handle Use expressions
     endsWithUnit (Use _ _ f) d = endsWithUnit (f (Var "_" 0)) (d+1)
     endsWithUnit _ _ = False
@@ -788,8 +789,9 @@ check d span book ctx term      goal =
         then case lookup s1 cs of
           Just t -> do
             check d span book ctx t (App rT Rfl)
-          Nothing -> do
-            check d span book ctx df (All (Enu syms) (Lam "_" Nothing (\v -> App rT v)))
+          Nothing -> case df of
+            Just df' -> check d span book ctx df' (All (Enu syms) (Lam "_" Nothing (\v -> App rT v)))
+            Nothing -> Fail $ IncompleteMatch span (normalCtx book ctx) Nothing
         else Done ()
 
     -- ∀(s,t) ∈ cs. ctx |- t : R(&s)
@@ -805,13 +807,14 @@ check d span book ctx term      goal =
       let all_covered = length covered_syms >= length syms
                      && all (`elem` syms) covered_syms
       if not all_covered
-        then do
-          if isDefaultOne df
+        then case df of
+          Nothing -> Fail $ IncompleteMatch span (normalCtx book ctx) Nothing
+          Just df' -> if isDefaultOne df'
             then Fail $ IncompleteMatch span (normalCtx book ctx) Nothing
             else do
               let enu_type = Enu syms
               let lam_goal = All enu_type (Lam "_" Nothing (\v -> App rT v))
-              check d span book ctx df lam_goal
+              check d span book ctx df' lam_goal
         else return ()
       where
         isDefaultOne :: Term -> Bool

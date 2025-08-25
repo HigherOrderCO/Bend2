@@ -85,7 +85,7 @@ reduceEtas d t = case t of
   LstM a b     -> LstM (reduceEtas d a) (reduceEtas d b)
   Enu ss       -> Enu ss
   Sym s        -> Sym s
-  EnuM cs e    -> EnuM [(s, reduceEtas d v) | (s,v) <- cs] (reduceEtas d e)
+  EnuM cs e    -> EnuM [(s, reduceEtas d v) | (s,v) <- cs] (fmap (reduceEtas d) e)
   Num nt       -> Num nt
   Val nv       -> Val nv
   Op2 o a b    -> Op2 o (reduceEtas d a) (reduceEtas d b)
@@ -190,18 +190,24 @@ isEtaLong target depth = go id depth False where
 
     EnuM cs e ->
       let rs = [(s, go id d hadT v) | (s,v) <- cs]
-          re = go id d hadT e
+          re = case e of
+                 Just e' -> Just (go id d hadT e')
+                 Nothing -> Nothing
       in
-      if all (isJust . snd) rs && isJust re then
+      if all (isJust . snd) rs && maybe True isJust re then
         let rcs       = [(s, fromJust m) | (s,m) <- rs]
-            (l0, _, _) = fromJust re
-            shapes = [lmShape l | (_, (l,_,_)) <- rcs] ++ [lmShape l0]
+            maybeL0   = fmap fromJust re
+            shapes = [lmShape l | (_, (l,_,_)) <- rcs] ++ maybe [] (\(l,_,_) -> [lmShape l]) maybeL0
         in case sequence shapes of
              Just (sh0:rest) | all (== sh0) rest ->
                let injCs          = [(s, injB) | (s, (_, injB, _)) <- rcs]
-                   (lmatE, injE, tE) = fromJust re
-                   tAny          = tE || or [t | (_, (_,_,t)) <- rcs]
-               in Just (lmatE, \h -> inj (EnuM [(s, injB h) | (s, injB) <- injCs] (injE h)), tAny)
+                   (lmatE, injE, tE) = maybe (error "unreachable", id, False) id maybeL0
+                   tAny          = maybe False (\(_, _, t) -> t) maybeL0 || or [t | (_, (_,_,t)) <- rcs]
+               in Just (lmatE, \h -> inj (EnuM [(s, injB h) | (s, injB) <- injCs] (fmap injE e)), tAny)
+             Just [] ->
+               -- No shapes to compare, all arms must have trivial inj
+               let injCs = [(s, injB) | (s, (_, injB, _)) <- rcs]
+               in Just (error "no lmat for empty shapes", \h -> inj (EnuM [(s, injB h) | (s, injB) <- injCs] e), False)
              _ -> Nothing
       else Nothing
 
@@ -249,7 +255,7 @@ injectInto inj scrutName term = case term of
 
   -- Enum match - inject into each case and default (apply default-case fix)
   EnuM cs e -> EnuM [(s, injectBody [] inj scrutName (\_ -> Sym s) v) | (s,v) <- cs]
-                    (injectBody ["x"] inj scrutName (\vars -> case vars of [x] -> x; _ -> error $ "TODO: " ++ (show term)) e)
+                    (fmap (injectBody ["x"] inj scrutName (\vars -> case vars of [x] -> x; _ -> error $ "TODO: " ++ (show term))) e)
   
   -- Sigma match - special handling for pair case (2 fields)
   SigM f -> SigM (injectBody ["a", "b"] inj scrutName (\vars -> case vars of [a,b] -> Tup a b; _ -> error $ "TODO: " ++ (show term)) f)

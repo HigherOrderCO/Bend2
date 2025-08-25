@@ -36,9 +36,6 @@ import qualified Target.HVM as HVM
 -- Type-check all definitions in a book
 checkBook :: Book -> IO Book
 checkBook book@(Book defs names constructors) = do
-  putStrLn "=== FINAL BOOK ==="
-  print book
-  putStrLn "=================="
   let orderedDefs = [(name, fromJust (M.lookup name defs)) | name <- names]
   success <- checkAll book orderedDefs
   unless success exitFailure
@@ -203,7 +200,7 @@ hasMet term = case term of
   Lst t       -> hasMet t
   Con h t     -> hasMet h || hasMet t
   LstM n c    -> hasMet n || hasMet c
-  EnuM cs e   -> any (hasMet . snd) cs || hasMet e
+  EnuM cs e   -> any (hasMet . snd) cs || maybe False hasMet e
   Op2 _ a b   -> hasMet a || hasMet b
   Op1 _ a     -> hasMet a
   Sig a b     -> hasMet a || hasMet b

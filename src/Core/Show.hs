@@ -159,8 +159,10 @@ showCon shadowed h t depth = fromMaybe plain (showStr shadowed (Con h t) depth)
   where plain = showPlain shadowed h depth ++ "<>" ++ showPlain shadowed t depth
 
 -- | Enum matcher: λ{&foo:x;&bar:y;default}
-showEnuM :: S.Set String -> [(String,Term)] -> Term -> Int -> String
-showEnuM shadowed cs d depth = "λ{" ++ intercalate ";" cases ++ ";" ++ showPlain shadowed d depth ++ "}"
+showEnuM :: S.Set String -> [(String,Term)] -> Maybe Term -> Int -> String
+showEnuM shadowed cs Nothing depth = "λ{" ++ intercalate ";" cases ++ "}"
+  where cases = map (\(s,t) -> "&" ++ s ++ ":" ++ showPlain shadowed t depth) cs
+showEnuM shadowed cs (Just d) depth = "λ{" ++ intercalate ";" cases ++ ";" ++ showPlain shadowed d depth ++ "}"
   where cases = map (\(s,t) -> "&" ++ s ++ ":" ++ showPlain shadowed t depth) cs
 
 -- | Dependent pair type: Σx:A. B or A & B
@@ -364,7 +366,7 @@ adjustDepths term depth = case term of
   LstM n c   -> LstM (adjustDepths n depth) (adjustDepths c depth)
   Enu s      -> Enu s
   Sym s      -> Sym s
-  EnuM cs d  -> EnuM [(s, adjustDepths t depth) | (s, t) <- cs] (adjustDepths d depth)
+  EnuM cs d  -> EnuM [(s, adjustDepths t depth) | (s, t) <- cs] (fmap (\x -> adjustDepths x depth) d)
   Num t      -> Num t
   Val v      -> Val v
   Op2 op a b -> Op2 op (adjustDepths a depth) (adjustDepths b depth)

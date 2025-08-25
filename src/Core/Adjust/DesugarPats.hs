@@ -43,7 +43,7 @@ desugarPats d span book (Con h t)       = Con (desugarPats d span book h) (desug
 desugarPats d span book (LstM n c)      = LstM (desugarPats d span book n) (desugarPats d span book c)
 desugarPats d span book (Enu s)         = Enu s
 desugarPats d span book (Sym s)         = Sym s
-desugarPats d span book (EnuM c e)      = EnuM [(s, desugarPats d span book t) | (s, t) <- c] (desugarPats d span book e)
+desugarPats d span book (EnuM c e)      = EnuM [(s, desugarPats d span book t) | (s, t) <- c] (fmap (desugarPats d span book) e)
 desugarPats d span book (Sig a b)       = Sig (desugarPats d span book a) (desugarPats d span book b)
 desugarPats d span book (Tup a b)       = Tup (desugarPats d span book a) (desugarPats d span book b)
 desugarPats d span book (SigM f)        = SigM (desugarPats d span book f)
@@ -216,26 +216,26 @@ match d span book x ms cs@(([(cut -> Sym _)], _) : _) =
           Nothing -> []
           Just (k, defBody) -> map (\ctr -> (ctr, specializeDef d k ctr defBody)) missingCtrs)
       -- Create the final default branch (should not be reached if all constructors are covered)
-      -- If we have all constructors covered, use a simple error branch
+      -- If we have all constructors covered, use Nothing for default
       allCovered = not (null allConstructors) && 
                    length specializedBranches == length allConstructors
       finalDefault = if allCovered
-        then Lam "_" Nothing $ \_ -> lam d (map fst ms) $ Era  -- Unreachable
+        then Nothing  -- No default needed when all constructors are covered
         else case defVar of
-          Nothing -> Lam "_" Nothing $ \_ -> lam d (map fst ms) $ One
-          Just (k, defBody) -> Lam k Nothing $ \_ -> lam d (map fst ms) $ defBody
+          Nothing -> Just $ Lam "_" Nothing $ \_ -> lam d (map fst ms) $ One
+          Just (k, defBody) -> Just $ Lam k Nothing $ \_ -> lam d (map fst ms) $ defBody
       enumMatch = case span of
         Span (0,0) (0,0) _ _ -> EnuM specializedBranches finalDefault
         _                    -> Loc span (EnuM specializedBranches finalDefault)
   in apps d (map snd ms) $ App enumMatch x
   where
-    collect :: [Case] -> ([(String, Term)], Term, Maybe (String, Term))
-    collect [] = ([], Lam "_" Nothing $ \_ -> lam d (map fst ms) $ One, Nothing)
+    collect :: [Case] -> ([(String, Term)], Maybe Term, Maybe (String, Term))
+    collect [] = ([], Nothing, Nothing)
     collect (([(cut -> Sym s)], rhs) : rest) =
       let (cs, def, defVar) = collect rest
       in ((s, lam d (map fst ms) $ desugarPats d span book rhs) : cs, def, defVar)
     collect (([(cut -> Var k _)], rhs) : _) =
-      ([], Lam k Nothing $ \_ -> lam d (map fst ms) $ desugarPats (d+1) span book rhs, 
+      ([], Just $ Lam k Nothing $ \_ -> lam d (map fst ms) $ desugarPats (d+1) span book rhs, 
        Just (k, desugarPats (d+1) span book rhs))
     collect (c:_) = errorWithSpan span "Invalid pattern: invalid Sym case"
     

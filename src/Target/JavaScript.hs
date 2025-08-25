@@ -101,7 +101,7 @@ termToCT book term dep = case term of
   BitM f t     -> CLam "x$" (\x -> CApp (CBif (termToCT book f dep) (termToCT book t dep)) x)
   NatM z s     -> CLam "x$" (\x -> CApp (CSwi (termToCT book z dep) (termToCT book s dep)) x)
   LstM n c     -> CLam "x$" (\x -> CApp (CMat (termToCT book n dep) (termToCT book c dep)) x)
-  EnuM c d     -> CLam "x$" (\x -> CApp (CCse (map (\(s,t) -> (s, termToCT book t dep)) c) (termToCT book d dep)) x)
+  EnuM c d     -> CLam "x$" (\x -> CApp (CCse (map (\(s,t) -> (s, termToCT book t dep)) c) (maybe CEra (\t -> termToCT book t dep) d)) x)
   SigM f       -> CLam "x$" (\x -> CApp (CGet (termToCT book f dep)) x)
   Op2 o a b    -> COp2 o (termToCT book a dep) (termToCT book b dep)
   Op1 o a      -> COp1 o (termToCT book a dep)
