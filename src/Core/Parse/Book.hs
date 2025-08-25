@@ -9,6 +9,7 @@ module Core.Parse.Book
 import Control.Monad (when)
 import Control.Monad.State.Strict (State, get, put, evalState)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.Either (partitionEithers)
 import Data.List (intercalate)
 import Data.Void
 import Text.Megaparsec
@@ -99,21 +100,25 @@ parseImport = do
   alias <- name
   addImportMapping alias path
 
--- | Syntax: import statements, then type definitions, then other definitions
+-- | Syntax: import statements, then mixed type definitions and other definitions
 parseBook :: Parser Book
 parseBook = do
   -- Parse all import statements first
   _ <- many (try parseImport)
-  -- Then parse all type definitions
-  typeResults <- many (try parseTypeWithConstructors)
-  -- Then parse other definitions (def, try, assert)  
-  defs <- many parseDefinition
-  let types = map fst typeResults
+  -- Parse mixed type definitions and other definitions in any order
+  allDefs <- many (choice 
+    [ Left <$> try parseTypeWithConstructors
+    , Right <$> parseDefinition
+    ])
+  -- Separate types from regular definitions
+  let (typeResults, defs) = partitionEithers allDefs
+      types = map fst typeResults
       constructorMappings = map snd typeResults
-      allDefs = types ++ defs
-      names = map fst allDefs
+      -- Ensure types come first in final Book
+      orderedDefs = types ++ defs
+      names = map fst orderedDefs
       typeConstructors = M.fromList constructorMappings
-  return $ Book (M.fromList allDefs) names typeConstructors
+  return $ Book (M.fromList orderedDefs) names typeConstructors
 
 -- | Parse type and return both the definition and constructor mapping
 parseTypeWithConstructors :: Parser ((Name, Defn), (Name, [String]))
