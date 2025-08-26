@@ -203,88 +203,22 @@ match d span book x ms (([tup], p) : _) | isTupPat tup =
 
 -- match x { @S1: b1 ; @S2: b2 ; ... ; k: d }
 -- ------------------------------------------
--- ~x { @S1:b1 ; @S2:b2 ; ... ; @Sn:d[k := @Sn] ; ... }
+-- ~x { @S1:b1 ; @S2:b2 ; ... ; default: λk. d }
 match d span book x ms cs@(([(cut -> Sym _)], _) : _) =
-  let (cBranches, defBranch, defVar) = collect cs
-      -- Try to find the type name from the constructor names
-      allConstructors = case cBranches of
-        [] -> []
-        ((ctr,_):_) -> findTypeConstructors book ctr
-      -- Specialize default branch for missing constructors
-      missingCtrs = filter (\(c,_) -> not (any ((== c) . fst) cBranches)) allConstructors
-      specializedBranches = cBranches ++ 
-        (case defVar of
-          Nothing -> []
-          Just (k, defBody) -> map (\(ctr, arity) -> (ctr, specializeDef d ms k ctr arity defBody)) missingCtrs)
-      -- Create the final default branch (should not be reached if all constructors are covered)
-      -- If we have all constructors covered, use Nothing for default
-      allCovered = not (null allConstructors) && 
-                   length specializedBranches == length allConstructors
-      finalDefault = if allCovered
-        then Nothing  -- No default needed when all constructors are covered
-        else case defVar of
-          Nothing -> Just $ Lam "_" Nothing $ \_ -> lam d (map fst ms) $ One
-          Just (k, defBody) -> Just $ Lam k Nothing $ \_ -> lam d (map fst ms) $ defBody
+  let (cBranches, defBranch) = collect cs
       enumMatch = case span of
-        Span (0,0) (0,0) _ _ -> EnuM specializedBranches finalDefault
-        _                    -> Loc span (EnuM specializedBranches finalDefault)
+        Span (0,0) (0,0) _ _ -> EnuM cBranches defBranch
+        _                    -> Loc span (EnuM cBranches defBranch)
   in apps d (map snd ms) $ App enumMatch x
   where
-    collect :: [Case] -> ([(String, Term)], Maybe Term, Maybe (String, Term))
-    collect [] = ([], Nothing, Nothing)
+    collect :: [Case] -> ([(String, Term)], Maybe Term)
+    collect [] = ([], Nothing)
     collect (([(cut -> Sym s)], rhs) : rest) =
-      let (cs, def, defVar) = collect rest
-      in ((s, lam d (map fst ms) $ desugarPats d span book rhs) : cs, def, defVar)
+      let (cs, def) = collect rest
+      in ((s, lam d (map fst ms) $ desugarPats d span book rhs) : cs, def)
     collect (([(cut -> Var k _)], rhs) : _) =
-      ([], Just $ Lam k Nothing $ \_ -> lam d (map fst ms) $ desugarPats (d+1) span book rhs, 
-       Just (k, desugarPats (d+1) span book rhs))
+      ([], Just $ Lam k Nothing $ \_ -> lam d (map fst ms) $ desugarPats (d+1) span book rhs)
     collect (c:_) = errorWithSpan span "Invalid pattern: invalid Sym case"
-    
-    -- Specialize default case for a specific constructor
-    specializeDef :: Int -> [Move] -> String -> String -> Int -> Term -> Term
-    specializeDef depth ms varName ctrName arity body =
-      let fieldNames = [varName ++ "$f" ++ show i | i <- [1..arity]]
-          fieldVars = [Var fname 0 | fname <- fieldNames]
-          -- Build constructor tuple: (tag, field1, field2, ..., ())
-          ctrTuple = case arity of
-            0 -> Sym ctrName  
-            _ -> foldr (\field acc -> Tup field acc) One (Sym ctrName : fieldVars)
-          -- Use binding to reconstruct the value
-          -- Check if the body contains the variable name - if so, it likely returns the variable
-          containsVar = varName `S.member` freeVars S.empty body
-          specBody = if containsVar
-            then Use varName ctrTuple $ \_ -> Var varName 0  -- Body contains variable, return bound var
-            else Use varName ctrTuple $ \x -> bindVarByName varName x body  -- Body doesn't use variable
-          -- Build the sigma chain exactly like explicit constructor cases
-          -- Pattern: (λ{(,):λfield1. λ_xN. (λ{(,):λfield2. λ_xM. ... (λ{():specBody})(_xM))(_xN)})(_x2)
-          buildSigmaChain [] nextVarNum = 
-            -- Final case: λ{():specBody}
-            UniM specBody
-          buildSigmaChain (fname:rest) nextVarNum = 
-            let nextVarName = "_x" ++ show nextVarNum
-                restChain = buildSigmaChain rest (nextVarNum + 1)
-            in SigM (Lam fname Nothing $ \_ ->
-                      Lam nextVarName Nothing $ \_ ->
-                        App restChain (Var nextVarName 0))
-      in case arity of
-           0 -> lam depth (map fst ms) $ App (UniM specBody) (Var "_x2" 0)
-           _ -> lam depth (map fst ms) $ App (buildSigmaChain fieldNames (depth + 5)) (Var "_x2" 0)
-    
-    -- Find all constructors for a type given one constructor name
-    findTypeConstructors :: Book -> String -> [(String, Int)]
-    findTypeConstructors (Book _ _ typeCtrs) ctrName =
-      case findTypeForConstructor typeCtrs ctrName of
-        Nothing -> []
-        Just typeName -> case M.lookup typeName typeCtrs of
-          Nothing -> []
-          Just ctrs -> ctrs
-    
-    -- Find which type a constructor belongs to
-    findTypeForConstructor :: M.Map Name [(String, Int)] -> String -> Maybe Name
-    findTypeForConstructor typeCtrs ctrName =
-      case [(tName, ctrs) | (tName, ctrs) <- M.toList typeCtrs, ctrName `elem` (map fst ctrs)] of
-        [] -> Nothing
-        ((tName, _):_) -> Just tName
 
 -- match x { &L{a,b}: s }
 -- ---------------------------
