@@ -71,6 +71,7 @@ import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ReduceEtas
+import Core.Adjust.SpecializeDefaults
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -84,15 +85,18 @@ import Core.WHNF
 -- book adjustment where recursive references aren't available yet.
 adjust :: Book -> Term -> Term
 adjust book term =
-  trace ("flat: " ++ show flat) $
-  trace ("npat: " ++ show npat) $
+  trace ("term: " ++ show term) $
+  trace ("spec: " ++ show spec) $
+  -- trace ("flat: " ++ show flat) $
+  -- trace ("npat: " ++ show npat) $
   trace ("done: " ++ show done) $
   done
   where
-    flat = flattenPats 0 noSpan book term
+    spec = specializeDefaults 0 book term
+    flat = flattenPats 0 noSpan book spec
     npat = desugarPats 0 noSpan book flat
     nfrk = desugarFrks book 0 npat
-    etas = reduceEtas 0 (bind nfrk)
+    etas = reduceEtas 0 nfrk
     done = bind etas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
@@ -100,7 +104,8 @@ adjustWithPats :: Book -> Term -> Term
 adjustWithPats book term =
   ret
   where 
-    ret = bind (desugarFrks book 0 (flattenPats 0 noSpan book term))
+    spec = specializeDefaults 0 book term
+    ret = bind (desugarFrks book 0 (flattenPats 0 noSpan book spec))
 
 -- The state for the adjustment process. It holds:
 -- 1. The book of already-adjusted definitions.
