@@ -71,7 +71,6 @@ import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ReduceEtas
-import Core.Adjust.SpecializeDefaults
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -87,14 +86,12 @@ adjust :: Book -> Term -> Term
 adjust book term =
   -- trace ("term: " ++ show term) $
   -- trace ("flat: " ++ show flat) $
-  -- trace ("spec: " ++ show spec) $
   -- trace ("npat: " ++ show npat) $
   -- trace ("done: " ++ show done) $
   done
   where
     flat = flattenPats 0 noSpan book term
-    spec = specializeDefaults 0 book flat
-    npat = desugarPats 0 noSpan book spec
+    npat = desugarPats 0 noSpan book flat
     nfrk = desugarFrks book 0 npat
     etas = reduceEtas 0 nfrk
     done = bind etas
@@ -105,8 +102,7 @@ adjustWithPats book term =
   ret
   where 
     flat = flattenPats 0 noSpan book term
-    spec = specializeDefaults 0 book flat
-    ret = bind (desugarFrks book 0 spec)
+    ret = bind (desugarFrks book 0 flat)
 
 -- The state for the adjustment process. It holds:
 -- 1. The book of already-adjusted definitions.
