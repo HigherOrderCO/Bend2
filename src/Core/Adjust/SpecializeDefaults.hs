@@ -130,56 +130,19 @@ inferTypeFromCases book@(Book defs _ typeCtors) cases =
                       else Nothing
 
 -- | Get list of existing constructor names from cases
--- Now returns only top-level constructors that are fully covered
+-- After flattening, patterns are single-level, so we can simply extract all constructors
 getExistingConstructors :: [Case] -> [String]
-getExistingConstructors cases = getFullyCoveredConstructors cases where
-  -- A constructor is fully covered if:
-  -- 1. It appears as a simple pattern (not nested), OR
-  -- 2. All its possible nested patterns are covered
-  getFullyCoveredConstructors :: [Case] -> [String]
-  getFullyCoveredConstructors cs = 
-    let topLevelCtors = concatMap extractTopLevel cs
-    in filter (isFullyCovered cs) topLevelCtors
-  
-  extractTopLevel :: Case -> [String]
-  extractTopLevel (pats, _) = case pats of
+getExistingConstructors cases = concatMap extractFromCase cases where
+  extractFromCase :: Case -> [String]
+  extractFromCase (pats, _) = case pats of
     [pat] -> maybeToList (extractConstructor pat)
     _ -> []
-  
-  -- Check if a constructor is fully covered by the patterns
-  isFullyCovered :: [Case] -> String -> Bool
-  isFullyCovered cases ctorName = 
-    -- For now, only consider a constructor fully covered if it appears
-    -- as a simple (non-nested) pattern
-    any (hasSimplePattern ctorName) cases
-  
-  hasSimplePattern :: String -> Case -> Bool
-  hasSimplePattern ctorName (pats, _) = case pats of
-    [pat] -> isSimplePattern ctorName pat
-    _ -> False
-  
-  isSimplePattern :: String -> Term -> Bool
-  isSimplePattern ctorName term = case term of
-    -- Simple pattern: (@Ctor, ...) where ... doesn't contain nested constructors
-    Tup (Sym s) rest | s == ctorName -> not (hasNestedConstructor rest)
-    Tup (Loc _ (Sym s)) rest | s == ctorName -> not (hasNestedConstructor rest)
-    _ -> False
-  
-  hasNestedConstructor :: Term -> Bool
-  hasNestedConstructor term = case term of
-    Tup (Sym _) _ -> True  -- Found a nested constructor
-    Tup (Loc _ (Sym _)) _ -> True
-    Tup a b -> hasNestedConstructor a || hasNestedConstructor b
-    One -> False
-    Var _ _ -> False
-    Loc _ t -> hasNestedConstructor t
-    _ -> False
   
   extractConstructor :: Term -> Maybe String
   extractConstructor term = case term of
     Tup (Sym s) _ -> Just s
     Tup (Loc _ (Sym s)) _ -> Just s  -- Handle located symbols
-    Sym s -> Just s
+    Sym s -> Just s  -- Simple enum constructor
     Loc _ t -> extractConstructor t
     _ -> Nothing
   
