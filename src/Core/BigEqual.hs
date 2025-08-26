@@ -108,14 +108,14 @@ cmp red d book a b =
             (Lam ka ta fa   , Lam kb tb fb   ) -> eql red (d+1) book (fa (Var ka d)) (fb (Var kb d)) && fromMaybe True (liftA2 (eql red d book) ta tb)
 
             (App (cut -> Lam ka mta ba) (cut -> xa), _) | not (isLamApp b) ->
-              eql red d book a (App (Lam ka mta (\_ -> b)) xa)
+              eql red d book a (App (Lam "_" mta (\_ -> b)) xa)
             (_, App (cut -> Lam kb mtb bb) (cut -> xb)) | not (isLamApp a) ->
-              eql red d book (App (Lam kb mtb (\_ -> a)) xb) b
+              eql red d book (App (Lam "_" mtb (\_ -> a)) xb) b
             
-            (App (cut -> UniM f) (cut -> xa), _) | not (isUniMApp b) ->
+            (App (cut -> UniM f) xa, _) | not (isUniMApp b) ->
               eql red d book a (App (UniM b) xa)
-            (_, App (cut -> UniM f) (cut -> xb)) | not (isUniMApp a) ->
-              eql red d book (App (UniM b) xb) b
+            (_, App (cut -> UniM f) xb) | not (isUniMApp a) ->
+              eql red d book (App (UniM a) xb) b
 
             -- (App (cut -> BitM f t) (cut -> xa), _) | not (isBitMApp b) ->
             --   eql red d book a (App (BitM b b) xa)
@@ -123,7 +123,7 @@ cmp red d book a b =
             --   eql red d book (App (BitM a a) xb) b
 
             (App (cut -> NatM s (cut -> Lam p mtp pb)) (cut -> xa), _) | not (isNatMApp b) ->
-              eql red d book a (App (NatM b (Lam p mtp (\_ -> b))) xa)
+              eql red d book a (App (NatM b (Lam "_" mtp (\_ -> b))) xa)
 
             (App (cut -> LstM s c) xa, _) | not (isLstMApp b) ->
               eql red d book a (App (LstM b (Lam "_" Nothing (\_ -> Lam "_" Nothing (\_ -> b)))) xa)
@@ -173,10 +173,11 @@ cmp red d book a b =
             (Pat _  _  _    , Pat _  _  _    ) -> error "not-supported"
             (_              , _              ) -> False
   in
-    -- trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
     if
+    -- trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
       res
     then
+      -- trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
       res
     else 
       -- trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
