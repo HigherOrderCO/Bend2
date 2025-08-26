@@ -40,91 +40,131 @@ specializeCtx book _ _ ctx = ctx
 
 -- Type Checker
 -- ------------
+--
 
-inferIndirect :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result (Maybe Term)
-inferIndirect d span book ctx var@(Var k i) term = do
+inferIndirect :: Int -> Span -> Book -> Ctx -> Term -> Term -> Term -> Result (Maybe Term)
+inferIndirect d span book ctx var term def = do
+  result <- inferIndirectGo d span book ctx var term
+  Done $ Just $ replaceUnconstrained def $ result
+  where
+    replaceUnconstrained :: Term -> Term -> Term
+    replaceUnconstrained def term = case term of
+      Var "_unconstrained" _ -> def
+      App f x -> App (replaceUnconstrained def f) (replaceUnconstrained def x)
+      Lam x mt b -> Lam x mt (\v -> bindVarByName x v (replaceUnconstrained def (b (Var x d))))
+      BitM f t -> BitM (replaceUnconstrained def f) (replaceUnconstrained def t)
+      NatM z s -> NatM (replaceUnconstrained def z) (replaceUnconstrained def s)
+      _ -> term
+
+inferIndirectGo :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
+inferIndirectGo d span book ctx var@(Var k i) term = do
   traceM $ "- indirect:        " ++ show var ++ " in " ++ show term
   case term of
     Chk x t | equal d book x var -> do
       traceM $ "- indirect CHK:    " ++ show var ++ " in " ++ show term
-      traceM "GGGGGGGGGGG"
-      Done (Just t)
+      Done t
     Chk x t -> do
       traceM $ "- indirect CHK NX:    " ++ show var ++ " in " ++ show term
-      t1 <- inferIndirect d span book ctx var x
-      t2 <- inferIndirect d span book ctx var t
-      coherence t1 t2
+      t1 <- inferIndirectGo d span book ctx var x
+      t2 <- inferIndirectGo d span book ctx var t
+      unifyOrFail t1 t2
     Loc _ t -> do
       traceM $ "- indirect LOC:    " ++ show var ++ " in " ++ show term
-      inferIndirect d span book ctx var t
+      inferIndirectGo d span book ctx var t
 
     Var x j | x == k -> do
-      Done Nothing
+      Done (Var "_unconstrained" 0)
     Lam x mt b | x == k -> do
       traceM $ "- indirect LAM:    " ++ show var ++ " in " ++ show term
-      Done Nothing
+      Done (Var "_unconstrained" 0)
     Lam x mt b -> do
       traceM $ "- indirect LAM NX: " ++ show var ++ " in " ++ show term
       case mt of
         Just t -> do
-          inferIndirect (d+1) span book (extend ctx x (Var x d) t) var (b (Var x d))
+          bType <- inferIndirectGo (d+1) span book (extend ctx x (Var x d) t) var (b (Var x d))
+          Done $ Lam x mt (\v -> bindVarByName x v bType)
         Nothing -> do
-          Done $ Nothing
-          -- inferIndirect (d+1) span book (extend ctx x (Var x d) t) var (b (Var x d))
+          Fail $ CantInfer span (normalCtx book ctx)
     NatM z s -> do
       traceM $ "- indirect NATM:   " ++ show var ++ " in " ++ show term
-      t1 <- inferIndirect d span book ctx var z
-      t2 <- inferIndirect d span book ctx var s
-      case (t1,t2) of
-        -- (Just t1, Just t2) -> Done . Just $ All Nat $ NatM t1 t2
-        (Just t1, Just t2) -> Done . Just $ NatM t1 t2
-        _ -> Done $ Nothing
+      t1 <- inferIndirectGo d span book ctx var z
+      t2 <- inferIndirectGo d span book ctx var s
+      Done $ NatM t1 t2
     App f x | equal d book x var -> do
       traceM $ "- indirect APP :    " ++ show var ++ " in " ++ show term
       case infer d (getSpan span f) book ctx f of
         Done fT -> do
           case cut fT of
-            All xT _ -> Done $ Just xT
-            _ -> inferIndirect d span book ctx var f
-        _ -> Done Nothing
+            All xT _ -> Done $ xT
+            _ -> inferIndirectGo d span book ctx var f
+        _ -> Done (Var "_unconstrained" 0)
     App f x | not $ equal d book f var || equal d book x var -> do
       traceM $ "- indirect APP NX: " ++ show var ++ " in " ++ show term
-      t2 <- inferIndirect d span book ctx var x
+      t2 <- inferIndirectGo d span book ctx var x
       case t2 of
-        Just t2 -> Done $ Just t2
-        _       -> do
-          t1 <- inferIndirect d span book ctx var f
+        (Var "_unconstrained" 0) -> do
+          t1 <- inferIndirectGo d span book ctx var f
           case t1 of
-            Just t1 -> Done $ Just (App t1 x)
-            _ -> Done Nothing
-      -- fmap (\t -> App t1 x) (coherence t1 t2)
+            (Var "_unconstrained" 0) -> Done t1
+            t1                       -> Done $ (App t1 x)
+        t2 -> Done $ t2
     Suc p | equal d book p var -> do
-      Done $ Just Nat
+      Done $ Nat
     Con h t | equal d book h var -> do
       tT <- infer d (getSpan span t) book ctx t
       case cut tT of
-        Lst hT -> Done $ Just (Lst hT)
-        _ -> Done Nothing
+        Lst hT -> Done $ (Lst hT)
+        _ -> Done (Var "_unconstrained" 0)
     Con h t | equal d book t var -> do
       hT <- infer d (getSpan span h) book ctx h
-      Done $ Just (Lst hT)
+      Done $ (Lst hT)
     _ -> do
       traceM $ "- indirect DEFAULT:" ++ show var ++ " in " ++ show term
-      Done Nothing
+      Done (Var "_unconstrained" 0)
   where
-    coherence t1 t2 =
-      case (t1,t2) of
-        (Just t1, Just t2) -> 
-          if equal d book t1 t2
-          then Done $ Just t1
-          else Fail $ CantInfer span (normalCtx book ctx)
-        (Just t1, _) -> 
-          Done $ Just t1
-        (_, Just t2) -> 
-          Done $ Just t2
-        _ -> Done Nothing
-inferIndirect d span book ctx target term = 
-  Done Nothing
+    unifyOrFail t1 t2 = case unifyTerms d book t1 t2 of
+      Just t -> Done t
+      Nothing -> Fail $ CantInfer span (normalCtx book ctx)
+inferIndirectGo d span book ctx target term = 
+  Done (Var "_unconstrained" 0)
+
+-- Unify two terms, preferring constrained over unconstrained
+unifyTerms :: Int -> Book -> Term -> Term -> Maybe Term
+unifyTerms d book t1 t2 = case (t1, t2) of
+  -- If one is a variable (unconstrained), take the other
+  (Var "_unconstrained" _, t) -> Just t
+  (t, Var "_unconstrained" _) -> Just t
+  
+  -- For structured terms, unify recursively
+  (BitM f1 t1, BitM f2 t2) -> do
+    f' <- unifyTerms d book f1 f2
+    t' <- unifyTerms d book t1 t2
+    return $ BitM f' t'
+    
+  (NatM z1 s1, NatM z2 s2) -> do
+    z' <- unifyTerms d book z1 z2
+    s' <- unifyTerms d book s1 s2
+    return $ NatM z' s'
+    
+  (App f1 x1, App f2 x2) -> do
+    f' <- unifyTerms d book f1 f2
+    x' <- unifyTerms d book x1 x2
+    return $ App f' x'
+    
+  (Lam k1 mt1 b1, Lam k2 mt2 b2) | k1 == k2 -> do
+    mt' <- case (mt1, mt2) of
+      (Just t1, Just t2) -> Just <$> unifyTerms d book t1 t2
+      (Just t, Nothing) -> return $ Just t
+      (Nothing, Just t) -> return $ Just t
+      (Nothing, Nothing) -> return Nothing
+    -- For the body, you'd need to handle the binding properly
+    return $ Lam k1 mt' b1  -- This is simplified
+    
+  -- If they're equal, return either
+  (t1, t2) | equal d book t1 t2 -> Just t1
+
+  -- Otherwise, conflict
+  _ -> Nothing
 
 -- Infer the type of a term
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
@@ -700,7 +740,7 @@ check :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result ()
 check d span book ctx (Loc l t) goal = check d l book ctx t goal 
 check d span book ctx term      goal =
   -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
-  -- trace ("- check: " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
+  trace ("- check: " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
   -- trace ("- ctx:\n" ++ show ctx) $
   case (term, force book goal) of
     -- ctx |- 
@@ -1229,11 +1269,12 @@ check d span book ctx term      goal =
       check d span book (rewriteCtx d book x Zer ctx) z (rewrite d book x Zer goal)
       case cut s of
         Lam p mtb bp -> do
+          let body         = bp (Var p d)
           let ctxWithP     = (extend ctx p (Var p d) Nat)
           let ctxWithSucP  = (rewriteCtx (d+1) book x (Suc (Var p d)) ctxWithP)
-          let bodyWithSucP = (rewrite (d+1) book x (Suc (Var p d)) (bp (Var p d)))
+          let bodyWithSucP = (rewrite (d+1) book x (Suc (Var p d)) body)
           let goalWithSucP = (rewrite (d+1) book x (Suc (Var p d)) goal)
-          check (d+1) span book ctxWithSucP bodyWithSucP goalWithSucP
+          check (d+1) (getSpan span body) book ctxWithSucP bodyWithSucP goalWithSucP
         _ -> do
           check d span book ctx s (All Nat (Lam "_" Nothing (\_ -> goal)))
     
@@ -1268,19 +1309,23 @@ check d span book ctx term      goal =
             Lam l mtl lb -> do
               case cut (lb (Var l d)) of
                 Lam r mtr rb -> do
-                  rTinfer <- inferIndirect d span book (extend ctx l (Var l d) aT) (Var r (d+1)) (rb (Var r (d+1)))
+                  rTinfer <- inferIndirect d span book (extend ctx l (Var l d) aT) (Var r (d+1)) (rb (Var r (d+1))) bT
                   case rTinfer of
                     Just t -> do
                       let xT = Sig aT (Lam l (Just aT) (\v -> bindVarByIndex d v t))
+                      traceM $ "- XXXXXXXXXXXX : x = " ++ show x ++ " , aT = " ++ show aT ++ " , bT = " ++ show bT ++ " , rT = " ++ show t
                       check d (getSpan span x) book ctx x xT
                       Done $ xT 
-                    -- Nothing -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
-                    Nothing -> Done $ Sig aT (Lam l (Just aT) (\v -> bindVarByIndex d v bT))
+                    Nothing -> do
+                      Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
+                    -- Nothing -> do
+                    --   Done $ Sig aT (Lam l (Just aT) (\v -> bindVarByIndex d v bT))
                 _ -> do
                   Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
             _ -> do
               Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
         _ -> do
+          traceM $ "- ASDF " ++ show x
           xTinfer <- infer d span book ctx x
           Done $ derefADT xTinfer
             where
@@ -1295,6 +1340,7 @@ check d span book ctx term      goal =
       traceM $ "- INFERRED: " ++ show x ++ " :: " ++ show xT
       case cut $ normal book xT of
         Sig aT bTFunc@(cut -> Lam y mty yb) -> do
+          traceM $ "- STEP 1: " ++ show aT ++ " -- " ++ show bTFunc
           case cut g of
             Lam l mtl lb -> do
               case cut (lb (Var l d)) of
@@ -1307,6 +1353,7 @@ check d span book ctx term      goal =
                   let ctxRewritten = rewriteCtx (d+2) book x tupV ctxWithPair
                   let bodyRewritten = rewrite (d+2) book x tupV (rb rV)
                   let goalRewritten = rewrite (d+2) book x tupV goal
+                  traceM $ "- STEP 2: " ++ show bodyRewritten ++ " -- " ++ show goalRewritten ++ "\n" ++ show ctxRewritten
                   check (d+2) span book ctxRewritten bodyRewritten goalRewritten
                 _ -> do
                   let bT = App bTFunc (Var l d)
