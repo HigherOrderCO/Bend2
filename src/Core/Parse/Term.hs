@@ -986,7 +986,7 @@ parseLamMatch = label "lambda match" $ do
         t <- parseTerm
         _ <- parseSemi
         return (s, t)
-      def <- option One $ try $ do
+      def <- optional $ try $ do
         notFollowedBy (symbol "}")
         notFollowedBy (symbol "@")
         notFollowedBy (symbol "&")
@@ -1124,7 +1124,7 @@ parseEnuMCases scrut = do
     t <- parseTerm
     _ <- parseSemi
     return (s, t)
-  def <- option One $ try $ do
+  def <- optional $ try $ do
     notFollowedBy (symbol "}")
     notFollowedBy (symbol "@")
     notFollowedBy (symbol "&")
@@ -1153,9 +1153,9 @@ parseSupMCases scrut = do
 -- | Parse a term from a string, returning an error message on failure
 doParseTerm :: FilePath -> String -> Either String Term
 doParseTerm file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0) of
+  case evalState (runParserT p file input) (ParserState True input [] M.empty 0 []) of
     Left err  -> Left (formatError input err)
-    Right res -> Right (adjust (Book M.empty []) res)
+    Right res -> Right (adjust (Book M.empty [] M.empty) res)
   where
     p = do
       skip

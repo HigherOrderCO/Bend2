@@ -9,6 +9,7 @@ module Core.Parse.Book
 import Control.Monad (when)
 import Control.Monad.State.Strict (State, get, put, evalState)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.Either (partitionEithers)
 import Data.List (intercalate)
 import Data.Void
 import Text.Megaparsec
@@ -26,10 +27,10 @@ import Core.Show
 
 -- | Book parsing
 
--- | Syntax: def name : Type = term | type Name<T>(i) -> Type: cases | name : Type = term | try name : Type | assert A == B : T
+-- | Syntax: def name : Type = term | try name : Type | assert A == B : T  
 parseDefinition :: Parser (Name, Defn)
 parseDefinition = do
-  (name, defn) <- choice [ parseType , parseDef , parseTry , parseAssert ]
+  (name, defn) <- choice [ parseDef , parseTry , parseAssert ]
   return $ (name, defn)
 
 -- | Syntax: def name : Type = term | def name(x: T1, y: T2) -> RetType: body
@@ -99,19 +100,29 @@ parseImport = do
   alias <- name
   addImportMapping alias path
 
--- | Syntax: import statements followed by definitions
+-- | Syntax: import statements, then mixed type definitions and other definitions
 parseBook :: Parser Book
 parseBook = do
   -- Parse all import statements first
   _ <- many (try parseImport)
-  -- Then parse definitions
-  defs <- many parseDefinition
-  let names = map fst defs
-  return $ Book (M.fromList defs) names
+  -- Parse mixed type definitions and other definitions in any order
+  allDefs <- many (choice 
+    [ Left <$> try parseTypeWithConstructors
+    , Right <$> parseDefinition
+    ])
+  -- Separate types from regular definitions
+  let (typeResults, defs) = partitionEithers allDefs
+      types = map fst typeResults
+      constructorMappings = map snd typeResults
+      -- Ensure types come first in final Book
+      orderedDefs = types ++ defs
+      names = map fst orderedDefs
+      typeConstructors = M.fromList constructorMappings
+  return $ Book (M.fromList orderedDefs) names typeConstructors
 
--- | Syntax: type Name<T, U>(i: Nat) -> Type: case @Tag1: field1: T1 case @Tag2: field2: T2
-parseType :: Parser (Name, Defn)
-parseType = label "datatype declaration" $ do
+-- | Parse type and return both the definition and constructor mapping with arities
+parseTypeWithConstructors :: Parser ((Name, Defn), (Name, [(String, Int)]))
+parseTypeWithConstructors = label "datatype declaration with constructors" $ do
   _       <- symbol "type"
   tName   <- name
   params  <- option [] $ angles (sepEndBy (parseArg True) (symbol ","))
@@ -133,7 +144,10 @@ parseType = label "datatype declaration" $ do
       nest (n, ty) (tyAcc, bdAcc) = (All ty  (Lam n (Just ty) (\_ -> tyAcc)) , Lam n (Just ty) (\_ -> bdAcc))
       (fullTy, fullBody) = foldr nest (retTy, body0) args
       term = fullBody
-  return (tName, (True, term, fullTy))
+      defn = (True, term, fullTy)
+      constructorNamesWithArities = [(tag, length flds) | (tag, flds) <- cases]
+  return ((tName, defn), (tName, constructorNamesWithArities))
+
 
 -- | Syntax: case @Tag: field1: Type1 field2: Type2
 parseTypeCase :: Parser (String, [(Name, Term)])
@@ -221,10 +235,9 @@ parseAssert = do
 -- | Parse a book from a string, returning an error message on failure
 doParseBook :: FilePath -> String -> Either String Book
 doParseBook file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0) of
+  case evalState (runParserT p file input) (ParserState True input [] M.empty 0 []) of
     Left err  -> Left (formatError input err)
     Right res -> Right res
-      -- in Right (trace (show book) book)
   where
     p = do
       skip

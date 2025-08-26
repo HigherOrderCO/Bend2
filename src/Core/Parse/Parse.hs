@@ -65,6 +65,7 @@ data ParserState = ParserState
   , blocked       :: [String]              -- ^ list of blocked operators
   , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/"
   , assertCounter :: Int                   -- ^ counter for generating unique assert names (E0, E1, E2...)
+  , lastParsedTypeCases :: [(String, [(Name, Term)])] -- ^ cases from most recent type parse
   }
 
 type Parser = ParsecT Void String (Control.Monad.State.Strict.State ParserState)

@@ -9,14 +9,14 @@ import Test
 
 type_error_on_ctr_mismatch :: String
 type_error_on_ctr_mismatch = """
-def String() -> Set:
-  Char[]
-
 type Complex:
   case @A:
     f: (Nat -> Complex) -> Complex
   case @B:
     value: String
+
+def String() -> Set:
+  Char[]
 
 def Check(ctx: Complex[], x: Complex) -> Complex:
   match x:

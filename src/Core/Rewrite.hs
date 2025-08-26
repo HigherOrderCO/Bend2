@@ -55,7 +55,7 @@ rewriteGo d book old neo val =
     LstM n c    -> LstM (rewrite d book old neo n) (rewrite d book old neo c)
     Enu s       -> Enu s
     Sym s       -> Sym s
-    EnuM c e    -> EnuM (map (\(s,t) -> (s, rewrite d book old neo t)) c) (rewrite d book old neo e)
+    EnuM c e    -> EnuM (map (\(s,t) -> (s, rewrite d book old neo t)) c) (fmap (rewrite d book old neo) e)
     Num t       -> Num t
     Val v       -> Val v
     Op2 o a b   -> Op2 o (rewrite d book old neo a) (rewrite d book old neo b)
