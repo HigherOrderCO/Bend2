@@ -42,11 +42,11 @@ specializeCtx book _ _ ctx = ctx
 -- ------------
 --
 
-inferIndirect :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result (Maybe Term)
-inferIndirect d span book ctx var term = do
-  result <- inferIndirectGo d span book ctx var term
-  let def = findDefault var term
-  traceM $ "-INFER INDIRECT: " ++ show var ++ " :: " ++ show result ++ " -> " ++ show def
+inferIndirect :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
+inferIndirect d span book ctx target term = do
+  result <- inferIndirectGo d span book ctx target term
+  let def = findDefault target term
+  traceM $ "-INFER INDIRECT: " ++ show target ++ " :: " ++ show result ++ " -> " ++ show def
   replaceUnconstrained def result
   where
     findDefault :: Term -> Term -> Maybe Term
@@ -54,43 +54,38 @@ inferIndirect d span book ctx var term = do
       Done bT -> Just bT
       _ -> Nothing
     findDefault x term = Nothing
-    replaceUnconstrained :: Maybe Term -> Term -> Result (Maybe Term)
+    replaceUnconstrained :: Maybe Term -> Term -> Result Term
     replaceUnconstrained def term = do
+    -- TODO: make sure replace never returns terms with (Var _unconstrained 0)
       traceM $ "- REPLACE: " ++ show def ++ " in " ++ show term
       case term of
         Var "_unconstrained" _ -> case def of
-          Just def' -> Done (Just def')
-          Nothing  -> Done Nothing  -- Can't determine type
+          Just def' -> Done def'
+          Nothing  -> Fail $ CantInfer (getSpan span target) (normalCtx book ctx)
         App f x -> do
-          f' <- replaceUnconstrainedRec def f
-          x' <- replaceUnconstrainedRec def x
-          Done (Just (App f' x'))
+          f' <- replaceUnconstrained def f
+          x' <- replaceUnconstrained def x
+          Done (App f' x')
         Lam x mt b -> do
-          b' <- replaceUnconstrainedRec def (b (Var x d))
-          Done (Just (Lam x mt (\v -> bindVarByName x v b')))
+          b' <- replaceUnconstrained def (b (Var x d))
+          Done (Lam x mt (\v -> bindVarByName x v b'))
         BitM f t -> do
-          f' <- replaceUnconstrainedRec def f
-          t' <- replaceUnconstrainedRec def t
-          Done (Just (BitM f' t'))
+          f' <- replaceUnconstrained def f
+          t' <- replaceUnconstrained def t
+          Done (BitM f' t')
         NatM z s -> do
-          z' <- replaceUnconstrainedRec def z
-          s' <- replaceUnconstrainedRec def s
-          Done (Just (NatM z' s'))
+          z' <- replaceUnconstrained def z
+          s' <- replaceUnconstrained def s
+          Done (NatM z' s')
         Sig aT bT -> do
-          aT' <- replaceUnconstrainedRec def aT
-          bT' <- replaceUnconstrainedRec def bT
-          Done (Just (Sig aT' bT'))
+          aT' <- replaceUnconstrained def aT
+          bT' <- replaceUnconstrained def bT
+          Done (Sig aT' bT')
         SigM g -> do
-          g' <- replaceUnconstrainedRec def g
-          Done (Just (SigM g'))
-        _ -> Done (Just term)
-    
-    replaceUnconstrainedRec :: Maybe Term -> Term -> Result Term
-    replaceUnconstrainedRec def term = do
-      result <- replaceUnconstrained def term
-      case result of
-        Just t -> Done t
-        Nothing -> Fail $ trace ("HHHHHHHHHHHHHHHHHHH " ++ show var ++ "  :: " ++ show def ++ "   --   " ++ show term) $ CantInfer span (normalCtx book ctx)
+          g' <- replaceUnconstrained def g
+          Done (SigM g')
+        _ -> do
+          Done term
 
 inferIndirectGo :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 inferIndirectGo d span book ctx var@(Var k i) term = do
@@ -173,17 +168,6 @@ inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> Si
           rT <- inferIndirectGo d span book (extend ctx l (Var l d) aT) (Var r (d+1)) (rb (Var r (d+1)))
           traceM $ "BBBBBBBBBBBBBBBBBBBBBBB " ++ show var ++ " :: " ++ show rT
           Done $ Sig aT (Lam l (Just aT) (\v -> bindVarByName l v rT))
-          -- rTinfer <- inferIndirect d span book (extend ctx l (Var l d) aT) (Var r (d+1)) (rb (Var r (d+1)))
-          -- case rTinfer of
-          --   Just t -> do
-          --     let xT = Sig aT (Lam l (Just aT) (\v -> bindVarByIndex d v t))
-          --     traceM $ "- XXXXXXXXXXXX : x = " ++ show x ++ " , aT = " ++ show aT ++ " , bT = " ++ show (Var "_unconstrained" 0) ++ " , rT = " ++ show t
-          --     check d (getSpan span x) book ctx x xT
-          --     Done $ xT 
-          --   Nothing -> do
-          --     Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
-          --   -- Nothing -> do
-          --   --   Done $ Sig aT (Lam l (Just aT) (\v -> bindVarByIndex d v bT))
         _ -> do
           Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
     _ -> do
@@ -220,8 +204,8 @@ unifyTerms d book t1 t2 = case (t1, t2) of
       (Just t, Nothing) -> return $ Just t
       (Nothing, Just t) -> return $ Just t
       (Nothing, Nothing) -> return Nothing
-    -- For the body, you'd need to handle the binding properly
-    return $ Lam k1 mt' b1  -- This is simplified
+    bt <- unifyTerms (d+1) book (b1 (Var k1 d)) (b2 (Var k1 d))
+    return $ Lam k1 mt' (\v -> bindVarByName k1 v bt)
     
   -- If they're equal, return either
   (t1, t2) | equal d book t1 t2 -> Just t1
@@ -1366,17 +1350,8 @@ check d span book ctx term      goal =
     (App (cut -> SigM g) x, _) -> do
       xT <- case cut x of
         Tup a b -> do
-          traceM "GGGGGGGGGGGGGGGGG"
-          mxT <- inferIndirect d span book ctx x term
-          case mxT of
-            Just xT -> do
-             traceM "FFFFFFFFFFFFFFFFFFFF"
-             Done xT
-            Nothing -> do
-              traceM "AAAAAAAAAAAAAAAA"
-              Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
+          inferIndirect d span book ctx x term
         _ -> do
-          traceM $ "- ASDF " ++ show x
           xTinfer <- infer d span book ctx x
           Done $ derefADT xTinfer
             where
