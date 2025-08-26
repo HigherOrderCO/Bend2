@@ -42,6 +42,7 @@ library
                       Core.Parse.Term,
                       Core.Parse.WithSpan,
                       Core.Rewrite,
+                      Core.BigRewrite,
                       Core.Termination,
                       Core.WHNF,
                       Target.HVM,
