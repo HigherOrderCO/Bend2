@@ -46,7 +46,6 @@ inferIndirect :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 inferIndirect d span book ctx target term = do
   result <- inferIndirectGo d span book ctx target term
   let def = findDefault target term
-  -- traceM $ "-INFER INDIRECT: " ++ show target ++ " :: " ++ show result ++ " -> " ++ show def
   replaceUnconstrained def result
   where
     findDefault :: Term -> Term -> Maybe Term
@@ -56,118 +55,307 @@ inferIndirect d span book ctx target term = do
     findDefault x term = Nothing
     replaceUnconstrained :: Maybe Term -> Term -> Result Term
     replaceUnconstrained def term = do
-    -- TODO: make sure replace never returns terms with (Var _unconstrained 0)
-      -- traceM $ "- REPLACE: " ++ show def ++ " in " ++ show term
-      case term of
-        Var "_unconstrained" _ -> case def of
-          Just def' -> Done def'
-          Nothing  -> Fail $ CantInfer (getSpan span target) (normalCtx book ctx)
-        App f x -> do
-          f' <- replaceUnconstrained def f
-          x' <- replaceUnconstrained def x
-          Done (App f' x')
-        Lam x mt b -> do
-          b' <- replaceUnconstrained def (b (Var x d))
-          Done (Lam x mt (\v -> bindVarByName x v b'))
-        BitM f t -> do
-          f' <- replaceUnconstrained def f
-          t' <- replaceUnconstrained def t
-          Done (BitM f' t')
-        NatM z s -> do
-          z' <- replaceUnconstrained def z
-          s' <- replaceUnconstrained def s
-          Done (NatM z' s')
-        Sig aT bT -> do
-          aT' <- replaceUnconstrained def aT
-          bT' <- replaceUnconstrained def bT
-          Done (Sig aT' bT')
-        SigM g -> do
-          g' <- replaceUnconstrained def g
-          Done (SigM g')
-        _ -> do
-          Done term
+      case def of
+        Just def -> return $ rewrite d book (Var "_unconstrained" 0) def term
+        Nothing  -> Fail $ CantInfer (getSpan span target) (normalCtx book ctx)
 
 inferIndirectGo :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 inferIndirectGo d span book ctx var@(Var k i) term = do
-  -- traceM $ "- indirect:        " ++ show var ++ " in " ++ show term
   case term of
+    Var x j -> do
+      return (Var "_unconstrained" 0)
+
     Chk x t | equal d book x var -> do
-      -- traceM $ "- indirect CHK:    " ++ show var ++ " in " ++ show term
-      Done t
+      return t
     Chk x t -> do
-      -- traceM $ "- indirect CHK NX:    " ++ show var ++ " in " ++ show term
       t1 <- inferIndirectGo d span book ctx var x
       t2 <- inferIndirectGo d span book ctx var t
       unifyOrFail t1 t2
+
     Loc _ t -> do
-      -- traceM $ "- indirect LOC:    " ++ show var ++ " in " ++ show term
       inferIndirectGo d span book ctx var t
 
-    Var x j | x == k -> do
-      Done (Var "_unconstrained" 0)
-
     Lam x mt b | x == k -> do
-      -- traceM $ "- indirect LAM:    " ++ show var ++ " in " ++ show term
       Done (Var "_unconstrained" 0)
     Lam x mt b -> do
-      -- traceM $ "- indirect LAM NX: " ++ show var ++ " in " ++ show term
       case mt of
         Just t -> do
           bType <- inferIndirectGo (d+1) span book (extend ctx x (Var x d) t) var (b (Var x d))
-          Done $ Lam x mt (\v -> bindVarByName x v bType)
+          return $ Lam x mt (\v -> bindVarByName x v bType)
         Nothing -> do
           Fail $ CantInfer span (normalCtx book ctx)
 
     NatM z s -> do
-      -- traceM $ "- indirect NATM:   " ++ show var ++ " in " ++ show term
       t1 <- inferIndirectGo d span book ctx var z
       t2 <- inferIndirectGo d span book ctx var s
-      Done $ NatM t1 t2
+      return $ NatM t1 t2
+
     App f x | equal d book x var -> do
-      -- traceM $ "- indirect APP :    " ++ show var ++ " in " ++ show term
       case infer d (getSpan span f) book ctx f of
         Done fT -> do
           case cut fT of
             All xT _ -> Done $ xT
             _ -> inferIndirectGo d span book ctx var f
-        _ -> Done (Var "_unconstrained" 0)
-    App f x | not (equal d book f var || equal d book x var) -> do
-      -- traceM $ "- indirect APP NX: " ++ show var ++ " in " ++ show term
+        _ -> inferIndirectGo d span book ctx var f
+    App f x | not $ equal d book f var -> do
+      t1 <- inferIndirectGo d span book ctx var f
       t2 <- inferIndirectGo d span book ctx var x
-      case t2 of
-        (Var "_unconstrained" 0) -> do
-          t1 <- inferIndirectGo d span book ctx var f
-          case t1 of
-            (Var "_unconstrained" 0) -> Done t1
-            t1                       -> Done $ (App t1 x)
-        t2 -> Done $ t2
+      if equal d book t1 (Var "_unconstrained" 0)
+      then return t2
+      else unifyOrFail (App t1 x) t2
+    App f x -> do
+      t1 <- inferIndirectGo d span book ctx var f
+      t2 <- inferIndirectGo d span book ctx var x
+      unifyOrFail t1 t2
+
     Suc p | equal d book p var -> do
-      Done $ Nat
+      return $ Nat
+    Suc p  -> do
+      inferIndirectGo d span book ctx var p
+
     Con h t | equal d book h var -> do
       tT <- infer d (getSpan span t) book ctx t
       case cut tT of
-        Lst hT -> Done $ (Lst hT)
-        _ -> Done (Var "_unconstrained" 0)
+        Lst hT -> return $ (Lst hT)
+        _      -> return (Var "_unconstrained" 0)
     Con h t | equal d book t var -> do
       hT <- infer d (getSpan span h) book ctx h
-      Done $ (Lst hT)
-    _ -> do
-      -- traceM $ "- indirect DEFAULT:" ++ show var ++ " in " ++ show term
-      Done (Var "_unconstrained" 0)
+      return $ (Lst hT)
+    Con h t -> do
+      t1 <- inferIndirectGo d span book ctx var h
+      t2 <- inferIndirectGo d span book ctx var t
+      unifyOrFail t1 t2
+
+    Ref k j -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    
+    Sub x -> do
+      inferIndirectGo d span book ctx var x
+    
+    Fix k f -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    
+    Let k t v f -> do
+      case t of
+        Just t | equal d book var t -> do
+          return Set
+        Just t -> do
+          t1 <- inferIndirectGo d span book ctx var t
+          t2 <- inferIndirectGo d span book ctx var v
+          t3 <- inferIndirectGo (d+1) span book (extend ctx k v t) var (f (Var k d))
+          t4 <- unifyOrFail t1 t2
+          unifyOrFail t3 t4
+        _ -> do
+          case infer d span book ctx v of
+            Done t -> do
+              t1 <- inferIndirectGo d span book ctx var t
+              t2 <- inferIndirectGo d span book ctx var v
+              t3 <- inferIndirectGo (d+1) span book (extend ctx k v t) var (f (Var k d))
+              t4 <- unifyOrFail t1 t2
+              unifyOrFail t3 t4
+            _ -> do
+              inferIndirectGo d span book ctx var v
+    
+    Use k v f -> do
+      inferIndirectGo d span book ctx var (f v)
+    
+    Set -> do
+      return (Var "_unconstrained" 0)
+    
+    Emp -> do
+      return (Var "_unconstrained" 0)
+    
+    EmpM -> do
+      return (Var "_unconstrained" 0)
+    
+    Uni -> do
+      return (Var "_unconstrained" 0)
+    
+    One -> do
+      return (Var "_unconstrained" 0)
+    
+    UniM f -> do
+      t <- inferIndirectGo d span book ctx var f
+      return $ UniM t
+    
+    Bit -> do
+      return (Var "_unconstrained" 0)
+    
+    Bt0 -> do
+      return (Var "_unconstrained" 0)
+    
+    Bt1 -> do
+      return (Var "_unconstrained" 0)
+    
+    BitM f t -> do
+      t1 <- inferIndirectGo d span book ctx var f
+      t2 <- inferIndirectGo d span book ctx var t
+      return $ BitM t1 t2
+    
+    Nat -> do
+      return (Var "_unconstrained" 0)
+    
+    Zer -> do
+      return (Var "_unconstrained" 0)
+    
+    Lst t | equal d book var t -> do
+      return Set
+    Lst t  -> do
+      inferIndirectGo d span book ctx var t
+    
+    Nil -> do
+      return (Var "_unconstrained" 0)
+    
+    LstM n c -> do
+      t1 <- inferIndirectGo d span book ctx var n
+      t2 <- inferIndirectGo d span book ctx var c
+      return $ LstM t1 t2
+    
+    Enu syms -> do
+      return (Var "_unconstrained" 0)
+    
+    Sym s -> do
+      return (Var "_unconstrained" 0)
+    
+    EnuM cs Nothing -> do
+      ts <- mapM (\(s, t) -> inferIndirectGo d span book ctx var t) cs
+      return $ EnuM [(s, t) | (s, _) <- cs, t <- ts] Nothing
+    EnuM cs (Just def) -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    
+    Num t -> do
+      return (Var "_unconstrained" 0)
+    
+    Val v -> do
+      return (Var "_unconstrained" 0)
+    
+    Op2 op a b | equal d book var a || equal d book var b -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    Op2 op a b -> do
+      t1 <- inferIndirectGo d span book ctx var a
+      t2 <- inferIndirectGo d span book ctx var b
+      unifyOrFail t1 t2
+    
+    Op1 op a | equal d book var a -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    Op1 op a -> do
+      inferIndirectGo d span book ctx var a
+    
+    Sig a b | equal d book var a && not (equal d book var b) -> do
+      t2 <- inferIndirectGo d span book ctx var b
+      unifyOrFail Set t2
+    Sig a b | not (equal d book var a) && not (equal d book var b) -> do
+      t1 <- inferIndirectGo d span book ctx var a
+      t2 <- inferIndirectGo d span book ctx var b
+      unifyOrFail t1 t2
+    Sig a b -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    
+    Tup a b | not (equal d book var a || equal d book var b) -> do
+      t1 <- inferIndirectGo d span book ctx var a
+      t2 <- inferIndirectGo d span book ctx var b
+      unifyOrFail t1 t2
+    Tup a b -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    
+    SigM f -> do
+      t1 <- inferIndirectGo d span book ctx var f
+      return $ SigM t1
+    
+    All a b | equal d book var a && not (equal d book var b) -> do
+      t2 <- inferIndirectGo d span book ctx var b
+      unifyOrFail Set t2
+    All a b | not (equal d book var b) -> do
+      t1 <- inferIndirectGo d span book ctx var a
+      t2 <- inferIndirectGo d span book ctx var b
+      unifyOrFail t1 t2
+    All a b -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    
+    Eql t a b | equal d book var a -> do
+      t1 <- inferIndirectGo d span book ctx var a
+      t2 <- inferIndirectGo d span book ctx var b
+      t3 <- unifyOrFail t1 t2
+      unifyOrFail Set t3
+    Eql t a b -> do
+      t1 <- inferIndirectGo d span book ctx var a
+      t2 <- inferIndirectGo d span book ctx var b
+      t3 <- inferIndirectGo d span book ctx var t
+      t4 <- unifyOrFail t1 t2
+      unifyOrFail t3 t4
+    
+    Rfl -> do
+      return (Var "_unconstrained" 0)
+    
+    EqlM f -> do
+      t1 <- inferIndirectGo d span book ctx var f
+      return $ EqlM t1
+    
+    Rwt e f -> do
+      t1 <- inferIndirectGo d span book ctx var e  
+      t2 <- inferIndirectGo d span book ctx var f
+      unifyOrFail t1 t2
+    
+    Met n t xs -> do
+      t1 <- inferIndirectGo d span book ctx var t
+      ts <- mapM (inferIndirectGo d span book ctx var) xs
+      foldM unifyOrFail t1 ts
+
+    Era -> do
+      return (Var "_unconstrained" 0)
+    
+    Sup l a b | equal d book var l -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    Sup l a b -> do
+      t1 <- inferIndirectGo d span book ctx var a
+      t2 <- inferIndirectGo d span book ctx var b
+      unifyOrFail t1 t2
+    
+    SupM l f | equal d book var l -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    SupM l f -> do
+      t1 <- inferIndirectGo d span book ctx var l
+      t2 <- inferIndirectGo d span book ctx var f
+      unifyOrFail t1 t2
+    
+    Log s x | equal d book var s -> do
+      t1 <- inferIndirectGo d span book ctx var x
+      unifyOrFail (Lst (Num CHR_T)) t1
+    Log s x -> do
+      t1 <- inferIndirectGo d span book ctx var s
+      t2 <- inferIndirectGo d span book ctx var x
+      unifyOrFail t1 t2
+    
+    Pri p -> do
+      return (Var "_unconstrained" 0)
+    
+    Pat ps ms cs -> do
+      Fail $ CantInfer span (normalCtx book ctx)
+    
+    Frk l a b | equal d book var l -> do
+      t1 <- inferIndirectGo d span book ctx var a
+      t2 <- inferIndirectGo d span book ctx var b
+      t3 <- unifyOrFail t1 t2
+      unifyOrFail (Num U64_T) t3
+    Frk l a b -> do
+      t1 <- inferIndirectGo d span book ctx var a
+      t2 <- inferIndirectGo d span book ctx var b
+      t3 <- inferIndirectGo d span book ctx var l
+      t4 <- unifyOrFail t1 t2
+      unifyOrFail t3 t4
+
   where
     unifyOrFail t1 t2 = case unifyTerms d book t1 t2 of
       Just t -> Done t
       Nothing -> Fail $ CantInfer span (normalCtx book ctx)
 
 inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> SigM g) x) = do
-  -- traceM $ "- indirect vTUP:   " ++ show var ++ " in " ++ show term
   aT <- infer d span book ctx a
   case cut g of
     Lam l mtl lb -> do
       case cut (lb (Var l d)) of
         Lam r mtr rb -> do
           rT <- inferIndirectGo d span book (extend ctx l (Var l d) aT) (Var r (d+1)) (rb (Var r (d+1)))
-          -- traceM $ "BBBBBBBBBBBBBBBBBBBBBBB " ++ show var ++ " :: " ++ show rT
           Done $ Sig aT (Lam l (Just aT) (\v -> bindVarByName l v rT))
         _ -> do
           Fail $ CantInfer (getSpan span x) (normalCtx book ctx)
@@ -206,7 +394,150 @@ unifyTerms d book t1 t2 = case (t1, t2) of
       (Nothing, Just t) -> return $ Just t
       (Nothing, Nothing) -> return Nothing
     bt <- unifyTerms (d+1) book (b1 (Var k1 d)) (b2 (Var k1 d))
-    return $ Lam k1 mt' (\v -> bindVarByName k1 v bt)
+    return $ Lam k1 mt' (\v -> bindVarByIndex d v bt)
+
+
+
+  (Chk v1 t1, Chk v2 t2) -> do
+    v' <- unifyTerms d book v1 v2
+    t' <- unifyTerms d book t1 t2
+    return $ Chk v' t'
+
+  (Let k1 mt1 v1 f1, Let k2 mt2 v2 f2) | k1 == k2 -> do
+    mt' <- case (mt1, mt2) of
+      (Just t1, Just t2) -> Just <$> unifyTerms d book t1 t2
+      (Just t, Nothing) -> return $ Just t
+      (Nothing, Just t) -> return $ Just t
+      (Nothing, Nothing) -> return Nothing
+    v' <- unifyTerms d book v1 v2
+    let unique_dummy = Var "__" (-1)
+    b' <- unifyTerms (d+1) book (f1 unique_dummy) (f2 unique_dummy)
+    return $ Let k1 mt' v' (\x -> bindVarByIndex (-1) x b')
+
+  (Use k1 v1 f1, Use k2 v2 f2) | k1 == k2 -> do
+    let unique_dummy = Var "__" (-1)
+    v' <- unifyTerms d book v1 v2
+    f' <- unifyTerms d book (f1 unique_dummy) (f2 unique_dummy)
+    return $ Use k1 v' (\x -> bindVarByIndex (-1) x f')
+
+  (Fix k1 f1, Fix k2 f2) | k1 == k2 -> do
+    let unique_dummy = Var "__" (-1)
+    b' <- unifyTerms d book (f1 unique_dummy) (f2 unique_dummy)
+    return $ Fix k1 (\x -> bindVarByIndex (-1) x b')
+
+  (Loc l1 t1, Loc l2 t2) -> do
+    t' <- unifyTerms d book t1 t2
+    return $ Loc l1 t'
+
+  (Loc l t1, t2) -> do
+   t <- unifyTerms d book t1 t2
+   return $ Loc l t
+  (t1, Loc l t2) -> do
+   t <- unifyTerms d book t1 t2
+   return $ Loc l t
+
+  (Sub x1, Sub x2) -> do
+    x' <- unifyTerms d book x1 x2
+    return $ Sub x'
+
+  (UniM f1, UniM f2) -> do
+    f' <- unifyTerms d book f1 f2
+    return $ UniM f'
+
+  (Suc n1, Suc n2) -> do
+    n' <- unifyTerms d book n1 n2
+    return $ Suc n'
+
+  (Lst t1, Lst t2) -> do
+    t' <- unifyTerms d book t1 t2
+    return $ Lst t'
+
+  (Con h1 t1, Con h2 t2) -> do
+    h' <- unifyTerms d book h1 h2
+    t' <- unifyTerms d book t1 t2
+    return $ Con h' t'
+
+  (LstM n1 c1, LstM n2 c2) -> do
+    n' <- unifyTerms d book n1 n2
+    c' <- unifyTerms d book c1 c2
+    return $ LstM n' c'
+
+  (EnuM cs1 Nothing, EnuM cs2 Nothing) | map fst cs1 == map fst cs2 -> do
+      cs' <- sequence [ (,) s <$> unifyTerms d book t1 t2 
+                      | ((s,t1), (_,t2)) <- zip cs1 cs2 ]
+      return $ EnuM cs' Nothing
+  (EnuM cs1 (Just _), EnuM cs2 _) -> Nothing
+  (EnuM cs1 _, EnuM cs2 (Just _)) -> Nothing
+
+  (Op2 op1 a1 b1, Op2 op2 a2 b2) | op1 == op2 -> do
+    a' <- unifyTerms d book a1 a2
+    b' <- unifyTerms d book b1 b2
+    return $ Op2 op1 a' b'
+
+  (Op1 op1 a1, Op1 op2 a2) | op1 == op2 -> do
+    a' <- unifyTerms d book a1 a2
+    return $ Op1 op1 a'
+
+  (Sig a1 b1, Sig a2 b2) -> do
+    a' <- unifyTerms d book a1 a2
+    b' <- unifyTerms d book b1 b2
+    return $ Sig a' b'
+
+  (Tup a1 b1, Tup a2 b2) -> do
+    a' <- unifyTerms d book a1 a2
+    b' <- unifyTerms d book b1 b2
+    return $ Tup a' b'
+
+  (SigM f1, SigM f2) -> do
+    f' <- unifyTerms d book f1 f2
+    return $ SigM f'
+
+  (All a1 b1, All a2 b2) -> do
+    a' <- unifyTerms d book a1 a2
+    b' <- unifyTerms d book b1 b2
+    return $ All a' b'
+
+  (Eql t1 a1 b1, Eql t2 a2 b2) -> do
+    t' <- unifyTerms d book t1 t2
+    a' <- unifyTerms d book a1 a2
+    b' <- unifyTerms d book b1 b2
+    return $ Eql t' a' b'
+
+  (EqlM f1, EqlM f2) -> do
+    f' <- unifyTerms d book f1 f2
+    return $ EqlM f'
+
+  (Rwt e1 f1, Rwt e2 f2) -> do
+    e' <- unifyTerms d book e1 e2
+    f' <- unifyTerms d book f1 f2
+    return $ Rwt e' f'
+
+  (Met n1 t1 xs1, Met n2 t2 xs2) | n1 == n2 && length xs1 == length xs2 -> do
+    t' <- unifyTerms d book t1 t2
+    xs' <- mapM (uncurry (unifyTerms d book)) (zip xs1 xs2)
+    return $ Met n1 t' xs'
+
+  (Sup l1 a1 b1, Sup l2 a2 b2) -> do
+    l' <- unifyTerms d book l1 l2
+    a' <- unifyTerms d book a1 a2
+    b' <- unifyTerms d book b1 b2
+    return $ Sup l' a' b'
+
+  (SupM l1 f1, SupM l2 f2) -> do
+    l' <- unifyTerms d book l1 l2
+    f' <- unifyTerms d book f1 f2
+    return $ SupM l' f'
+
+  (Log s1 x1, Log s2 x2) -> do
+    s' <- unifyTerms d book s1 s2
+    x' <- unifyTerms d book x1 x2
+    return $ Log s' x'
+
+  (Frk l1 a1 b1, Frk l2 a2 b2) -> do
+    l' <- unifyTerms d book l1 l2
+    a' <- unifyTerms d book a1 a2
+    b' <- unifyTerms d book b1 b2
+    return $ Frk l' a' b'
     
   -- If they're equal, return either
   (t1, t2) | equal d book t1 t2 -> Just t1
