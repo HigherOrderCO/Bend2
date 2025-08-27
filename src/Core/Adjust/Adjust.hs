@@ -86,9 +86,9 @@ import Core.WHNF
 adjust :: Book -> Term -> Term
 adjust book term =
   -- trace ("term: " ++ show term) $
-  trace ("flat: " ++ show flat) $
-  trace ("npat: " ++ show npat) $
-  trace ("spec: " ++ show spec) $
+  -- trace ("flat: " ++ show flat) $
+  -- trace ("npat: " ++ show npat) $
+  -- trace ("spec: " ++ show spec) $
   -- trace ("done: " ++ show done) $
   done
   where
