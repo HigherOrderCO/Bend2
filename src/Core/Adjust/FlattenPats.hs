@@ -117,16 +117,16 @@ isVarCol _                         = False
 flattenPat :: Int -> Span -> Book -> Term -> Term
 flattenPat d span book pat =
   -- trace ("FLATTEN: " ++ show pat) $
-  flattenPatGo d book Nothing pat where
-    flattenPatGo d book defVar pat@(Pat (s:ss) ms css@((((cut->Var k i):ps),rhs):cs)) | isVarCol css =
+  flattenPatGo d book pat where
+    flattenPatGo d book pat@(Pat (s:ss) ms css@((((cut->Var k i):ps),rhs):cs)) | isVarCol css =
       -- trace (">> var: " ++ show pat) $
       flattenPats d span book $ Pat ss ms (joinVarCol (d+1) span book s (((Var k i:ps),rhs):cs))
       -- flattenPats d span book $ Pat ss (ms++[(k,s)]) (joinVarCol (d+1) (Var k 0) (((Var k i:ps),rhs):cs))
-    flattenPatGo d book defVar pat@(Pat (s:ss) ms cs@(((pp:ps0),rhs0):cs0)) =
+    flattenPatGo d book pat@(Pat (s:ss) ms cs@(((pp:ps0),rhs0):cs0)) =
       -- trace (">> ctr: " ++ show p ++ " " ++ show pat
           -- ++ "\n>> - picks: " ++ show picks
           -- ++ "\n>> - drops: " ++ show drops) $
-      Pat [s] moves [([ct], flattenPats (d+length fs) span book picks), ([dropPat], flattenPats (d+1) span book drops)] where
+      Pat [s] moves [([ct], flattenPats (d+length fs) span book picks), ([var d], flattenPats (d+1) span book drops)] where
         p        = cut pp
         (ct0,fs) = ctrOf d p
         -- Preserve location if the pattern was a located unit '()' or tuple
@@ -137,23 +137,13 @@ flattenPat d span book pat =
         (ps,ds)  = peelCtrCol d span book ct cs
         moves    = ms
         -- moves   = ms ++ map (\ (s,i) -> (patOf (d+i) s, s)) (zip ss [0..])
-        -- Find if there's a default variable in the current cases
-        findDefault = case filter (\case 
-                                     ((p:_),_) -> case cut p of Var _ _ -> True; _ -> False
-                                     ([],_) -> False) cs of
-                        ((((cut->Var k i):_),_):_) -> Just (Var k i)
-                        _ -> defVar  -- Use inherited default if no local default
         picks   = Pat (fs   ++ ss) ms ps
-        -- Use the default variable name if we have one, otherwise generate fresh
-        dropPat  = case findDefault of
-                     Just v  -> v
-                     Nothing -> var d
-        drops   = Pat (dropPat : ss) ms ds
-    flattenPatGo d book defVar pat@(Pat [] ms (([],rhs):cs)) =
+        drops   = Pat (var d : ss) ms ds
+    flattenPatGo d book pat@(Pat [] ms (([],rhs):cs)) =
       flattenPats d span book rhs
-    flattenPatGo d book defVar (Loc l t) =
+    flattenPatGo d book (Loc l t) =
       Loc l (flattenPat d span book t)
-    flattenPatGo d book defVar pat =
+    flattenPatGo d book pat =
       pat
 
 -- Converts an all-variable column to a 'with' statement
