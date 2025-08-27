@@ -71,7 +71,6 @@ import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ReduceEtas
-import Core.Adjust.SpecializeDefaults
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -88,14 +87,12 @@ adjust book term =
   -- trace ("term: " ++ show term) $
   -- trace ("flat: " ++ show flat) $
   -- trace ("npat: " ++ show npat) $
-  -- trace ("spec: " ++ show spec) $
   -- trace ("done: " ++ show done) $
   done
   where
     flat = flattenPats 0 noSpan book term
-    npat = desugarPats 0 noSpan book flat
-    spec = specializeDefaults 0 book npat
-    nfrk = desugarFrks book 0 spec
+    npat = desugarPats 0 noSpan book flat  -- Now includes specialization
+    nfrk = desugarFrks book 0 npat
     etas = reduceEtas 0 nfrk
     done = bind etas
 
