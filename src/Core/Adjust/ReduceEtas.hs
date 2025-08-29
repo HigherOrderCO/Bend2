@@ -102,7 +102,7 @@ reduceEtas d t = case t of
           z = Use k Zer (\x -> bindVarByName k x (reduceEtas d (resolveMatches d k NATM 0 "" [] (f (Var k d)))))
           s = reduceEtas d (Lam (extendName k "p") Nothing (\q ->
                             Use k (Suc q) (\x ->
-                            bindVarByName k x (resolveMatches (d+1) k NATM 1 "" [q] (f (Var k d))))))
+                            bindVarByName k x (resolveMatches (d+1) k NATM 1 "" [Sub q] (f (Var k d))))))
 
       EMPM -> EmpM
 
@@ -111,19 +111,19 @@ reduceEtas d t = case t of
           cons = reduceEtas d (Lam (extendName k "h") Nothing (\h ->
                                Lam (extendName k "t") Nothing (\t ->
                                Use k (Con h t) (\x ->
-                               bindVarByName k x (resolveMatches (d+2) k LSTM 1 "" [h, t] (f (Var k d)))))))
+                               bindVarByName k x (resolveMatches (d+2) k LSTM 1 "" [Sub h, Sub t] (f (Var k d)))))))
 
       SIGM -> SigM pair where
           pair = reduceEtas d (Lam (extendName k "a") Nothing (\a ->
                                Lam (extendName k "b") Nothing (\b ->
                                Use k (Tup a b) (\x -> 
-                               bindVarByName k x (resolveMatches (d+2) k SIGM 0 "" [a, b] (f (Var k d)))))))
+                               bindVarByName k x (resolveMatches (d+2) k SIGM 0 "" [Sub a, Sub b] (f (Var k d)))))))
 
       SUPM lab -> SupM lab branches where
           branches = reduceEtas d (Lam (extendName k "l") Nothing (\l ->
                                    Lam (extendName k "r") Nothing (\r ->
                                    Use k (Sup lab l r) (\x ->
-                                   bindVarByName k x (resolveMatches (d+2) k (SUPM lab) 0 "" [l, r] (f (Var k d)))))))
+                                   bindVarByName k x (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d)))))))
 
       EQLM -> EqlM refl where
           refl = Use k Rfl (\x -> bindVarByName k x (reduceEtas d (resolveMatches d k EQLM 0 "" [] (f (Var k d)))))
@@ -134,7 +134,7 @@ reduceEtas d t = case t of
         def = if compl
             then reduceEtas d (Lam (extendName k "def") Nothing (\q ->
                                Use k q (\x ->
-                               bindVarByName k x (resolveMatches (d+1) k (ENUM syms compl) (-1) "" [q] (f (Var k d))))))
+                               bindVarByName k x (resolveMatches (d+1) k (ENUM syms compl) (-1) "" [Sub q] (f (Var k d))))))
             else One
       NONE -> Lam k mty (\x -> reduceEtas d (f x))
 
@@ -284,7 +284,7 @@ resolveMatches d n l clause sym args t = case t of
                     resolveMatches d n l clause sym args branch
                   Nothing     ->
                     case cut def of
-                      Lam defK mtdef defB -> resolveMatches d n l clause sym args (defB (Var k i))
+                      Lam defK mtdef defB -> resolveMatches (d+1) n l clause sym args (defB (Var k i))
                       _ -> error $ "Missing lambda in default case"
           (EnuM cs def, _) ->
             EnuM [(s, resolveMatches d n l clause sym args t) | (s,t) <- cs] (resolveMatches d n l clause sym args def)
