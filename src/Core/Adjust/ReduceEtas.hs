@@ -88,71 +88,54 @@ reduceEtas d t = case t of
 -- an argument of a constructor in a match by a var of the newly-pulled-outward match of the reduction
   Lam k mty f ->
     case isEtaLong d k (f (Var k d)) of
+      EMPM -> EmpM
+
+      EQLM -> EqlM refl where
+          refl = bindVarByName k Rfl (reduceEtas d (resolveMatches d k EQLM 0 "" [] (f (Var k d))))
+
       UNIM -> UniM u where
-          u = Use k One (\x -> bindVarByName k x (reduceEtas d (resolveMatches d k UNIM 0 "" [] (f (Var k d)))))
+          u = bindVarByName k One (reduceEtas d (resolveMatches d k UNIM 0 "" [] (f (Var k d))))
                                                                                             -- if we don't use f (Var k d), 
                                                                                             -- then the recursive reduceEtas
                                                                                             -- won't know that it has found
                                                                                             -- a deeper app-lam-match on k
       BITM -> BitM fl tr where
-          -- fl = Use k Bt0 (\x -> bindVarByName k x (reduceEtas d (resolveMatches d k BITM 0 "" [] (f (Var k d)))))
-          -- tr = Use k Bt1 (\x -> bindVarByName k x (reduceEtas d (resolveMatches d k BITM 1 "" [] (f (Var k d)))))
           fl = bindVarByName k Bt0 (reduceEtas d (resolveMatches d k BITM 0 "" [] (f (Var k d))))
           tr = bindVarByName k Bt1 (reduceEtas d (resolveMatches d k BITM 1 "" [] (f (Var k d))))
 
       NATM -> NatM z s where
-          -- z = Use k Zer (\x -> bindVarByName k x (reduceEtas d (resolveMatches d k NATM 0 "" [] (f (Var k d)))))
-          -- s = reduceEtas d (Lam (extendName k "p") Nothing (\q ->
-          --                   Use k (Suc q) (\x ->
-          --                   bindVarByName k x (resolveMatches (d+1) k NATM 1 "" [Sub q] (f (Var k d))))))
           z = bindVarByName k Zer (reduceEtas d (resolveMatches d k NATM 0 "" [] (f (Var k d))))
           s = reduceEtas d (Lam (extendName k "p") Nothing (\q -> bindVarByName k (Suc q) (resolveMatches (d+1) k NATM 1 "" [Sub q] (f (Var k d)))))
-      EMPM -> EmpM
 
       LSTM -> LstM nil cons where
-          -- nil = Use k Nil (\x -> bindVarByName k x (reduceEtas d (resolveMatches d k LSTM 0 "" [] (f (Var k d)))))
-          -- cons = reduceEtas d (Lam (extendName k "h") Nothing (\h ->
-          --                      Lam (extendName k "t") Nothing (\t ->
-          --                      Use k (Con h t) (\x ->
-          --                      bindVarByName k x (resolveMatches (d+2) k LSTM 1 "" [Sub h, Sub t] (f (Var k d)))))))
           nil = bindVarByName k Nil (reduceEtas d (resolveMatches d k LSTM 0 "" [] (f (Var k d))))
           cons = reduceEtas d (Lam (extendName k "h") Nothing (\h ->
                                Lam (extendName k "t") Nothing (\t ->
                                bindVarByName k (Con h t) (resolveMatches (d+2) k LSTM 1 "" [Sub h, Sub t] (f (Var k d))))))
 
       SIGM -> SigM pair where
-          -- pair = reduceEtas d (Lam (extendName k "a") Nothing (\a ->
-          --                      Lam (extendName k "b") Nothing (\b ->
-          --                      Use k (Tup a b) (\x -> 
-          --                      bindVarByName k x (resolveMatches (d+2) k SIGM 0 "" [Sub a, Sub b] (f (Var k d)))))))
           pair = reduceEtas d (Lam (extendName k "a") Nothing (\a ->
                                Lam (extendName k "b") Nothing (\b ->
                                bindVarByName k (Tup a b) (resolveMatches (d+2) k SIGM 0 "" [Sub a, Sub b] (f (Var k d))))))
 
-      SUPM lab -> SupM lab branches where
-          branches = reduceEtas d (Lam (extendName k "l") Nothing (\l ->
-                                   Lam (extendName k "r") Nothing (\r ->
-                                   bindVarByName k (Sup lab l r) (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d))))))
-                                   -- Use k (Sup lab (Sub l) (Sub r)) (\x ->
-                                   -- bindVarByName k x (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d)))))))
-
-      EQLM -> EqlM refl where
-          -- refl = Use k Rfl (\x -> bindVarByName k x (reduceEtas d (resolveMatches d k EQLM 0 "" [] (f (Var k d)))))
-          refl = bindVarByName k Rfl (reduceEtas d (resolveMatches d k EQLM 0 "" [] (f (Var k d))))
-
       ENUM syms compl -> EnuM cases def where
-        -- cases = map (\sym -> (sym, Use k (Sym sym) (\x -> 
-        --                            bindVarByName k x (reduceEtas d (resolveMatches d k (ENUM syms compl) 0 sym [] (f (Var k d))))))) syms
-        -- def = if compl
-        --     then reduceEtas d (Lam (extendName k "def") Nothing (\q ->
-        --                        Use k q (\x ->
-        --                        bindVarByName k x (resolveMatches (d+1) k (ENUM syms compl) (-1) "" [Sub q] (f (Var k d))))))
-        --     else One
         cases = map (\sym -> (sym, bindVarByName k (Sym sym) (reduceEtas d (resolveMatches d k (ENUM syms compl) 0 sym [] (f (Var k d))))) ) syms
         def = if compl
             then reduceEtas d (Lam (extendName k "def") Nothing (\q -> bindVarByName k q (resolveMatches (d+1) k (ENUM syms compl) (-1) "" [Sub q] (f (Var k d)))))
             else One
-      NONE -> Lam k mty (\x -> reduceEtas d (f x))
+      
+      SUPM lab -> SupM lab branches where
+          -- branches = reduceEtas d (Lam (k++"0") Nothing (\l ->
+          --                          Lam (k++"1") Nothing (\r ->
+          --                          bindVarByName k l (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d))))))
+          branches = reduceEtas d (Lam k Nothing (\v ->
+                                   Lam (extendName k "0") Nothing (\l ->
+                                   Let (extendName k "1") Nothing v (\r ->
+                                   bindVarByName k v (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d))))))
+                                  )
+
+      -- NONE -> Lam k mty (\x -> reduceEtas d (f x))
+      _ -> Lam k mty (\x -> reduceEtas d (f x))
 
   -- Not a Lam, just propagate deeper
   Var n i       -> Var n i
