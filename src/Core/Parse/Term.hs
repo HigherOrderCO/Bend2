@@ -1155,7 +1155,7 @@ doParseTerm :: FilePath -> String -> Either String Term
 doParseTerm file input =
   case evalState (runParserT p file input) (ParserState True input [] M.empty 0) of
     Left err  -> Left (formatError input err)
-    Right res -> Right (adjust (Book M.empty []) res)
+    Right res -> Right (adjust (Book M.empty []) res Nothing)
   where
     p = do
       skip

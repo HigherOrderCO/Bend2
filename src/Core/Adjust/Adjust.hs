@@ -82,10 +82,10 @@ import Core.WHNF
 -- It uses a book of already-adjusted definitions for context during flattening.
 -- Note: This does NOT check for free variables, as it may be called during
 -- book adjustment where recursive references aren't available yet.
-adjust :: Book -> Term -> Term
-adjust book term =
-  -- trace ("nfrk: " ++ show nfrk) $
-  -- trace ("done: " ++ show done) $
+adjust :: Book -> Term -> (Maybe Term) -> Term
+adjust book term typ =
+  trace ("nfrk: " ++ show nfrk) $
+  trace ("done: " ++ show done) $
   done
   where
     flat = flattenPats 0 noSpan book term
@@ -95,8 +95,8 @@ adjust book term =
     done = reduceEtas 0 hoas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
-adjustWithPats :: Book -> Term -> Term
-adjustWithPats book term =
+adjustWithPats :: Book -> Term -> (Maybe Term) -> Term
+adjustWithPats book term typ =
   ret
   where 
     ret = bind (desugarFrks book 0 (flattenPats 0 noSpan book term))
@@ -140,7 +140,7 @@ checkFreeVarsInBook book@(Book defs names) =
 
 -- | The recursive worker function that adjusts a single definition.
 -- It takes a set of names currently in the recursion stack to detect cycles.
-adjustDef :: Book -> S.Set Name -> (Book -> Term -> Term) -> Name -> State AdjustState ()
+adjustDef :: Book -> S.Set Name -> (Book -> Term -> (Maybe Term) -> Term) -> Name -> State AdjustState ()
 adjustDef book visiting adjustFn name = do
   (_, adjustedSet) <- get
 
@@ -167,8 +167,8 @@ adjustDef book visiting adjustFn name = do
         -- as it has been updated by the recursive calls.
         (partialAdjBook, _) <- get
 
-        let adjTerm = adjustFn partialAdjBook term
-        let adjType = adjustFn partialAdjBook typ
+        let adjTerm = adjustFn partialAdjBook term (Just typ)
+        let adjType = adjustFn partialAdjBook typ Nothing
 
         -- 4. Update the state with the newly adjusted definition.
         -- The name is added to the `adjustedSet` to mark it as complete.
