@@ -35,6 +35,7 @@ library
                       Core.Adjust.DesugarFrks,
                       Core.FreeVars,
                       Core.Import,
+                      Core.Subst,
                       Core.Parse.Parse,
                       Core.Parse.Book,
                       Core.Parse.Term,
