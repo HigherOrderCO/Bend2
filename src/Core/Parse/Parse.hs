@@ -38,6 +38,9 @@ module Core.Parse.Parse
   
   -- * Error recovery
   , expectBody
+  
+  -- * FQN generation
+  , qualifyName
   ) where
 
 import Control.Monad (when, replicateM, void, guard)
@@ -63,8 +66,12 @@ data ParserState = ParserState
   { tight         :: Bool                  -- ^ tracks whether previous token ended with no trailing space
   , source        :: String                -- ^ original file source, for error reporting
   , blocked       :: [String]              -- ^ list of blocked operators
-  , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/"
+  , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/" (legacy, for compatibility)
+  , moduleImports :: [String]              -- ^ module imports: ["Nat/add", "String/utils"] (for import ...)
+  , selectiveImports :: [(String, [String])] -- ^ selective imports: [("Nat/add", ["Nat/add", "Nat/add/go"])] (for from ... import ...)
+  , aliasImports :: [(String, String)]     -- ^ alias imports: [("NatOps", "Nat/add")] (for import ... as ...)
   , assertCounter :: Int                   -- ^ counter for generating unique assert names (E0, E1, E2...)
+  , fileName      :: FilePath              -- ^ current file being parsed, for FQN generation
   }
 
 type Parser = ParsecT Void String (Control.Monad.State.Strict.State ParserState)
@@ -209,3 +216,19 @@ formatError input bundle = do
         then "\nAt end of file.\n"
         else "\nAt line " ++ show lin ++ ", column " ++ show col ++ ":\n" ++ src
   "\nPARSE_ERROR\n" ++ msg ++ cod
+
+-- | Generate a fully qualified name by prefixing with current file
+qualifyName :: String -> Parser String
+qualifyName defName = do
+  st <- get
+  let filePrefix = toModulePath (fileName st)
+  return $ filePrefix ++ "::" ++ defName
+  where
+    -- Convert file path to module path (preserve directory structure, remove .bend extension)
+    toModulePath :: FilePath -> String
+    toModulePath path = 
+      if ".bend" `isSuffixOf` path
+         then take (length path - 5) path  -- Remove .bend extension but keep path
+         else path
+    isSuffixOf :: Eq a => [a] -> [a] -> Bool
+    isSuffixOf suffix str = suffix == drop (length str - length suffix) str
