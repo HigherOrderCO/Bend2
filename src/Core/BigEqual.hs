@@ -136,11 +136,10 @@ cmp red d book a b =
             (App (cut -> NatM s (cut -> Lam p mtp pb)) (cut -> xa), _) | not (isNatMApp b) ->
               eql red d book a (App (NatM b (Lam "_" mtp (\_ -> b))) xa)
 
-            (App (cut -> LstM s c) xa, _) | not (isLstMApp b) ->
+            (App (cut -> LstM n c) xa, _) | not (isLstMApp b) ->
               eql red d book a (App (LstM b (Lam "_" Nothing (\_ -> Lam "_" Nothing (\_ -> b)))) xa)
-            --
-            -- (_, App (cut -> LstM s (cut -> Lam h mth hb)) (cut -> xb)) | not (isLstMApp a) ->
-            --   eql red d book (App (LstM a (Lam "_" Nothing (\_ -> Lam "_" Nothing (\_ -> a)))) xb) b
+            (_, App (cut -> LstM n c) xb) | not (isLstMApp a) ->
+              eql red d book (App (LstM a (Lam "_" Nothing (\_ -> Lam "_" Nothing (\_ -> a)))) xb) b
 
               -- case cut (hb (Var h d)) of
               --   Lam t mtt tb ->
@@ -198,7 +197,7 @@ cmp red d book a b =
       -- trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
       res
     else 
-      -- trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
+      trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
       res
 
 isLamApp :: Term -> Bool

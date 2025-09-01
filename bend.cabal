@@ -35,6 +35,7 @@ library
                       Core.Adjust.FlattenPats,
                       Core.Adjust.DesugarPats,
                       Core.Adjust.DesugarFrks,
+                      Core.Adjust.SplitMatch,
                       Core.FreeVars,
                       Core.Import,
                       Core.Parse.Parse,

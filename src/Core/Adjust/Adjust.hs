@@ -64,6 +64,7 @@ module Core.Adjust.Adjust where
 import Control.Monad.State
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Maybe (fromMaybe)
 
 import Debug.Trace
 
@@ -71,20 +72,30 @@ import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ReduceEtas
+import Core.Adjust.SplitMatch
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
 import Core.Show
 import Core.Type
 import Core.WHNF
+import Core.BigCheck
 
 -- | Adjusts a single term, simplifying pattern matching and other constructs.
 -- It uses a book of already-adjusted definitions for context during flattening.
 -- Note: This does NOT check for free variables, as it may be called during
 -- book adjustment where recursive references aren't available yet.
+--
+printErr :: Result Term -> String
+printErr res = case res of
+        Done e -> ""
+        Fail e -> "\x1b[31m✗ " ++ "type error" ++ "\x1b[0m" ++ "\n" ++ show e
+
 adjust :: Book -> Term -> (Maybe Term) -> Term
 adjust book term typ =
   trace ("nfrk: " ++ show nfrk) $
+  trace ("chec: " ++ show chec) $
+  trace ("splt: " ++ show splt) $
   trace ("done: " ++ show done) $
   done
   where
@@ -92,10 +103,10 @@ adjust book term typ =
     npat = desugarPats 0 noSpan flat
     nfrk = desugarFrks book 0 npat
     hoas = bind nfrk
-    chec = case typ of
-      Just typ -> hoas
-      Nothing  -> hoas
-    done = reduceEtas 0 hoas
+    chec = maybe hoas (\t -> case check 0 noSpan book (Ctx []) hoas t of Done x -> x; res -> error $ printErr res) typ
+    splt = split 0 0 chec
+    done = reduceEtas 0 splt
+    -- done = reduceEtas 0 hoas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
 adjustWithPats :: Book -> Term -> (Maybe Term) -> Term
