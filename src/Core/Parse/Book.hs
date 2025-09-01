@@ -104,12 +104,18 @@ addSelectiveImport path names = do
   let newSelectiveImports = (path, names) : selectiveImports st
   put st { selectiveImports = newSelectiveImports }
 
+addAliasImport :: String -> String -> Parser ()
+addAliasImport alias path = do
+  st <- get
+  let newAliasImports = (alias, path) : aliasImports st
+  put st { aliasImports = newAliasImports }
+
 -- | Syntax: import Path/To/Lib as Lib
 parseImport :: Parser ()
 parseImport = choice
-  [ parseFromImport    -- from module import name1, name2
-  , parseModuleImport  -- import module
-  , parseAliasImport   -- import module as alias
+  [ try parseFromImport    -- from module import name1, name2
+  , try parseAliasImport   -- import module as alias (more specific, should go first)
+  , parseModuleImport      -- import module (no try needed, it's the fallback)
   ]
 
 -- | Parse: from module_path import name1, name2, ...
@@ -141,7 +147,7 @@ parseAliasImport = do
   path <- parseModulePath
   _ <- symbol "as"
   alias <- name
-  addImportMapping alias path
+  addAliasImport alias path
 
 -- | Syntax: import statements followed by definitions
 parseBook :: Parser Book
@@ -274,7 +280,7 @@ doParseBook file input =
 -- | Parse a book from a string, returning both the book and the import information
 doParseBookWithImports :: FilePath -> String -> Either String (Book, ParserState)
 doParseBookWithImports file input =
-  case runState (runParserT p file input) (ParserState True input [] M.empty [] [] 0 file) of
+  case runState (runParserT p file input) (ParserState True input [] M.empty [] [] [] 0 file) of
     (Left err, _)    -> Left (formatError input err)
     (Right res, st)  -> Right (res, st)
   where
