@@ -68,7 +68,7 @@ parseFile file = do
       exitFailure
     Right book -> do
       -- Auto-import unbound references
-      autoImportedBook <- autoImport (takeDirectory file) book
+      autoImportedBook <- autoImport file book
       return autoImportedBook
   where
     takeDirectory path = reverse . dropWhile (/= '/') . reverse $ path

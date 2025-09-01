@@ -37,9 +37,10 @@ parseDef :: Parser (Name, Defn)
 parseDef = do
   _ <- symbol "def"
   f <- name
+  qualifiedName <- qualifyName f
   choice
-    [ parseDefFunction f
-    , parseDefSimple f ]
+    [ parseDefFunction qualifiedName
+    , parseDefSimple qualifiedName ]
 
 -- | Syntax: def name : Type = term
 parseDefSimple :: Name -> Parser (Name, Defn)
@@ -114,6 +115,7 @@ parseType :: Parser (Name, Defn)
 parseType = label "datatype declaration" $ do
   _       <- symbol "type"
   tName   <- name
+  qualifiedTypeName <- qualifyName tName
   params  <- option [] $ angles (sepEndBy (parseArg True) (symbol ","))
   indices <- option [] $ parens (sepEndBy (parseArg False) (symbol ","))
   args    <- return $ params ++ indices
@@ -133,7 +135,7 @@ parseType = label "datatype declaration" $ do
       nest (n, ty) (tyAcc, bdAcc) = (All ty  (Lam n (Just ty) (\_ -> tyAcc)) , Lam n (Just ty) (\_ -> bdAcc))
       (fullTy, fullBody) = foldr nest (retTy, body0) args
       term = fullBody
-  return (tName, (True, term, fullTy))
+  return (qualifiedTypeName, (True, term, fullTy))
 
 -- | Syntax: case @Tag: field1: Type1 field2: Type2
 parseTypeCase :: Parser (String, [(Name, Term)])
@@ -172,8 +174,9 @@ parseTry = do
   (sp, (f, x, t)) <- withSpan $ do
     _ <- symbol "try"
     f <- name
-    (x, t) <- choice [parseTryFunction f, parseTrySimple f]
-    return (f, x, t)
+    qualifiedName <- qualifyName f
+    (x, t) <- choice [parseTryFunction qualifiedName, parseTrySimple qualifiedName]
+    return (qualifiedName, x, t)
   return (f, (False, Loc sp x, t))
 
 parseTrySimple :: Name -> Parser (Term, Type)
@@ -221,7 +224,7 @@ parseAssert = do
 -- | Parse a book from a string, returning an error message on failure
 doParseBook :: FilePath -> String -> Either String Book
 doParseBook file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0) of
+  case evalState (runParserT p file input) (ParserState True input [] M.empty 0 file) of
     Left err  -> Left (formatError input err)
     Right res -> Right res
       -- in Right (trace (show book) book)

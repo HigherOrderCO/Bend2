@@ -38,6 +38,9 @@ module Core.Parse.Parse
   
   -- * Error recovery
   , expectBody
+  
+  -- * FQN generation
+  , qualifyName
   ) where
 
 import Control.Monad (when, replicateM, void, guard)
@@ -65,6 +68,7 @@ data ParserState = ParserState
   , blocked       :: [String]              -- ^ list of blocked operators
   , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/"
   , assertCounter :: Int                   -- ^ counter for generating unique assert names (E0, E1, E2...)
+  , fileName      :: FilePath              -- ^ current file being parsed, for FQN generation
   }
 
 type Parser = ParsecT Void String (Control.Monad.State.Strict.State ParserState)
@@ -209,3 +213,19 @@ formatError input bundle = do
         then "\nAt end of file.\n"
         else "\nAt line " ++ show lin ++ ", column " ++ show col ++ ":\n" ++ src
   "\nPARSE_ERROR\n" ++ msg ++ cod
+
+-- | Generate a fully qualified name by prefixing with current file
+qualifyName :: String -> Parser String
+qualifyName defName = do
+  st <- get
+  let filePrefix = takeBaseName (fileName st)
+  return $ filePrefix ++ "::" ++ defName
+  where
+    takeBaseName :: FilePath -> String
+    takeBaseName path = 
+      let name = reverse . takeWhile (/= '/') . reverse $ path
+      in if ".bend" `isSuffixOf` name
+         then take (length name - 5) name
+         else name
+    isSuffixOf :: Eq a => [a] -> [a] -> Bool
+    isSuffixOf suffix str = suffix == drop (length str - length suffix) str
