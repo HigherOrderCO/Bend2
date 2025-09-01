@@ -125,12 +125,9 @@ reduceEtas d t = case t of
             else One
       
       SUPM lab -> SupM lab branches where
-          -- branches = reduceEtas d (Lam (k++"0") Nothing (\l ->
-          --                          Lam (k++"1") Nothing (\r ->
-          --                          bindVarByName k l (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d))))))
-          branches = reduceEtas d (Lam k Nothing (\v ->
-                                   Lam (extendName k "0") Nothing (\l ->
-                                   Let (extendName k "1") Nothing v (\r ->
+          branches = reduceEtas d (Lam (extendName k "0") Nothing (\l ->
+                                   Lam (extendName k "1") Nothing (\r ->
+                                   Let k Nothing l (\v ->
                                    bindVarByName k v (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d))))))
                                   )
 
