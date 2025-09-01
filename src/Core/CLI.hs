@@ -23,8 +23,9 @@ import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Bind
 import Core.Check
 import Core.Deps
-import Core.Import (autoImport)
-import Core.Parse.Book (doParseBook)
+import Core.Import (autoImport, autoImportWithExplicit)
+import Core.Parse.Book (doParseBook, doParseBookWithImports)
+import Core.Parse.Parse (ParserState(..))
 import Core.Type
 import Core.Show
 import Core.WHNF
@@ -62,13 +63,13 @@ checkBook book@(Book defs names) = do
 parseFile :: FilePath -> IO Book
 parseFile file = do
   content <- readFile file
-  case doParseBook file content of
+  case doParseBookWithImports file content of
     Left err -> do
       hPutStrLn stderr $ err
       exitFailure
-    Right book -> do
-      -- Auto-import unbound references
-      autoImportedBook <- autoImport file book
+    Right (book, parserState) -> do
+      -- Auto-import unbound references with explicit import information
+      autoImportedBook <- autoImportWithExplicit file book parserState
       return autoImportedBook
   where
     takeDirectory path = reverse . dropWhile (/= '/') . reverse $ path

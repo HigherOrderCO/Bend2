@@ -1,6 +1,6 @@
 {-./Type.hs-}
 
-module Core.Import (autoImport) where
+module Core.Import (autoImport, autoImportWithExplicit) where
 
 import Data.List (intercalate)
 import qualified Data.Map.Strict as M
@@ -13,6 +13,7 @@ import System.IO (hPutStrLn, stderr)
 import Core.Type
 import Core.Deps
 import Core.Parse.Book (doParseBook)
+import Core.Parse.Parse (ParserState(..))
 import qualified Data.Map.Strict as M
 
 -- Substitution types and functions
@@ -114,6 +115,15 @@ autoImport root book = do
       exitFailure
     Right b -> pure b
 
+autoImportWithExplicit :: FilePath -> Book -> ParserState -> IO Book  
+autoImportWithExplicit root book parserState = do
+  result <- importAllWithExplicit root book parserState
+  case result of
+    Left err -> do
+      hPutStrLn stderr $ "Error: " ++ err
+      exitFailure
+    Right b -> pure b
+
 -- Internal
 
 data ImportState = ImportState
@@ -122,6 +132,7 @@ data ImportState = ImportState
   , stBook    :: Book             -- accumulated book
   , stSubstMap :: SubstMap        -- substitution map for reference resolution
   , stCurrentFile :: FilePath     -- current file being processed
+  , stModuleImports :: S.Set String -- modules imported via "import Module" (blocks auto-import for their definitions)
   }
 
 importAll :: FilePath -> Book -> IO (Either String Book)
@@ -132,6 +143,7 @@ importAll currentFile base = do
         , stBook    = base
         , stSubstMap = M.empty
         , stCurrentFile = currentFile
+        , stModuleImports = S.empty
         }
       pending0 = getBookDeps base
   res <- importLoop initial pending0
@@ -143,6 +155,83 @@ importAll currentFile base = do
           finalBook = substituteRefsInBook substMap (stBook st)
       -- FQN system successfully implemented
       pure (Right finalBook)
+
+importAllWithExplicit :: FilePath -> Book -> ParserState -> IO (Either String Book)
+importAllWithExplicit currentFile base parserState = do
+  -- First process explicit imports to build initial substitution map
+  explicitResult <- processExplicitImports parserState
+  case explicitResult of
+    Left err -> pure (Left err)
+    Right (explicitBook, explicitSubstMap) -> do
+      let mergedBook = mergeBooks base explicitBook
+          initial = ImportState
+            { stVisited = S.empty
+            , stLoaded  = S.union (bookNames base) (bookNames explicitBook)
+            , stBook    = mergedBook
+            , stSubstMap = explicitSubstMap
+            , stCurrentFile = currentFile
+            , stModuleImports = S.fromList (moduleImports parserState)
+            }
+          pending0 = getBookDeps mergedBook
+      res <- importLoop initial pending0
+      case res of
+        Left err -> pure (Left err)
+        Right st -> do
+          -- Apply substitution map to the final book
+          let substMap = stSubstMap st
+              finalBook = substituteRefsInBook substMap (stBook st)
+          pure (Right finalBook)
+
+-- | Process explicit imports from parser state
+processExplicitImports :: ParserState -> IO (Either String (Book, SubstMap))
+processExplicitImports parserState = do
+  -- Process module imports: import Nat/add
+  moduleResults <- mapM processModuleImport (moduleImports parserState)
+  -- Process selective imports: from Nat/add import Nat/add, Nat/add/go  
+  selectiveResults <- mapM (uncurry processSelectiveImport) (selectiveImports parserState)
+  
+  -- Combine results
+  case sequence (moduleResults ++ selectiveResults) of
+    Left err -> pure (Left err)
+    Right results -> do
+      let (books, substMaps) = unzip results
+          combinedBook = foldr mergeBooks (Book M.empty []) books
+          combinedSubstMap = M.unions substMaps
+      pure (Right (combinedBook, combinedSubstMap))
+
+-- | Process a single module import: import Nat/add
+processModuleImport :: String -> IO (Either String (Book, SubstMap))
+processModuleImport modulePath = do
+  candidates <- generateImportPaths modulePath
+  mFound <- firstExisting candidates
+  case mFound of
+    Just path -> do
+      content <- readFile path
+      case doParseBook path content of
+        Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
+        Right book -> do
+          -- For module imports, we don't add names to substitution map
+          -- They are accessed via qualified syntax (module::name)
+          pure $ Right (book, M.empty)
+    Nothing -> pure $ Left $ "Cannot find module: " ++ modulePath
+
+-- | Process a selective import: from Nat/add import [Nat/add, Nat/add/go]
+processSelectiveImport :: String -> [String] -> IO (Either String (Book, SubstMap))
+processSelectiveImport modulePath names = do
+  candidates <- generateImportPaths modulePath
+  mFound <- firstExisting candidates
+  case mFound of
+    Just path -> do
+      content <- readFile path
+      case doParseBook path content of
+        Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
+        Right book -> do
+          let modulePrefix = takeBaseName' path
+          -- Build substitution map for selected names
+          let substEntries = [(name, modulePrefix ++ "::" ++ name) | name <- names]
+              substMap = M.fromList substEntries
+          pure $ Right (book, substMap)
+    Nothing -> pure $ Left $ "Cannot find module for selective import: " ++ modulePath
 
 importLoop :: ImportState -> S.Set Name -> IO (Either String ImportState)
 importLoop st pending =
@@ -175,10 +264,17 @@ resolveRef st refName = do
       
       case matchingFQNs of
         [fqn] -> do
-          -- Exactly one match - it's a local reference from some loaded module
-          let newSubstMap = M.insert refName fqn (stSubstMap st)
-              newLoaded = S.insert refName (stLoaded st)
-          pure $ Right st { stSubstMap = newSubstMap, stLoaded = newLoaded }
+          -- For auto-import resolution, the refName must match the module name
+          let modulePrefix = takeWhile (/= ':') fqn  -- Extract module part before "::"
+          if refName == modulePrefix
+            then do
+              -- Reference name matches module name - allow auto-import
+              let newSubstMap = M.insert refName fqn (stSubstMap st)
+                  newLoaded = S.insert refName (stLoaded st)
+              pure $ Right st { stSubstMap = newSubstMap, stLoaded = newLoaded }
+            else do
+              -- Reference name doesn't match module name - try traditional auto-import
+              loadRef st refName
         [] -> do
           -- No matches - try auto-import
           loadRef st refName
@@ -222,12 +318,13 @@ loadRef st refName = do
               let visited' = S.insert path (stVisited st)
                   merged   = mergeBooks (stBook st) imported
                   loaded'  = S.union (stLoaded st) (bookNames imported)
-                  -- Find the qualified name for the reference in the imported module
+                  -- Auto-import should only work if refName matches the module name
                   importFilePrefix = takeBaseName' path ++ "::"
                   importQualified = importFilePrefix ++ refName
-                  -- Add to substitution map if the qualified name exists in imported book
+                  moduleName = takeBaseName' path
+                  -- Add to substitution map ONLY if refName matches the module/file name
                   Book importedDefs _ = imported
-                  newSubstMap = if importQualified `M.member` importedDefs
+                  newSubstMap = if refName == moduleName && importQualified `M.member` importedDefs
                               then M.insert refName importQualified (stSubstMap st)
                               else stSubstMap st
               pure $ Right st { stVisited = visited', stLoaded = loaded', stBook = merged, stSubstMap = newSubstMap }

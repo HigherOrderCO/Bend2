@@ -3,11 +3,12 @@
 module Core.Parse.Book 
   ( parseBook
   , doParseBook
+  , doParseBookWithImports
   , doReadBook
   ) where
 
 import Control.Monad (when)
-import Control.Monad.State.Strict (State, get, put, evalState)
+import Control.Monad.State.Strict (State, get, put, evalState, runState)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (intercalate)
 import Data.Void
@@ -91,9 +92,51 @@ addImportMapping alias path = do
       newImports = M.insert aliasKey pathValue (imports st)
   put st { imports = newImports }
 
+addModuleImport :: String -> Parser ()
+addModuleImport path = do
+  st <- get
+  let newModuleImports = path : moduleImports st
+  put st { moduleImports = newModuleImports }
+
+addSelectiveImport :: String -> [String] -> Parser ()
+addSelectiveImport path names = do
+  st <- get
+  let newSelectiveImports = (path, names) : selectiveImports st
+  put st { selectiveImports = newSelectiveImports }
+
 -- | Syntax: import Path/To/Lib as Lib
 parseImport :: Parser ()
-parseImport = do
+parseImport = choice
+  [ parseFromImport    -- from module import name1, name2
+  , parseModuleImport  -- import module
+  , parseAliasImport   -- import module as alias
+  ]
+
+-- | Parse: from module_path import name1, name2, ...
+parseFromImport :: Parser ()
+parseFromImport = do
+  _ <- symbol "from"
+  path <- parseModulePath
+  _ <- symbol "import"
+  -- Parse either: name1, name2, name3  or  (name1, name2, name3)
+  names <- choice
+    [ parens (sepBy1 name (symbol ","))
+    , sepBy1 name (symbol ",")
+    ]
+  addSelectiveImport path names
+
+-- | Parse: import module_path  
+parseModuleImport :: Parser ()
+parseModuleImport = do
+  _ <- symbol "import"  
+  path <- parseModulePath
+  -- Make sure it's not followed by "as" (that would be parseAliasImport)
+  notFollowedBy (symbol "as")
+  addModuleImport path
+
+-- | Parse: import module_path as alias
+parseAliasImport :: Parser ()
+parseAliasImport = do
   _ <- symbol "import"
   path <- parseModulePath
   _ <- symbol "as"
@@ -224,10 +267,16 @@ parseAssert = do
 -- | Parse a book from a string, returning an error message on failure
 doParseBook :: FilePath -> String -> Either String Book
 doParseBook file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0 file) of
-    Left err  -> Left (formatError input err)
-    Right res -> Right res
-      -- in Right (trace (show book) book)
+  case doParseBookWithImports file input of
+    Left err -> Left err
+    Right (book, _) -> Right book
+
+-- | Parse a book from a string, returning both the book and the import information
+doParseBookWithImports :: FilePath -> String -> Either String (Book, ParserState)
+doParseBookWithImports file input =
+  case runState (runParserT p file input) (ParserState True input [] M.empty [] [] 0 file) of
+    (Left err, _)    -> Left (formatError input err)
+    (Right res, st)  -> Right (res, st)
   where
     p = do
       skip
