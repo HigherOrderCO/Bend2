@@ -92,6 +92,9 @@ adjust book term typ =
     npat = desugarPats 0 noSpan flat
     nfrk = desugarFrks book 0 npat
     hoas = bind nfrk
+    chec = case typ of
+      Just typ -> hoas
+      Nothing  -> hoas
     done = reduceEtas 0 hoas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.

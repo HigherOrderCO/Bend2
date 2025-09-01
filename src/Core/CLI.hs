@@ -93,10 +93,12 @@ runMain book = do
 processFile :: FilePath -> IO ()
 processFile file = do
   book <- parseFile file
-  let bookAdj = adjustBook book
+  let bookAdj@(Book defs _) = adjustBook book
   -- debug removed
   -- debug removed
-  putStrLn $ show bookAdj
+  putStrLn $ show $ M.keys defs
+  putStrLn $ ""
+  putStrLn $ show $ getDefn bookAdj "Term/gen/intr" 
   bookChk <- checkBook bookAdj
   runMain bookChk
 
