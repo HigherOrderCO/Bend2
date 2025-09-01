@@ -154,11 +154,12 @@ importLoop st pending =
           r <- resolveRef st ref
           case r of
             Left err   -> pure (Left err)
-            Right st'  ->
-              -- Recompute deps on the combined book, keep processing
-              let deps' = getBookDeps (stBook st')
+            Right st'  -> do
+              -- Apply current substitution before recomputing deps to avoid infinite loops
+              let substBook = substituteRefsInBook (stSubstMap st') (stBook st')
+                  deps' = getBookDeps substBook
                   next  = S.union rest deps'
-              in importLoop st' next
+              importLoop st' next
 
 -- | Resolve a reference by building substitution map entry
 resolveRef :: ImportState -> Name -> IO (Either String ImportState)
@@ -167,36 +168,37 @@ resolveRef st refName = do
   if refName `M.member` stSubstMap st
     then pure (Right st)
     else do
-      -- Check if it's a local reference (qualified version exists in current book)
-      let currentFilePrefix = takeBaseName (stCurrentFile st) ++ "::"
-          localQualified = currentFilePrefix ++ refName
-          Book defs _ = stBook st
+      -- Check if it's a local reference (qualified version exists in any loaded module)
+      let Book defs _ = stBook st
+          -- Look for any FQN that ends with "::refName"
+          matchingFQNs = filter (\fqn -> ("::" ++ refName) `isSuffixOf` fqn) (M.keys defs)
       
-      if localQualified `M.member` defs
-        then do
-          -- It's a local reference - add to substitution map
-          let newSubstMap = M.insert refName localQualified (stSubstMap st)
+      case matchingFQNs of
+        [fqn] -> do
+          -- Exactly one match - it's a local reference from some loaded module
+          let newSubstMap = M.insert refName fqn (stSubstMap st)
               newLoaded = S.insert refName (stLoaded st)
           pure $ Right st { stSubstMap = newSubstMap, stLoaded = newLoaded }
-        else do
-          -- It's not local - try auto-import
+        [] -> do
+          -- No matches - try auto-import
           loadRef st refName
+        multiple -> do
+          -- Multiple matches - ambiguous reference error
+          pure $ Left $ "Ambiguous reference '" ++ refName ++ "' could refer to: " ++ show multiple
   where
     takeBaseName :: FilePath -> String
     takeBaseName path = 
-      let name = reverse . takeWhile (/= '/') . reverse $ path
-      in if ".bend" `isSuffixOf` name
-         then take (length name - 5) name
-         else name
+      if ".bend" `isSuffixOf` path
+         then take (length path - 5) path  -- Remove .bend extension but keep full path
+         else path
     isSuffixOf :: Eq a => [a] -> [a] -> Bool
     isSuffixOf suffix str = suffix == drop (length str - length suffix) str
 
 takeBaseName' :: FilePath -> String
 takeBaseName' path = 
-  let name = reverse . takeWhile (/= '/') . reverse $ path
-  in if ".bend" `isSuffixOf'` name
-     then take (length name - 5) name
-     else name
+  if ".bend" `isSuffixOf'` path
+     then take (length path - 5) path  -- Remove .bend extension but keep full path
+     else path
   where
     isSuffixOf' :: Eq a => [a] -> [a] -> Bool
     isSuffixOf' suffix str = suffix == drop (length str - length suffix) str

@@ -218,14 +218,14 @@ formatError input bundle = do
 qualifyName :: String -> Parser String
 qualifyName defName = do
   st <- get
-  let filePrefix = takeBaseName (fileName st)
+  let filePrefix = toModulePath (fileName st)
   return $ filePrefix ++ "::" ++ defName
   where
-    takeBaseName :: FilePath -> String
-    takeBaseName path = 
-      let name = reverse . takeWhile (/= '/') . reverse $ path
-      in if ".bend" `isSuffixOf` name
-         then take (length name - 5) name
-         else name
+    -- Convert file path to module path (preserve directory structure, remove .bend extension)
+    toModulePath :: FilePath -> String
+    toModulePath path = 
+      if ".bend" `isSuffixOf` path
+         then take (length path - 5) path  -- Remove .bend extension but keep path
+         else path
     isSuffixOf :: Eq a => [a] -> [a] -> Bool
     isSuffixOf suffix str = suffix == drop (length str - length suffix) str
