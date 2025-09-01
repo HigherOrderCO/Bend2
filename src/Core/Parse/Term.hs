@@ -160,7 +160,12 @@ parseTermBefore op = do
 parseVar :: Parser Term
 parseVar = label "variable" $ do
   n <- name
-  case n of
+  -- Check for qualified reference (module::name)
+  qualified <- option n $ try $ do
+    _ <- symbol "::"
+    qualifiedName <- name
+    return $ n ++ "::" ++ qualifiedName
+  case qualified of
     "Set"         -> return Set
     "Empty"       -> return Emp
     "Unit"        -> return Uni
@@ -176,7 +181,7 @@ parseVar = label "variable" $ do
     "CHAR_TO_U64" -> return (Pri CHAR_TO_U64)
     "HVM_INC"     -> return (Pri HVM_INC)
     "HVM_DEC"     -> return (Pri HVM_DEC)
-    _             -> return $ Var n 0
+    _             -> return $ Var qualified 0
 
 -- | Syntax: ()
 parseOne :: Parser Term
@@ -1153,7 +1158,7 @@ parseSupMCases scrut = do
 -- | Parse a term from a string, returning an error message on failure
 doParseTerm :: FilePath -> String -> Either String Term
 doParseTerm file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0 file) of
+  case evalState (runParserT p file input) (ParserState True input [] M.empty [] [] 0 file) of
     Left err  -> Left (formatError input err)
     Right res -> Right (adjust (Book M.empty []) res)
   where
