@@ -133,6 +133,7 @@ data ImportState = ImportState
   , stSubstMap :: SubstMap        -- substitution map for reference resolution
   , stCurrentFile :: FilePath     -- current file being processed
   , stModuleImports :: S.Set String -- modules imported via "import Module" (blocks auto-import for their definitions)
+  , stAliases :: M.Map String String -- alias mapping: "NatOps" -> "Nat/add"
   }
 
 importAll :: FilePath -> Book -> IO (Either String Book)
@@ -144,6 +145,7 @@ importAll currentFile base = do
         , stSubstMap = M.empty
         , stCurrentFile = currentFile
         , stModuleImports = S.empty
+        , stAliases = M.empty
         }
       pending0 = getBookDeps base
   res <- importLoop initial pending0
@@ -171,6 +173,7 @@ importAllWithExplicit currentFile base parserState = do
             , stSubstMap = explicitSubstMap
             , stCurrentFile = currentFile
             , stModuleImports = S.fromList (moduleImports parserState)
+            , stAliases = M.fromList (aliasImports parserState)
             }
           pending0 = getBookDeps mergedBook
       res <- importLoop initial pending0
@@ -189,9 +192,11 @@ processExplicitImports parserState = do
   moduleResults <- mapM processModuleImport (moduleImports parserState)
   -- Process selective imports: from Nat/add import Nat/add, Nat/add/go  
   selectiveResults <- mapM (uncurry processSelectiveImport) (selectiveImports parserState)
+  -- Process alias imports: import Nat/add as NatOps
+  aliasResults <- mapM (uncurry processAliasImport) (aliasImports parserState)
   
   -- Combine results
-  case sequence (moduleResults ++ selectiveResults) of
+  case sequence (moduleResults ++ selectiveResults ++ aliasResults) of
     Left err -> pure (Left err)
     Right results -> do
       let (books, substMaps) = unzip results
@@ -233,6 +238,23 @@ processSelectiveImport modulePath names = do
           pure $ Right (book, substMap)
     Nothing -> pure $ Left $ "Cannot find module for selective import: " ++ modulePath
 
+-- | Process an alias import: import Nat/add as NatOps
+processAliasImport :: String -> String -> IO (Either String (Book, SubstMap))
+processAliasImport alias modulePath = do
+  candidates <- generateImportPaths modulePath
+  mFound <- firstExisting candidates
+  case mFound of
+    Just path -> do
+      content <- readFile path
+      case doParseBook path content of
+        Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
+        Right book -> do
+          -- For alias imports, we don't build a substitution map here
+          -- Instead, we handle alias::name resolution during import resolution
+          -- Just load the module and return empty substitution map
+          pure $ Right (book, M.empty)
+    Nothing -> pure $ Left $ "Cannot find module for alias import: " ++ modulePath
+
 importLoop :: ImportState -> S.Set Name -> IO (Either String ImportState)
 importLoop st pending =
   case S.minView pending of
@@ -257,30 +279,47 @@ resolveRef st refName = do
   if refName `M.member` stSubstMap st
     then pure (Right st)
     else do
-      -- Check if it's a local reference (qualified version exists in any loaded module)
-      let Book defs _ = stBook st
-          -- Look for any FQN that ends with "::refName"
-          matchingFQNs = filter (\fqn -> ("::" ++ refName) `isSuffixOf` fqn) (M.keys defs)
-      
-      case matchingFQNs of
-        [fqn] -> do
-          -- For auto-import resolution, the refName must match the module name
-          let modulePrefix = takeWhile (/= ':') fqn  -- Extract module part before "::"
-          if refName == modulePrefix
-            then do
-              -- Reference name matches module name - allow auto-import
-              let newSubstMap = M.insert refName fqn (stSubstMap st)
-                  newLoaded = S.insert refName (stLoaded st)
-              pure $ Right st { stSubstMap = newSubstMap, stLoaded = newLoaded }
-            else do
-              -- Reference name doesn't match module name - try traditional auto-import
+      -- Check if this is an alias reference (alias::name)
+      case break (== ':') refName of
+        (aliasName, ':':':':actualName) | aliasName `M.member` stAliases st -> do
+          -- Resolve alias reference
+          let modulePath = stAliases st M.! aliasName
+              qualifiedRef = modulePath ++ "::" ++ actualName
+              newSubstMap = M.insert refName qualifiedRef (stSubstMap st)
+              newLoaded = S.insert refName (stLoaded st)
+          pure $ Right st { stSubstMap = newSubstMap, stLoaded = newLoaded }
+        _ -> do
+          -- Regular reference resolution
+          -- Check if it's a local reference (qualified version exists in any loaded module)
+          let Book defs _ = stBook st
+              -- Look for any FQN that ends with "::refName"
+              matchingFQNs = filter (\fqn -> ("::" ++ refName) `isSuffixOf` fqn) (M.keys defs)
+          
+          case matchingFQNs of
+            [fqn] -> do
+              -- Check module import privacy only for top-level function names
+              let modulePrefix = takeWhile (/= ':') fqn
+              -- Block direct access ONLY if:
+              -- 1. The module was imported via "import Module" (module import)
+              -- 2. AND the refName exactly matches a top-level module name that should be accessed via qualified syntax
+              -- 3. AND the refName doesn't match the module prefix (not a self-reference)
+              if modulePrefix `S.member` stModuleImports st 
+                 && '/' `notElem` refName  -- Only block simple names, allow compound names like "String/to_label/go"
+                 && refName /= modulePrefix
+                then do
+                  -- This is a direct external call to a function from a module import - block it
+                  loadRef st refName
+                else do
+                  -- Allow resolution - either auto-imported, internal call, or legitimate access
+                  let newSubstMap = M.insert refName fqn (stSubstMap st)
+                      newLoaded = S.insert refName (stLoaded st)
+                  pure $ Right st { stSubstMap = newSubstMap, stLoaded = newLoaded }
+            [] -> do
+              -- No matches - try auto-import
               loadRef st refName
-        [] -> do
-          -- No matches - try auto-import
-          loadRef st refName
-        multiple -> do
-          -- Multiple matches - ambiguous reference error
-          pure $ Left $ "Ambiguous reference '" ++ refName ++ "' could refer to: " ++ show multiple
+            multiple -> do
+              -- Multiple matches - ambiguous reference error
+              pure $ Left $ "Ambiguous reference '" ++ refName ++ "' could refer to: " ++ show multiple
   where
     takeBaseName :: FilePath -> String
     takeBaseName path = 
