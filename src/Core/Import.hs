@@ -138,16 +138,21 @@ data ImportState = ImportState
 
 importAll :: FilePath -> Book -> IO (Either String Book)
 importAll currentFile base = do
-  let initial = ImportState
+  let -- Build substitution map for local definitions
+      localSubstMap = buildLocalSubstMap currentFile base
+      -- Apply local substitutions to the base book first
+      substitutedBase = substituteRefsInBook localSubstMap base
+      initial = ImportState
         { stVisited = S.empty
-        , stLoaded  = bookNames base
-        , stBook    = base
-        , stSubstMap = M.empty
+        , stLoaded  = bookNames substitutedBase
+        , stBook    = substitutedBase
+        , stSubstMap = localSubstMap
         , stCurrentFile = currentFile
         , stModuleImports = S.empty
         , stAliases = M.empty
         }
-      pending0 = getBookDeps base
+      -- Collect dependencies from the substituted book
+      pending0 = getBookDeps substitutedBase
   res <- importLoop initial pending0
   case res of
     Left err -> pure (Left err)
@@ -165,16 +170,24 @@ importAllWithExplicit currentFile base parserState = do
   case explicitResult of
     Left err -> pure (Left err)
     Right (explicitBook, explicitSubstMap) -> do
-      let mergedBook = mergeBooks base explicitBook
+      let -- Build substitution map for local definitions
+          localSubstMap = buildLocalSubstMap currentFile base
+          -- Combine explicit and local substitution maps (explicit takes precedence)
+          combinedSubstMap = M.union explicitSubstMap localSubstMap
+          -- Apply combined substitutions to both books
+          substitutedBase = substituteRefsInBook combinedSubstMap base
+          substitutedExplicit = substituteRefsInBook combinedSubstMap explicitBook
+          mergedBook = mergeBooks substitutedBase substitutedExplicit
           initial = ImportState
             { stVisited = S.empty
-            , stLoaded  = S.union (bookNames base) (bookNames explicitBook)
+            , stLoaded  = S.union (bookNames substitutedBase) (bookNames substitutedExplicit)
             , stBook    = mergedBook
-            , stSubstMap = explicitSubstMap
+            , stSubstMap = combinedSubstMap
             , stCurrentFile = currentFile
             , stModuleImports = S.fromList (moduleImports parserState)
             , stAliases = M.fromList (aliasImports parserState)
             }
+          -- Collect dependencies from the substituted merged book
           pending0 = getBookDeps mergedBook
       res <- importLoop initial pending0
       case res of
@@ -343,6 +356,25 @@ takeBaseName' path =
     isSuffixOf' :: Eq a => [a] -> [a] -> Bool
     isSuffixOf' suffix str = suffix == drop (length str - length suffix) str
 
+-- | Build substitution map for local definitions
+-- For each definition in the book with FQN "module::name", 
+-- add a mapping from "name" to "module::name"
+buildLocalSubstMap :: FilePath -> Book -> SubstMap
+buildLocalSubstMap currentFile (Book defs _) = 
+  let filePrefix = takeBaseName' currentFile ++ "::"
+      localDefs = M.filterWithKey (\k _ -> filePrefix `isPrefixOf` k) defs
+      -- For each local definition, extract the unqualified name and map it to the FQN
+      mappings = [(drop (length filePrefix) fqn, fqn) | fqn <- M.keys localDefs]
+  in M.fromList mappings
+  where
+    isPrefixOf :: Eq a => [a] -> [a] -> Bool
+    isPrefixOf [] _ = True
+    isPrefixOf _ [] = False
+    isPrefixOf (x:xs) (y:ys) = x == y && isPrefixOf xs ys
+    
+    isSuffixOf :: Eq a => [a] -> [a] -> Bool
+    isSuffixOf suffix str = suffix == drop (length str - length suffix) str
+
 loadRef :: ImportState -> Name -> IO (Either String ImportState)
 loadRef st refName = do
   candidates <- generateImportPaths refName
@@ -359,17 +391,30 @@ loadRef st refName = do
           case doParseBook path content of
             Left perr -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ perr
             Right imported -> do
-              let visited' = S.insert path (stVisited st)
-                  merged   = mergeBooks (stBook st) imported
-                  loaded'  = S.union (stLoaded st) (bookNames imported)
+              -- Build local substitution map for the imported file
+              let importedLocalSubstMap = buildLocalSubstMap path imported
+                  -- Apply local substitutions to the imported book
+                  substitutedImported = substituteRefsInBook importedLocalSubstMap imported
+                  visited' = S.insert path (stVisited st)
+                  merged   = mergeBooks (stBook st) substitutedImported
+                  loaded'  = S.union (stLoaded st) (bookNames substitutedImported)
                   -- Auto-import should only work if refName matches the module name
                   importFilePrefix = takeBaseName' path ++ "::"
                   importQualified = importFilePrefix ++ refName
                   moduleName = takeBaseName' path
-                  -- Add to substitution map ONLY if refName matches the module/file name
-                  Book importedDefs _ = imported
-                  newSubstMap = if refName == moduleName && importQualified `M.member` importedDefs
-                              then M.insert refName importQualified (stSubstMap st)
+                  -- Special handling for _.bend files
+                  -- If path is "Term/_.bend", moduleName is "Term/_", but refName is "Term"
+                  -- We need to check if "Term/_::Term" exists
+                  Book importedDefs _ = substitutedImported
+                  isSuffixOf' suffix str = suffix == drop (length str - length suffix) str
+                  isUnderscoreFile = isSuffixOf' "/_" moduleName
+                  actualQualified = if isUnderscoreFile && refName ++ "/_" == moduleName
+                                    then importFilePrefix ++ refName  -- Term/_::Term
+                                    else importQualified
+                  shouldAddMapping = (refName == moduleName && importQualified `M.member` importedDefs) ||
+                                     (isUnderscoreFile && actualQualified `M.member` importedDefs)
+                  newSubstMap = if shouldAddMapping
+                              then M.insert refName actualQualified (stSubstMap st)
                               else stSubstMap st
               pure $ Right st { stVisited = visited', stLoaded = loaded', stBook = merged, stSubstMap = newSubstMap }
         Nothing -> do
