@@ -1762,6 +1762,19 @@ check d span book ctx term      goal =
     (App (SupM l f) x, _) -> do
       xT <- infer d span book ctx x
       check d span book ctx f (All xT (Lam "_" Nothing (\_ -> All xT (Lam "_" Nothing (\_ -> goal)))))
+    
+    (App fn@(EqlM f) x@(cut -> Rfl), _) -> do
+      f' <- check d span book ctx f goal
+      return $ reWrap fn $ App (Chk (EqlM f') (All (Eql Uni One One) (Lam "_" Nothing (\_ -> nGoal)))) x
+    (App fn@(EqlM f) x, _) -> do
+      xT <- infer d span book ctx x
+      x' <- check d span book ctx x xT 
+      case cut xT of
+        Eql _ _ _ -> do
+          f' <- check d span book ctx f goal
+          return $ reWrap fn $ App (EqlM f') x'
+        _         -> do
+          Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (normal book (Eql (Var "_" 0) (Var "_" 0) (Var "_" 0))) (normal book xT) Nothing
 
     (App fn@(cut -> EmpM) x, _) -> do
       x' <- check d span book ctx x Emp
@@ -1954,6 +1967,7 @@ check d span book ctx term      goal =
 -- Verify that a term has the expected type by inference
 verify :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 verify d span book ctx term goal = do
+  -- traceM ("-verify infer: " ++ show term ++ " :: " ++ show goal)
   t <- infer d span book ctx term
   if
     -- trace ("-verify: " ++ show term ++ " :: " ++ show goal ++ " ::?:: " ++ show t) $
