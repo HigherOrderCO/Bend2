@@ -197,7 +197,7 @@ cmp red d book a b =
       -- trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
       res
     else 
-      trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
+      -- trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
       res
 
 isLamApp :: Term -> Bool

@@ -61,7 +61,8 @@ inferIndirect d span book ctx target term = do
 
 inferIndirectGo :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 inferIndirectGo d span book ctx var@(Var k i) term = do
-  case term of
+  
+  case trace ("infer indirect go: " ++ show var ++ " in " ++ show term) $ term of
     Var x j -> do
       return (Var "_unconstrained" 0)
 
@@ -1192,9 +1193,9 @@ check d span book ctx (Loc l t) goal = do
   t' <- check d l book ctx t goal 
   return $ Loc l t'
 check d span book ctx term      goal =
-  trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
+  -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
   -- trace ("- check: " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
-  trace ("- ctx:\n" ++ show ctx) $
+  -- trace ("- ctx:\n" ++ show ctx) $
   let nGoal = force book goal in
   case (term, nGoal) of
     -- ctx |-
@@ -1259,7 +1260,8 @@ check d span book ctx term      goal =
     -- ----------------- Suc
     -- ctx |- 1n+n : Nat
     (Suc n, Nat) -> do
-      check d span book ctx n Nat
+      n' <- check d span book ctx n Nat
+      return $ Suc n'
 
     -- ctx |- n : t{a==b}
     -- --------------------------- Suc-Eql
@@ -1298,8 +1300,11 @@ check d span book ctx term      goal =
     -- ctx |- λx. f : ∀x:A. B
     (Lam k t f, All a b) -> do
       -- check (d+1) span book (extend ctx k (Var k d) a) (f (Var k d)) (App b (Var k d))
-      b' <- check (d+1) span book (extend ctx k (Var k d) a) (f (Var k d)) (App b (Var k d))
-      return $ Lam k t (\v -> bindVarByName k v b')
+      -- traceM $ "FORCE( " ++ show (App b (Var k d)) ++ " == " ++ show (force book $ (App b (Var k d)))
+      -- traceM $ "WHNF ( " ++ show (App b (Var k d)) ++ " == " ++ show (whnf  book $ (App b (Var k d)))
+      -- traceM $ "CTX:\n" ++ show (extend ctx k (Var k d) a)
+      f' <- check (d+1) span book (extend ctx k (Var k d) a) (f (Var k d)) (App b (Var k d))
+      return $ Lam k t (\v -> bindVarByName k v f')
 
     -- ctx |- 
     -- --------------------------------- EmpM-Eql-Zer-Suc
@@ -1538,8 +1543,9 @@ check d span book ctx term      goal =
     -- ------------------- Tup
     -- ctx |- (a,b) : ΣA.B
     (Tup a b, Sig aT bT) -> do
-      check d span book ctx a aT
-      check d span book ctx b (App bT a)
+      a' <- check d span book ctx a aT
+      b' <- check d span book ctx b (App bT a)
+      return $ Tup a' b'
 
     -- ctx |- a : A{a1==a2}
     -- ctx |- b : B(a1){b1==b2}
@@ -1756,9 +1762,10 @@ check d span book ctx term      goal =
           let goalWithSucP = (rewrite (d+1) book x (Suc (Var p d)) goal)
           -- traceM $ "- CHECK NATM SUC: " ++ show bodyWithSucP ++ " :: " ++ show goalWithSucP
           s' <- reWrap s <$> check (d+1) (getSpan span body) book ctxWithSucP bodyWithSucP goalWithSucP
+          let fnType = (All Nat (NatM nGoal (Lam "_" Nothing (\_ -> nGoal))))
           case cut x of
             Var{} -> return $ App      (reWrap fn $ NatM z' (Lam p mtb (\v -> bindVarByName p v s'))) x'
-            _     -> return $ App (Chk (reWrap fn $ NatM z' (Lam p mtb (\v -> bindVarByName p v s'))) (All Nat (NatM nGoal nGoal))) x'
+            _     -> return $ App (Chk (reWrap fn $ NatM z' (Lam p mtb (\v -> bindVarByName p v s'))) fnType) x'
         _ -> do
           s' <- reWrap s <$> check d span book ctx s (All Nat (Lam "_" Nothing (\_ -> nGoal)))
           case cut x of
@@ -1783,9 +1790,10 @@ check d span book ctx term      goal =
                   let goalWithConsHT = (rewrite (d+2) book x (Con hV tV) goal)
                   c' <- (\v -> Lam h mth (\hv -> Lam t mtt (\tv -> bindVarByNameMany [(h,hv),(t,tv)] v)))
                     <$> check (d+2) span book ctxWithConsHT bodyWithConsHT goalWithConsHT
-                  -- c' <- check (d+2) span book ctxWithConsHT bodyWithConsHT goalWithConsHT
-                  -- let fnType = All (Lst hT) (LstM nGoal (Lam h Nothing (\hv -> Lam t Nothing (\tv -> bindVarByNameMany [(h,hv),(t,tv)] nGoal))))
-                  let fnType = All (Lst hT) (Lam "_" Nothing (\_ -> nGoal))
+                  let fnType = All (Lst hT) (LstM nGoal 
+                                                  (Lam h Nothing (\hv -> 
+                                                   Lam t Nothing (\tv -> 
+                                                   bindVarByNameMany [(h,hv),(t,tv)] goalWithConsHT))))
                   case cut x of
                     Var{} -> return $ App (reWrap fn (LstM n' c')) x'
                     _     -> return $ App (Chk (reWrap fn (LstM n' c')) fnType) x'
@@ -1801,12 +1809,12 @@ check d span book ctx term      goal =
               check d span book ctx c (All hT (Lam "_" Nothing (\_ -> (All (Lst hT) (Lam "_" Nothing (\_ -> goal))))))
         xT -> Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book xT) Nothing
 
-    (App (cut -> SigM g) x, _) -> do
+    (App fn@(cut -> SigM g) x, _) -> do
       xT <- case cut x of
         Tup a b -> do
-          inferIndirect d span book ctx x term
+          trace ("AAAAAA " ++ show x) $ inferIndirect d span book ctx x term
         _ -> do
-          xTinfer <- infer d span book ctx x
+          xTinfer <- trace "BBBBB" $ infer d span book ctx x
           Done $ derefADT xTinfer
             where
               derefADT trm = case cut trm of
@@ -1817,7 +1825,8 @@ check d span book ctx term      goal =
                     _ -> trm
                 _ -> trm
 
-      -- traceM $ "- INFERRED: " ++ show x ++ " :: " ++ show xT
+      traceM $ "- INFERRED: " ++ show x ++ " :: " ++ show xT
+      x' <- check d span book ctx x xT
       case cut $ normal book xT of
         Sig aT bTFunc@(cut -> Lam y mty yb) -> do
           -- traceM $ "termS : " ++ show term
@@ -1844,8 +1853,22 @@ check d span book ctx term      goal =
                   let goalRewritten = rewrite    (d+2) book x tupV goal
                   -- traceM $ "- STEP 2: " ++ show x ++ " -> " ++ show tupV
                   -- traceM $ "\n- STEP 2: " ++ show (rb rV)  ++ " || " ++ show lV ++ " || " ++ show (Var l d) ++ " -> " ++ show bodyRewritten
-                  -- traceM $ "- STEP 2: " ++ show bodyRewritten ++ " ::?:: " ++ show goalRewritten ++ "\n-ctx rewritten: \n" ++ show ctxRewritten ++ "\n"
-                  check (d+2) span book ctxRewritten bodyRewritten goalRewritten
+                  -- traceM $ "- STEP_2: " ++ show bodyRewritten ++ " ::?:: " ++ show goalRewritten ++ "\n-ctx rewritten: \n" ++ show ctxRewritten ++ "\n"
+                  g' <- (\v -> Lam l mtl (\lv -> (Lam r mtr (\rv -> bindVarByNameMany ([(l,lv),(r,rv)]) v)))) 
+                    <$> check (d+2) span book ctxRewritten bodyRewritten goalRewritten
+                  let fnType = All xT (SigM (Lam l mtl (\lv -> (Lam r mtr (\rv -> bindVarByNameMany [(l,lv),(r,rv)] goalRewritten)))))
+                  case cut x of
+                    Var{} -> return $ App (reWrap fn $ SigM g') x'
+                    _     -> return $ App (Chk (reWrap fn $ SigM g') fnType) x'
+                  -- c' <- (\v -> Lam h mth (\hv -> Lam t mtt (\tv -> bindVarByNameMany [(h,hv),(t,tv)] v)))
+                  --   <$> check (d+2) span book ctxWithConsHT bodyWithConsHT goalWithConsHT
+                  -- let fnType = All (Lst hT) (LstM nGoal 
+                  --                                 (Lam h Nothing (\hv -> 
+                  --                                  Lam t Nothing (\tv -> 
+                  --                                  bindVarByNameMany [(h,hv),(t,tv)] goalWithConsHT))))
+                  -- case cut x of
+                  --   Var{} -> return $ App (reWrap fn (LstM n' c')) x'
+                  --   _     -> return $ App (Chk (reWrap fn (LstM n' c')) fnType) x'
                 _ -> do
                   let bT = App bTFunc (Var l d)
                   check d span book ctx g (All aT (Lam l Nothing (\_ -> All bT (Lam "_" Nothing (\_ -> goal)))))

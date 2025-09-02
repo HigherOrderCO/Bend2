@@ -383,16 +383,23 @@ split :: Int -> Int -> Term -> Term
 split d aux term@(Log l t)    = Log (split d aux l) (split d aux t)
 split d aux term@(Loc l t)    = Loc l (split d aux t)
 split d aux term@(Lam k mt b) = Lam k mt (\x -> bindVarByName k x $ split (d+1) aux (b (Var k d)))
+split d aux term@(UniM f)     = UniM (split d aux f)
+split d aux term@(BitM f t)   = BitM (split d aux f) (split d aux t)
+split d aux term@(NatM z s)   = NatM (split d aux z) (split d aux s)
+split d aux term@(SigM g)     = SigM (split d aux g)
 split d aux term@(App f x)    = 
   let f' = split d aux f
       x' = split d aux x
   in
   case cutLoc f' of
-    (Chk f'' t) | isMatch (cut f'') && not (isVar $ cut x') -> Let ("$aux_" ++ show aux) (Just t) f'' (\v -> App v x')
-    _                                                       -> App f' x' 
+    (Chk f'' t) | isMatch (cut f'') && not (isVar $ cut x') -> trace ("BBBB " ++ show term) $ Let ("$aux_" ++ show aux) (Just t) f'' (\v -> App v x')
+    _                                                       -> trace ("AAAA " ++ show term ++ " -> " ++ show f' ++ " on " ++ show x') $ App f' x' 
 split d aux term              = term
 
-
+-- AAAAAAAAAA (λ{
+--     (,):λa. λb. 
+--       ((λ{(,):λl. λr. b}::∀(Σl:Bool. Nat). λ{(,):λl. λr. Nat}))((a,b))
+--       })(p)
 
 
 
