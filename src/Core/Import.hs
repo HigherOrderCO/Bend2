@@ -262,10 +262,17 @@ processAliasImport alias modulePath = do
       case doParseBook path content of
         Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
         Right book -> do
-          -- For alias imports, we don't build a substitution map here
-          -- Instead, we handle alias::name resolution during import resolution
-          -- Just load the module and return empty substitution map
-          pure $ Right (book, M.empty)
+          let modulePrefix = takeBaseName' path
+              -- For alias imports, if the alias matches the module name,
+              -- we create a substitution mapping from alias to module::module
+              -- e.g., "import fixme/add_for_import as add" creates add -> fixme/add_for_import::fixme/add_for_import
+              qualifiedName = modulePrefix ++ "::" ++ modulePath
+              Book bookDefs _ = book
+              -- Check if the expected definition exists
+              substMap = if qualifiedName `M.member` bookDefs
+                         then M.singleton alias qualifiedName
+                         else M.empty
+          pure $ Right (book, substMap)
     Nothing -> pure $ Left $ "Cannot find module for alias import: " ++ modulePath
 
 importLoop :: ImportState -> S.Set Name -> IO (Either String ImportState)
