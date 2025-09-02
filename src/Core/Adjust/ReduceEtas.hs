@@ -44,7 +44,7 @@ import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.List (union)
 import Debug.Trace
-import Data.Maybe (isJust, fromJust)
+import Data.Maybe (isJust, fromJust, fromMaybe)
 import Control.Applicative
 
 -- Auxiliary definitions / Utils
@@ -372,7 +372,7 @@ isEtaLong d n t = case t of
   Ref _ _     -> NONE
   Sub t'      -> isEtaLong d n t'
   Fix k f     -> isEtaLong (d+1) n (f (Var k d))
-  Let k _ v f -> isEtaLong d n v <+> isEtaLong (d+1) n (f (Var k d))
+  Let k t v f -> let def = isEtaLong d n v <+> isEtaLong (d+1) n (f (Var k d)) in fromMaybe def (fmap (\typ -> def <+> isEtaLong d n typ) t)
   Use k v f   -> isEtaLong d n v <+> isEtaLong (d+1) n (f (Var k d))
   Set         -> NONE
   Chk t' ty   -> isEtaLong d n t' <+> isEtaLong d n ty
