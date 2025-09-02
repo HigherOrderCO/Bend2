@@ -97,7 +97,8 @@ processFile :: FilePath -> IO ()
 processFile file = do
   book <- parseFile file
   let bookAdj = adjustBook book
-  -- putStrLn $ show bookAdj
+  -- debug removed
+  -- debug removed
   bookChk <- checkBook bookAdj
   runMain bookChk
 
