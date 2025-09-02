@@ -297,23 +297,28 @@ resolveRef st refName = do
           
           case matchingFQNs of
             [fqn] -> do
-              -- Check module import privacy only for top-level function names
+              -- Extract module prefix and function name from FQN
               let modulePrefix = takeWhile (/= ':') fqn
-              -- Block direct access ONLY if:
-              -- 1. The module was imported via "import Module" (module import)
-              -- 2. AND the refName exactly matches a top-level module name that should be accessed via qualified syntax
-              -- 3. AND the refName doesn't match the module prefix (not a self-reference)
-              if modulePrefix `S.member` stModuleImports st 
-                 && '/' `notElem` refName  -- Only block simple names, allow compound names like "String/to_label/go"
-                 && refName /= modulePrefix
+                  functionName = drop (length modulePrefix + 2) fqn  -- Skip "module::"
+              
+              -- Check if this FQN is accessible:
+              -- 1. If it's already in the substitution map, it was explicitly imported
+              if refName `M.member` stSubstMap st
                 then do
-                  -- This is a direct external call to a function from a module import - block it
-                  loadRef st refName
-                else do
-                  -- Allow resolution - either auto-imported, internal call, or legitimate access
+                  -- Already resolved, use existing mapping
+                  pure $ Right st
+              -- 2. Check if it's from a selective import (should already be in substMap from processExplicitImports)
+              -- 3. For auto-import to work, the function name must match the module name
+              else if refName == modulePrefix
+                then do
+                  -- Auto-import is allowed when function name matches module name
                   let newSubstMap = M.insert refName fqn (stSubstMap st)
                       newLoaded = S.insert refName (stLoaded st)
                   pure $ Right st { stSubstMap = newSubstMap, stLoaded = newLoaded }
+                else do
+                  -- Function name doesn't match module name, auto-import not allowed
+                  -- Try to load it as a new module
+                  loadRef st refName
             [] -> do
               -- No matches - try auto-import
               loadRef st refName
