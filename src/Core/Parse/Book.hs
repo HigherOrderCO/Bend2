@@ -83,15 +83,6 @@ parseModulePath = do
   skip -- consume whitespace after path
   return $ intercalate "/" (firstPart : restParts)
 
--- | Add an import mapping to the parser state
-addImportMapping :: String -> String -> Parser ()
-addImportMapping alias path = do
-  st <- get
-  let aliasKey = alias ++ "/"
-      pathValue = path ++ "/"
-      newImports = M.insert aliasKey pathValue (imports st)
-  put st { imports = newImports }
-
 addModuleImport :: String -> Parser ()
 addModuleImport path = do
   st <- get

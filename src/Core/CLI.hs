@@ -97,7 +97,6 @@ processFile file = do
   let bookAdj = adjustBook book
   -- debug removed
   -- debug removed
-  putStrLn $ show bookAdj
   bookChk <- checkBook bookAdj
   runMain bookChk
 
