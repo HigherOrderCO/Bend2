@@ -62,7 +62,7 @@ inferIndirect d span book ctx target term = do
 inferIndirectGo :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 inferIndirectGo d span book ctx var@(Var k i) term = do
   
-  case trace ("infer indirect go: " ++ show var ++ " in " ++ show term) $ term of
+  case term of
     Var x j -> do
       return (Var "_unconstrained" 0)
 
@@ -102,11 +102,25 @@ inferIndirectGo d span book ctx var@(Var k i) term = do
             _ -> inferIndirectGo d span book ctx var f
         _ -> inferIndirectGo d span book ctx var f
     App f x | not $ equal d book f var -> do
-      t1 <- inferIndirectGo d span book ctx var f
-      t2 <- inferIndirectGo d span book ctx var x
-      if equal d book t1 (Var "_unconstrained" 0)
-      then return t2
-      else unifyOrFail (App t1 x) t2
+      case cut f of
+        SigM g -> do
+          fT <- inferIndirect d span book ctx f (App f x)
+          t1 <- case cut fT of
+            All aT bT -> case cut g of
+              Lam a mta ba -> case cut (ba (Var a d)) of
+                Lam b mtb bb -> do
+                  inferIndirect (d+2) span book (extend (extend ctx a (Var a d) aT) b (Var b (d+1)) (App bT (Var a d))) var (bb (Var b (d+1)))
+                _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+              _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+            _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+          t2 <- inferIndirectGo d span book ctx var x
+          return t1
+        _ -> do
+          t1 <- inferIndirectGo d span book ctx var f
+          t2 <- inferIndirectGo d span book ctx var x
+          if equal d book t1 (Var "_unconstrained" 0)
+          then return t2
+          else unifyOrFail (App t1 x) t2
     App f x -> do
       t1 <- inferIndirectGo d span book ctx var f
       t2 <- inferIndirectGo d span book ctx var x
@@ -363,17 +377,40 @@ inferIndirectGo d span book ctx var@(Var k i) term = do
       Nothing -> Fail $ CantInfer span (normalCtx book ctx) Nothing
 
 inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> SigM g) x) = do
-  aT <- infer d span book ctx a
-  case cut g of
-    Lam l mtl lb -> do
-      case cut (lb (Var l d)) of
-        Lam r mtr rb -> do
-          rT <- inferIndirectGo d span book (extend ctx l (Var l d) aT) (Var r (d+1)) (rb (Var r (d+1)))
-          Done $ Sig aT (Lam l (Just aT) (\v -> bindVarByName l v rT))
+  if equal d book var x
+  then do
+      aT <- infer d span book ctx a
+      case cut g of
+        Lam l mtl lb -> do
+          case cut (lb (Var l d)) of
+            Lam r mtr rb -> do
+              rT <- inferIndirectGo d span book (extend ctx l (Var l d) aT) (Var r (d+1)) (rb (Var r (d+1)))
+              Done $ Sig aT (Lam l (Just aT) (\v -> bindVarByName l v rT))
+            _ -> do
+              Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
         _ -> do
           Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
-    _ -> do
-      Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+  else Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+
+inferIndirectGo d span book ctx target@(cut -> SigM g) term@(cut -> App (cut -> SigM g') x@(cut -> Var k i)) = do
+  if equal d book g g'
+  then do
+    xT <- infer d span book ctx x
+    case cut xT of
+      Sig lT rTFunc -> do
+        case cut g of
+          Lam l mtl lb -> do
+            case cut (lb (Var l d)) of
+              Lam r mtr rb -> do
+                let rT = App rTFunc (Var l d) 
+                gT <- infer d span book (extend (extend ctx l (Var l d) lT) r (Var r (d+1)) rT) (rb (Var r (d+1)))
+                return $ All (Sig lT (Lam l (Just lT) (\v -> bindVarByName l v rT))) (Lam l mtl (\lv -> Lam r mtr (\rv -> bindVarByNameMany [(l,lv),(r,rv)] gT)))
+              _ -> do
+                Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+          _ -> do
+            Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+      _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  else Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
 inferIndirectGo d span book ctx target term = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
 
@@ -1812,9 +1849,9 @@ check d span book ctx term      goal =
     (App fn@(cut -> SigM g) x, _) -> do
       xT <- case cut x of
         Tup a b -> do
-          trace ("AAAAAA " ++ show x) $ inferIndirect d span book ctx x term
+          inferIndirect d span book ctx x term
         _ -> do
-          xTinfer <- trace "BBBBB" $ infer d span book ctx x
+          xTinfer <- infer d span book ctx x
           Done $ derefADT xTinfer
             where
               derefADT trm = case cut trm of
@@ -1825,7 +1862,7 @@ check d span book ctx term      goal =
                     _ -> trm
                 _ -> trm
 
-      traceM $ "- INFERRED: " ++ show x ++ " :: " ++ show xT
+      -- traceM $ "- INFERRED: " ++ show x ++ " :: " ++ show xT
       x' <- check d span book ctx x xT
       case cut $ normal book xT of
         Sig aT bTFunc@(cut -> Lam y mty yb) -> do

@@ -392,14 +392,9 @@ split d aux term@(App f x)    =
       x' = split d aux x
   in
   case cutLoc f' of
-    (Chk f'' t) | isMatch (cut f'') && not (isVar $ cut x') -> trace ("BBBB " ++ show term) $ Let ("$aux_" ++ show aux) (Just t) f'' (\v -> App v x')
-    _                                                       -> trace ("AAAA " ++ show term ++ " -> " ++ show f' ++ " on " ++ show x') $ App f' x' 
+    (Chk f'' t) | isMatch (cut f'') && not (isVar $ cut x') -> Let ("$aux_" ++ show aux) (Just t) f'' (\v -> App v x')
+    _                                                       -> App f' x' 
 split d aux term              = term
-
--- AAAAAAAAAA (λ{
---     (,):λa. λb. 
---       ((λ{(,):λl. λr. b}::∀(Σl:Bool. Nat). λ{(,):λl. λr. Nat}))((a,b))
---       })(p)
 
 
 
