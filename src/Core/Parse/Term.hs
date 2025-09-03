@@ -13,6 +13,7 @@ module Core.Parse.Term
 import Control.Monad (when, replicateM, void, guard)
 import Control.Monad.State.Strict (State, get, put, evalState)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.List (intercalate)
 import Data.Void
 import Data.Word (Word64)
 import Text.Megaparsec
@@ -306,6 +307,10 @@ parseSym = label "enum symbol / constructor" $ try $ do
     , parseOldSymbol    -- @tag -> (&tag,())
     ]
   where
+    -- Parse constructor name with optional FQN (e.g., Module::Type::Ctor)
+    parseConstructorName = do
+      parts <- sepBy1 (some (satisfy isNameChar)) (string "::")
+      return $ intercalate "::" parts
     -- Parse @tag{...} constructor syntax with precise location propagation
     -- We capture two spans:
     -- - spTag: the span of "@tag" (for the &tag symbol)
@@ -314,8 +319,8 @@ parseSym = label "enum symbol / constructor" $ try $ do
       (spCtor, (spTag, tag, fields)) <- withSpan $ do
         (spTag, tag) <- withSpan $ do
           _ <- symbol "@"
-          n <- some (satisfy isNameChar)
-          pure n
+          -- Parse constructor name, potentially with :: for FQN
+          parseConstructorName
         _ <- symbol "{"
         fs <- sepEndBy parseTerm (symbol ",")
         _ <- symbol "}"
@@ -335,7 +340,8 @@ parseSym = label "enum symbol / constructor" $ try $ do
       (spTag, tag) <- withSpan $ do
         _ <- symbol "@"
         notFollowedBy (char '{')  -- make sure we are not @{...} or @tag{...}
-        lexeme $ some (satisfy isNameChar)
+        -- Parse constructor name, potentially with :: for FQN
+        lexeme $ parseConstructorName
       -- Desugar @Foo to (&Foo,()) and attach the span to both the symbol and the unit
       let sym = Loc spTag (Sym tag)
       let one = Loc spTag One

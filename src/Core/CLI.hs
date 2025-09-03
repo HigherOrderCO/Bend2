@@ -97,6 +97,9 @@ processFile file = do
   let bookAdj = adjustBook book
   -- debug removed
   -- debug removed
+  putStrLn "\n=== Adjusted Book (with resolved constructors) ==="
+  print bookAdj
+  putStrLn "=== End of Book ===\n"
   bookChk <- checkBook bookAdj
   runMain bookChk
 

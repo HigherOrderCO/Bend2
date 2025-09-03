@@ -161,7 +161,7 @@ parseType = label "datatype declaration" $ do
   args    <- return $ params ++ indices
   retTy   <- option Set (symbol "->" *> parseTerm)
   _       <- symbol ":"
-  cases   <- many parseTypeCase
+  cases   <- many (parseTypeCase qualifiedTypeName)
   when (null cases) $ fail "datatype must have at least one constructor case"
   let tags = map fst cases
       mkFields :: [(Name, Term)] -> Term
@@ -178,14 +178,16 @@ parseType = label "datatype declaration" $ do
   return (qualifiedTypeName, (True, term, fullTy))
 
 -- | Syntax: case @Tag: field1: Type1 field2: Type2
-parseTypeCase :: Parser (String, [(Name, Term)])
-parseTypeCase = label "datatype constructor" $ do
+parseTypeCase :: String -> Parser (String, [(Name, Term)])
+parseTypeCase typeName = label "datatype constructor" $ do
   _    <- symbol "case"
   _    <- symbol "@"
   tag  <- some (satisfy isNameChar)
   _    <- symbol ":"
   flds <- many parseField
-  return (tag, flds)
+  -- Return the fully qualified constructor name
+  let qualifiedTag = typeName ++ "::" ++ tag
+  return (qualifiedTag, flds)
   where
     -- Parse a field declaration  name : Type
     parseField :: Parser (Name, Term)
