@@ -423,9 +423,14 @@ resolveRef st refName = do
 
 takeBaseName' :: FilePath -> String
 takeBaseName' path = 
-  if ".bend" `isSuffixOf'` path
-     then take (length path - 5) path  -- Remove .bend extension but keep full path
-     else path
+  let withoutBend = if ".bend" `isSuffixOf'` path
+                    then take (length path - 5) path  -- Remove .bend extension
+                    else path
+      -- Also remove /_ suffix if present (for files like Term/_.bend)
+      withoutUnderscore = if "/_" `isSuffixOf'` withoutBend
+                          then take (length withoutBend - 2) withoutBend  -- Remove /_
+                          else withoutBend
+  in withoutUnderscore
   where
     isSuffixOf' :: Eq a => [a] -> [a] -> Bool
     isSuffixOf' suffix str = suffix == drop (length str - length suffix) str
@@ -476,19 +481,12 @@ loadRef st refName = do
                   importFilePrefix = takeBaseName' path ++ "::"
                   importQualified = importFilePrefix ++ refName
                   moduleName = takeBaseName' path
-                  -- Special handling for _.bend files
-                  -- If path is "Term/_.bend", moduleName is "Term/_", but refName is "Term"
-                  -- We need to check if "Term/_::Term" exists
+                  -- With our change, Term/_.bend now gives moduleName "Term" (not "Term/_")
+                  -- So definitions are Term::foo, not Term/_::foo
                   Book importedDefs _ = substitutedImported
-                  isSuffixOf' suffix str = suffix == drop (length str - length suffix) str
-                  isUnderscoreFile = isSuffixOf' "/_" moduleName
-                  actualQualified = if isUnderscoreFile && refName ++ "/_" == moduleName
-                                    then importFilePrefix ++ refName  -- Term/_::Term
-                                    else importQualified
-                  shouldAddMapping = (refName == moduleName && importQualified `M.member` importedDefs) ||
-                                     (isUnderscoreFile && actualQualified `M.member` importedDefs)
+                  shouldAddMapping = refName == moduleName && importQualified `M.member` importedDefs
                   newSubstMap = if shouldAddMapping
-                              then M.insert refName actualQualified (stSubstMap st)
+                              then M.insert refName importQualified (stSubstMap st)
                               else stSubstMap st
               pure $ Right st { stVisited = visited', stLoaded = loaded', stBook = merged, stSubstMap = newSubstMap }
         Nothing -> do
