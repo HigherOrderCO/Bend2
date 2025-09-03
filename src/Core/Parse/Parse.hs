@@ -224,11 +224,16 @@ qualifyName defName = do
   let filePrefix = toModulePath (fileName st)
   return $ filePrefix ++ "::" ++ defName
   where
-    -- Convert file path to module path (preserve directory structure, remove .bend extension)
+    -- Convert file path to module path (preserve directory structure, remove .bend extension and /_ suffix)
     toModulePath :: FilePath -> String
     toModulePath path = 
-      if ".bend" `isSuffixOf` path
-         then take (length path - 5) path  -- Remove .bend extension but keep path
-         else path
+      let withoutBend = if ".bend" `isSuffixOf` path
+                        then take (length path - 5) path  -- Remove .bend extension
+                        else path
+          -- Also remove /_ suffix if present (for files like Term/_.bend)
+          withoutUnderscore = if "/_" `isSuffixOf` withoutBend
+                              then take (length withoutBend - 2) withoutBend  -- Remove /_
+                              else withoutBend
+      in withoutUnderscore
     isSuffixOf :: Eq a => [a] -> [a] -> Bool
     isSuffixOf suffix str = suffix == drop (length str - length suffix) str
