@@ -5,7 +5,7 @@
 module Core.Show where
 
 import Core.Type
-import Data.List (intercalate, unsnoc)
+import Data.List (intercalate, unsnoc, isInfixOf)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -22,33 +22,39 @@ import System.IO.Unsafe (unsafePerformIO)
 showTerm :: Bool -> Term -> String
 showTerm trackDepth term = case trackDepth of
   True  -> showWithShadowing term
-  False -> showPlain S.empty term 0
+  False -> showWithoutPrefixes term
 
 -- | Show terms with depth annotations for shadowed variables only
 showWithShadowing :: Term -> String
 showWithShadowing term = case S.null shadowed of
-  True  -> showPlain S.empty term 0  
-  False -> showPlain shadowed adjusted 0
+  True  -> showPlain S.empty S.empty term 0  
+  False -> showPlain shadowed S.empty adjusted 0
   where
     shadowed = getShadowed term
     adjusted = adjustDepths term 0
 
-showPlain :: S.Set String -> Term -> Int -> String
-showPlain shadowed term depth = case term of
+-- | Show terms without module prefixes (unless ambiguous)
+showWithoutPrefixes :: Term -> String
+showWithoutPrefixes term = showPlain S.empty ambiguous term 0
+  where
+    ambiguous = getAmbiguousNames term
+
+showPlain :: S.Set String -> S.Set String -> Term -> Int -> String
+showPlain shadowed ambiguous term depth = case term of
   -- Variables
   Var k i      -> showVar shadowed k i
-  Ref k i      -> k
-  Sub t        -> showPlain shadowed t depth
+  Ref k i      -> stripPrefix ambiguous k
+  Sub t        -> showPlain shadowed ambiguous t depth
 
   -- Binding forms
-  Fix k f      -> showFix shadowed k f depth
-  Let k t v f  -> showLet shadowed k t v f depth
-  Use k v f    -> showUse shadowed k v f depth
+  Fix k f      -> showFix shadowed ambiguous k f depth
+  Let k t v f  -> showLet shadowed ambiguous k t v f depth
+  Use k v f    -> showUse shadowed ambiguous k v f depth
 
   -- Types and annotations
   Set          -> "Set"
-  Chk x t      -> "(" ++ showPlain shadowed x depth ++ "::" ++ showPlain shadowed t depth ++ ")"
-  Tst x        -> "trust " ++ showPlain shadowed x depth
+  Chk x t      -> "(" ++ showPlain shadowed ambiguous x depth ++ "::" ++ showPlain shadowed ambiguous t depth ++ ")"
+  Tst x        -> "trust " ++ showPlain shadowed ambiguous x depth
 
   -- Empty
   Emp          -> "Empty"
@@ -57,67 +63,67 @@ showPlain shadowed term depth = case term of
   -- Unit
   Uni          -> "Unit"
   One          -> "()"
-  UniM f       -> "λ{():" ++ showPlain shadowed f depth ++ "}"
+  UniM f       -> "λ{():" ++ showPlain shadowed ambiguous f depth ++ "}"
 
   -- Bool
   Bit          -> "Bool"
   Bt0          -> "False"
   Bt1          -> "True"
-  BitM f t     -> "λ{False:" ++ showPlain shadowed f depth ++ ";True:" ++ showPlain shadowed t depth ++ "}"
+  BitM f t     -> "λ{False:" ++ showPlain shadowed ambiguous f depth ++ ";True:" ++ showPlain shadowed ambiguous t depth ++ "}"
 
   -- Nat
   Nat          -> "Nat"
   Zer          -> "0n"
-  Suc _        -> showSuc shadowed term depth
-  NatM z s     -> "λ{0n:" ++ showPlain shadowed z depth ++ ";1n+:" ++ showPlain shadowed s depth ++ "}"
+  Suc _        -> showSuc shadowed ambiguous term depth
+  NatM z s     -> "λ{0n:" ++ showPlain shadowed ambiguous z depth ++ ";1n+:" ++ showPlain shadowed ambiguous s depth ++ "}"
 
   -- List
-  Lst t        -> showPlain shadowed t depth ++ "[]"
+  Lst t        -> showPlain shadowed ambiguous t depth ++ "[]"
   Nil          -> "[]"
-  Con h t      -> showCon shadowed h t depth
-  LstM n c     -> "λ{[]:" ++ showPlain shadowed n depth ++ ";<>:" ++ showPlain shadowed c depth ++ "}"
+  Con h t      -> showCon shadowed ambiguous h t depth
+  LstM n c     -> "λ{[]:" ++ showPlain shadowed ambiguous n depth ++ ";<>:" ++ showPlain shadowed ambiguous c depth ++ "}"
 
   -- Enum
   Enu s        -> "enum{" ++ intercalate "," (map ("&" ++) s) ++ "}"
-  Sym s        -> "&" ++ s
-  EnuM cs d    -> showEnuM shadowed cs d depth
+  Sym s        -> "&" ++ stripPrefix ambiguous s
+  EnuM cs d    -> showEnuM shadowed ambiguous cs d depth
 
   -- Pair
-  Sig a b      -> showSig shadowed a b depth
-  Tup _ _      -> showTup shadowed term depth  
-  SigM f       -> "λ{(,):" ++ showPlain shadowed f depth ++ "}"
+  Sig a b      -> showSig shadowed ambiguous a b depth
+  Tup _ _      -> showTup shadowed ambiguous term depth  
+  SigM f       -> "λ{(,):" ++ showPlain shadowed ambiguous f depth ++ "}"
 
   -- Function
-  All a b      -> showAll shadowed a b depth
-  Lam k t f    -> showLam shadowed k t f depth
-  App _ _      -> showApp shadowed term depth
+  All a b      -> showAll shadowed ambiguous a b depth
+  Lam k t f    -> showLam shadowed ambiguous k t f depth
+  App _ _      -> showApp shadowed ambiguous term depth
 
   -- Equality
-  Eql t a b    -> showEql shadowed t a b depth
+  Eql t a b    -> showEql shadowed ambiguous t a b depth
   Rfl          -> "{==}"
-  EqlM f       -> "λ{{==}:" ++ showPlain shadowed f depth ++ "}"
-  Rwt e f      -> "rewrite " ++ showPlain shadowed e depth ++ " " ++ showPlain shadowed f depth
+  EqlM f       -> "λ{{==}:" ++ showPlain shadowed ambiguous f depth ++ "}"
+  Rwt e f      -> "rewrite " ++ showPlain shadowed ambiguous e depth ++ " " ++ showPlain shadowed ambiguous f depth
 
   -- Meta and superposition
-  Met n t ctx  -> "?" ++ n ++ ":" ++ showPlain shadowed t depth ++ "{" ++ intercalate "," (map (\c -> showPlain shadowed c depth) ctx) ++ "}"
+  Met n t ctx  -> "?" ++ n ++ ":" ++ showPlain shadowed ambiguous t depth ++ "{" ++ intercalate "," (map (\c -> showPlain shadowed ambiguous c depth) ctx) ++ "}"
   Era          -> "*"
-  Sup l a b    -> "&" ++ showPlain shadowed l depth ++ "{" ++ showPlain shadowed a depth ++ "," ++ showPlain shadowed b depth ++ "}"
-  SupM l f     -> "λ{&" ++ showPlain shadowed l depth ++ "{,}:" ++ showPlain shadowed f depth ++ "}"
+  Sup l a b    -> "&" ++ showPlain shadowed ambiguous l depth ++ "{" ++ showPlain shadowed ambiguous a depth ++ "," ++ showPlain shadowed ambiguous b depth ++ "}"
+  SupM l f     -> "λ{&" ++ showPlain shadowed ambiguous l depth ++ "{,}:" ++ showPlain shadowed ambiguous f depth ++ "}"
 
   -- Location and logging
-  Loc _ t      -> showPlain shadowed t depth
-  Log s x      -> "log " ++ showPlain shadowed s depth ++ " " ++ showPlain shadowed x depth
+  Loc _ t      -> showPlain shadowed ambiguous t depth
+  Log s x      -> "log " ++ showPlain shadowed ambiguous s depth ++ " " ++ showPlain shadowed ambiguous x depth
 
   -- Primitives
   Pri p        -> showPri p
   Num t        -> showNum t
   Val v        -> showVal v
-  Op2 o a b    -> showOp2 shadowed o a b depth
-  Op1 o a      -> showOp1 shadowed o a depth
+  Op2 o a b    -> showOp2 shadowed ambiguous o a b depth
+  Op1 o a      -> showOp1 shadowed ambiguous o a depth
 
   -- Patterns
-  Pat ts ms cs -> showPat shadowed ts ms cs depth
-  Frk l a b    -> "fork " ++ showPlain shadowed l depth ++ ":" ++ showPlain shadowed a depth ++ " else:" ++ showPlain shadowed b depth
+  Pat ts ms cs -> showPat shadowed ambiguous ts ms cs depth
+  Frk l a b    -> "fork " ++ showPlain shadowed ambiguous l depth ++ ":" ++ showPlain shadowed ambiguous a depth ++ " else:" ++ showPlain shadowed ambiguous b depth
 
 -- Helper functions for complex cases
 -- ==================================
@@ -129,103 +135,103 @@ showVar shadowed k i = case S.member k shadowed of
   False -> k
 
 -- | μx. body
-showFix :: S.Set String -> String -> Body -> Int -> String
-showFix shadowed k f depth = "μ" ++ kStr ++ ". " ++ showPlain shadowed (f (Var k depth)) (depth + 1)
+showFix :: S.Set String -> S.Set String -> String -> Body -> Int -> String
+showFix shadowed ambiguous k f depth = "μ" ++ kStr ++ ". " ++ showPlain shadowed ambiguous (f (Var k depth)) (depth + 1)
   where kStr = varName shadowed k depth
 
 -- | x : T = v body or x = v body
-showLet :: S.Set String -> String -> Maybe Term -> Term -> Body -> Int -> String
-showLet shadowed k t v f depth = case t of
-  Just t  -> kStr ++ " : " ++ showPlain shadowed t depth ++ " = " ++ showPlain shadowed v depth ++ " " ++ showPlain shadowed (f (Var k depth)) (depth + 1)
-  Nothing -> kStr ++ " = " ++ showPlain shadowed v depth ++ " " ++ showPlain shadowed (f (Var k depth)) (depth + 1)
+showLet :: S.Set String -> S.Set String -> String -> Maybe Term -> Term -> Body -> Int -> String
+showLet shadowed ambiguous k t v f depth = case t of
+  Just t  -> kStr ++ " : " ++ showPlain shadowed ambiguous t depth ++ " = " ++ showPlain shadowed ambiguous v depth ++ " " ++ showPlain shadowed ambiguous (f (Var k depth)) (depth + 1)
+  Nothing -> kStr ++ " = " ++ showPlain shadowed ambiguous v depth ++ " " ++ showPlain shadowed ambiguous (f (Var k depth)) (depth + 1)
   where kStr = varName shadowed k depth
 
 -- | use x = v body
-showUse :: S.Set String -> String -> Term -> Body -> Int -> String
-showUse shadowed k v f depth = "use " ++ varName shadowed k depth ++ " = " ++ showPlain shadowed v depth ++ " " ++ showPlain shadowed (f (Var k depth)) (depth + 1)
+showUse :: S.Set String -> S.Set String -> String -> Term -> Body -> Int -> String
+showUse shadowed ambiguous k v f depth = "use " ++ varName shadowed k depth ++ " = " ++ showPlain shadowed ambiguous v depth ++ " " ++ showPlain shadowed ambiguous (f (Var k depth)) (depth + 1)
 
 -- | Count successor applications: 3n or 2n+x
-showSuc :: S.Set String -> Term -> Int -> String
-showSuc shadowed term depth = case count term of
+showSuc :: S.Set String -> S.Set String -> Term -> Int -> String
+showSuc shadowed ambiguous term depth = case count term of
   (k, Zer) -> show (k :: Integer) ++ "n"
-  (k, r)   -> show (k :: Integer) ++ "n+" ++ showPlain shadowed r depth
+  (k, r)   -> show (k :: Integer) ++ "n+" ++ showPlain shadowed ambiguous r depth
   where
     count (cut -> Suc t) = let (c, r) = count t in (c + 1, r)
     count t              = (0 :: Integer, t)
 
 -- | List constructor: h<>t or "string" for character lists
-showCon :: S.Set String -> Term -> Term -> Int -> String
-showCon shadowed h t depth = fromMaybe plain (showStr shadowed (Con h t) depth)
-  where plain = showPlain shadowed h depth ++ "<>" ++ showPlain shadowed t depth
+showCon :: S.Set String -> S.Set String -> Term -> Term -> Int -> String
+showCon shadowed ambiguous h t depth = fromMaybe plain (showStr shadowed ambiguous (Con h t) depth)
+  where plain = showPlain shadowed ambiguous h depth ++ "<>" ++ showPlain shadowed ambiguous t depth
 
 -- | Enum matcher: λ{&foo:x;&bar:y;default}
-showEnuM :: S.Set String -> [(String,Term)] -> Term -> Int -> String
-showEnuM shadowed cs d depth = "λ{" ++ intercalate ";" cases ++ ";" ++ showPlain shadowed d depth ++ "}"
-  where cases = map (\(s,t) -> "&" ++ s ++ ":" ++ showPlain shadowed t depth) cs
+showEnuM :: S.Set String -> S.Set String -> [(String,Term)] -> Term -> Int -> String
+showEnuM shadowed ambiguous cs d depth = "λ{" ++ intercalate ";" cases ++ ";" ++ showPlain shadowed ambiguous d depth ++ "}"
+  where cases = map (\(s,t) -> "&" ++ stripPrefix ambiguous s ++ ":" ++ showPlain shadowed ambiguous t depth) cs
 
 -- | Dependent pair type: Σx:A. B or A & B
-showSig :: S.Set String -> Term -> Term -> Int -> String
-showSig shadowed a b depth = case cut b of
+showSig :: S.Set String -> S.Set String -> Term -> Term -> Int -> String
+showSig shadowed ambiguous a b depth = case cut b of
   Lam "_" t f -> "(" ++ showArg a ++ " & " ++ showCodomain (f (Var "_" depth)) ++ ")"
-  Lam k t f   -> "Σ" ++ varName shadowed k depth ++ ":" ++ showArg a ++ ". " ++ showPlain shadowed (f (Var k depth)) (depth + 1)
-  _           -> "Σ" ++ showArg a ++ ". " ++ showPlain shadowed b depth
+  Lam k t f   -> "Σ" ++ varName shadowed k depth ++ ":" ++ showArg a ++ ". " ++ showPlain shadowed ambiguous (f (Var k depth)) (depth + 1)
+  _           -> "Σ" ++ showArg a ++ ". " ++ showPlain shadowed ambiguous b depth
   where
     showArg t = case cut t of
-      All{} -> "(" ++ showPlain shadowed t depth ++ ")"
-      Sig{} -> "(" ++ showPlain shadowed t depth ++ ")"
-      _     -> showPlain shadowed t depth
+      All{} -> "(" ++ showPlain shadowed ambiguous t depth ++ ")"
+      Sig{} -> "(" ++ showPlain shadowed ambiguous t depth ++ ")"
+      _     -> showPlain shadowed ambiguous t depth
     showCodomain t = case t of
-      Sig _ (Lam k _ _) | k /= "_" -> "(" ++ showPlain shadowed t (depth + 1) ++ ")"
-      _                           -> showPlain shadowed t (depth + 1)
+      Sig _ (Lam k _ _) | k /= "_" -> "(" ++ showPlain shadowed ambiguous t (depth + 1) ++ ")"
+      _                           -> showPlain shadowed ambiguous t (depth + 1)
 
 -- | Dependent function type: ∀x:A. B or A -> B
-showAll :: S.Set String -> Term -> Term -> Int -> String
-showAll shadowed a b depth = case b of
+showAll :: S.Set String -> S.Set String -> Term -> Term -> Int -> String
+showAll shadowed ambiguous a b depth = case b of
   Lam "_" t f -> showArg a ++ " -> " ++ showCodomain (f (Var "_" depth))
-  Lam k t f   -> "∀" ++ varName shadowed k depth ++ ":" ++ showArg a ++ ". " ++ showPlain shadowed (f (Var k depth)) (depth + 1)
-  _           -> "∀" ++ showArg a ++ ". " ++ showPlain shadowed b depth
+  Lam k t f   -> "∀" ++ varName shadowed k depth ++ ":" ++ showArg a ++ ". " ++ showPlain shadowed ambiguous (f (Var k depth)) (depth + 1)
+  _           -> "∀" ++ showArg a ++ ". " ++ showPlain shadowed ambiguous b depth
   where
     showArg t = case cut t of
-      All{} -> "(" ++ showPlain shadowed t depth ++ ")"
-      Sig{} -> "(" ++ showPlain shadowed t depth ++ ")"
-      _     -> showPlain shadowed t depth
+      All{} -> "(" ++ showPlain shadowed ambiguous t depth ++ ")"
+      Sig{} -> "(" ++ showPlain shadowed ambiguous t depth ++ ")"
+      _     -> showPlain shadowed ambiguous t depth
     showCodomain t = case t of
-      All _ (Lam k _ _) | k /= "_" -> "(" ++ showPlain shadowed t (depth + 1) ++ ")"
-      _                           -> showPlain shadowed t (depth + 1)
+      All _ (Lam k _ _) | k /= "_" -> "(" ++ showPlain shadowed ambiguous t (depth + 1) ++ ")"
+      _                           -> showPlain shadowed ambiguous t (depth + 1)
 
 -- | Lambda abstraction: λx:T. body or λx. body
-showLam :: S.Set String -> String -> Maybe Term -> Body -> Int -> String
-showLam shadowed k t f depth = case t of
-  Just t  -> "λ" ++ varName shadowed k depth ++ ":" ++ showPlain shadowed t depth ++ ". " ++ showPlain shadowed (f (Var k depth)) (depth + 1)
-  Nothing -> "λ" ++ varName shadowed k depth ++ ". " ++ showPlain shadowed (f (Var k depth)) (depth + 1)
+showLam :: S.Set String -> S.Set String -> String -> Maybe Term -> Body -> Int -> String
+showLam shadowed ambiguous k t f depth = case t of
+  Just t  -> "λ" ++ varName shadowed k depth ++ ":" ++ showPlain shadowed ambiguous t depth ++ ". " ++ showPlain shadowed ambiguous (f (Var k depth)) (depth + 1)
+  Nothing -> "λ" ++ varName shadowed k depth ++ ". " ++ showPlain shadowed ambiguous (f (Var k depth)) (depth + 1)
 
 -- | Function application: f(x,y,z)
-showApp :: S.Set String -> Term -> Int -> String
-showApp shadowed term depth = fnStr ++ "(" ++ intercalate "," (map (\arg -> showPlain shadowed arg depth) args) ++ ")"
+showApp :: S.Set String -> S.Set String -> Term -> Int -> String
+showApp shadowed ambiguous term depth = fnStr ++ "(" ++ intercalate "," (map (\arg -> showPlain shadowed ambiguous arg depth) args) ++ ")"
   where 
     (fn, args) = collectApps term []
     fnStr = case cut fn of
       Var k i -> showVar shadowed k i
-      Ref k i -> k  
-      _       -> "(" ++ showPlain shadowed fn depth ++ ")"
+      Ref k i -> stripPrefix ambiguous k  
+      _       -> "(" ++ showPlain shadowed ambiguous fn depth ++ ")"
 
 -- | Tuple: (a,b,c) or @Ctor{a,b}
-showTup :: S.Set String -> Term -> Int -> String
-showTup shadowed term depth = fromMaybe plain (showCtr term)
-  where plain = "(" ++ intercalate "," (map (\t -> showPlain shadowed t depth) (flattenTup term)) ++ ")"
+showTup :: S.Set String -> S.Set String -> Term -> Int -> String
+showTup shadowed ambiguous term depth = fromMaybe plain (showCtr ambiguous term)
+  where plain = "(" ++ intercalate "," (map (\t -> showPlain shadowed ambiguous t depth) (flattenTup term)) ++ ")"
 
 -- | Equality type: T{a == b}
-showEql :: S.Set String -> Term -> Term -> Term -> Int -> String  
-showEql shadowed t a b depth = typeStr ++ "{" ++ showPlain shadowed a depth ++ "==" ++ showPlain shadowed b depth ++ "}"
+showEql :: S.Set String -> S.Set String -> Term -> Term -> Term -> Int -> String  
+showEql shadowed ambiguous t a b depth = typeStr ++ "{" ++ showPlain shadowed ambiguous a depth ++ "==" ++ showPlain shadowed ambiguous b depth ++ "}"
   where 
     typeStr = case t of
-      Sig _ _ -> "(" ++ showPlain shadowed t depth ++ ")"
-      All _ _ -> "(" ++ showPlain shadowed t depth ++ ")"
-      _      -> showPlain shadowed t depth
+      Sig _ _ -> "(" ++ showPlain shadowed ambiguous t depth ++ ")"
+      All _ _ -> "(" ++ showPlain shadowed ambiguous t depth ++ ")"
+      _      -> showPlain shadowed ambiguous t depth
 
 -- | Binary operator: (a + b)
-showOp2 :: S.Set String -> NOp2 -> Term -> Term -> Int -> String
-showOp2 shadowed op a b depth = "(" ++ showPlain shadowed a depth ++ " " ++ opStr ++ " " ++ showPlain shadowed b depth ++ ")"
+showOp2 :: S.Set String -> S.Set String -> NOp2 -> Term -> Term -> Int -> String
+showOp2 shadowed ambiguous op a b depth = "(" ++ showPlain shadowed ambiguous a depth ++ " " ++ opStr ++ " " ++ showPlain shadowed ambiguous b depth ++ ")"
   where
     opStr = case op of
       ADD -> "+";   SUB -> "-";   MUL -> "*";   DIV -> "/"
@@ -235,14 +241,14 @@ showOp2 shadowed op a b depth = "(" ++ showPlain shadowed a depth ++ " " ++ opSt
       SHL -> "<<";  SHR -> ">>"
 
 -- | Unary operator: (not a) or (-a)
-showOp1 :: S.Set String -> NOp1 -> Term -> Int -> String
-showOp1 shadowed op a depth = case op of
-  NOT -> "(not " ++ showPlain shadowed a depth ++ ")"
-  NEG -> "(-" ++ showPlain shadowed a depth ++ ")"
+showOp1 :: S.Set String -> S.Set String -> NOp1 -> Term -> Int -> String
+showOp1 shadowed ambiguous op a depth = case op of
+  NOT -> "(not " ++ showPlain shadowed ambiguous a depth ++ ")"
+  NEG -> "(-" ++ showPlain shadowed ambiguous a depth ++ ")"
 
 -- | Pattern match: match x { with k=v case (p): body }
-showPat :: S.Set String -> [Term] -> [Move] -> [Case] -> Int -> String
-showPat shadowed ts ms cs depth = "match " ++ unwords (map (\t -> showPlain shadowed t depth) ts) ++ " {" ++ moves ++ cases ++ " }"
+showPat :: S.Set String -> S.Set String -> [Term] -> [Move] -> [Case] -> Int -> String
+showPat shadowed ambiguous ts ms cs depth = "match " ++ unwords (map (\t -> showPlain shadowed ambiguous t depth) ts) ++ " {" ++ moves ++ cases ++ " }"
   where
     moves = case ms of
       [] -> ""
@@ -250,9 +256,9 @@ showPat shadowed ts ms cs depth = "match " ++ unwords (map (\t -> showPlain shad
     cases = case cs of  
       [] -> ""
       _  -> " " ++ intercalate " " (map showCase cs)
-    showMove (k,x) = k ++ "=" ++ showPlain shadowed x depth
-    showCase (ps,x) = "case " ++ unwords (map showPat' ps) ++ ": " ++ showPlain shadowed x depth
-    showPat' p = "(" ++ showPlain shadowed p depth ++ ")"
+    showMove (k,x) = k ++ "=" ++ showPlain shadowed ambiguous x depth
+    showCase (ps,x) = "case " ++ unwords (map showPat' ps) ++ ": " ++ showPlain shadowed ambiguous x depth
+    showPat' p = "(" ++ showPlain shadowed ambiguous p depth ++ ")"
 
 -- Primitive display
 -- =================
@@ -290,8 +296,8 @@ showChar c = case c of
 -- ======================
 
 -- | Try to display character list as string literal: "hello"
-showStr :: S.Set String -> Term -> Int -> Maybe String  
-showStr shadowed term depth = go [] term
+showStr :: S.Set String -> S.Set String -> Term -> Int -> Maybe String  
+showStr shadowed ambiguous term depth = go [] term
   where
     go acc Nil                        = Just ("\"" ++ reverse acc ++ "\"")
     go acc (Con (Val (CHR_V c)) rest) = go (c:acc) rest
@@ -299,15 +305,118 @@ showStr shadowed term depth = go [] term
     go _   _                          = Nothing
 
 -- | Try to display tuple as constructor: @Ctor{a,b}
-showCtr :: Term -> Maybe String
-showCtr t =
+showCtr :: S.Set String -> Term -> Maybe String
+showCtr ambiguous t =
   let ts = map cut (flattenTup t) in
   case unsnoc ts of
-    Just ((Sym name : ts), One) -> Just ("@" ++ name ++ "{" ++ intercalate "," (map show ts) ++ "}")
+    Just ((Sym name : ts), One) -> Just ("@" ++ stripPrefix ambiguous name ++ "{" ++ intercalate "," (map show ts) ++ "}")
     _                           -> Nothing
 
 -- Utility functions
 -- =================
+
+-- | Strip module prefix from a name unless it's ambiguous
+stripPrefix :: S.Set String -> String -> String
+stripPrefix ambiguous name = 
+  let unqualified = extractUnqualifiedName name
+  in if unqualified `S.member` ambiguous
+     then name  -- Keep full name if ambiguous
+     else unqualified
+
+-- | Extract unqualified name from a fully qualified name
+-- "Nat/add::Nat/add" -> "Nat/add"
+-- "Bool::True" -> "True"
+-- "foo" -> "foo"
+extractUnqualifiedName :: String -> String
+extractUnqualifiedName name = 
+  case reverse (splitOn "::" name) of
+    (last:_) -> last
+    []       -> name
+  where
+    splitOn :: String -> String -> [String]
+    splitOn delim str = go "" str
+      where
+        go :: String -> String -> [String]
+        go acc [] = if null acc then [] else [reverse acc]
+        go acc s@(c:cs)
+          | delim `isPrefixOf` s = 
+              if null acc 
+              then go "" (drop (length delim) s)
+              else reverse acc : go "" (drop (length delim) s)
+          | otherwise = go (c:acc) cs
+    
+    isPrefixOf :: Eq a => [a] -> [a] -> Bool
+    isPrefixOf [] _ = True
+    isPrefixOf _ [] = False
+    isPrefixOf (x:xs) (y:ys) = x == y && isPrefixOf xs ys
+
+-- | Collect all qualified names and detect ambiguities
+getAmbiguousNames :: Term -> S.Set String
+getAmbiguousNames term = 
+  let allNames = collectQualifiedNames term
+      nameMap = buildNameMap allNames
+      ambiguous = findAmbiguous nameMap
+  in ambiguous
+  where
+    -- Build a map from unqualified names to their qualified versions
+    buildNameMap :: S.Set String -> M.Map String (S.Set String)
+    buildNameMap names = S.foldr addName M.empty names
+      where
+        addName :: String -> M.Map String (S.Set String) -> M.Map String (S.Set String)
+        addName qualifiedName acc = 
+          let unqualified = extractUnqualifiedName qualifiedName
+          in M.insertWith S.union unqualified (S.singleton qualifiedName) acc
+    
+    -- Find unqualified names that map to multiple qualified names
+    findAmbiguous :: M.Map String (S.Set String) -> S.Set String
+    findAmbiguous nameMap = 
+      M.keysSet $ M.filter (\qualifieds -> S.size qualifieds > 1) nameMap
+
+-- | Collect all qualified names (Refs and Syms) from a term
+collectQualifiedNames :: Term -> S.Set String
+collectQualifiedNames = go S.empty
+  where
+    go :: S.Set String -> Term -> S.Set String
+    go bound term = case term of
+      Ref k _ -> if "::" `isInfixOf` k then S.insert k bound else bound
+      Sym s -> if "::" `isInfixOf` s then S.insert s bound else bound
+      
+      -- Traverse all subterms
+      Sub t -> go bound t
+      Fix _ f -> go bound (f (Var "_dummy" 0))
+      Let _ t v f -> go (maybe bound (go bound) t) v `S.union` go bound (f (Var "_dummy" 0))
+      Use _ v f -> go bound v `S.union` go bound (f (Var "_dummy" 0))
+      Chk x t -> go bound x `S.union` go bound t
+      Tst x -> go bound x
+      UniM f -> go bound f
+      BitM f t -> go bound f `S.union` go bound t
+      NatM z s -> go bound z `S.union` go bound s
+      Suc n -> go bound n
+      Lst t -> go bound t
+      Con h t -> go bound h `S.union` go bound t
+      LstM n c -> go bound n `S.union` go bound c
+      EnuM cs d -> S.unions (map (go bound . snd) cs) `S.union` go bound d
+      Op2 _ a b -> go bound a `S.union` go bound b
+      Op1 _ a -> go bound a
+      Sig a b -> go bound a `S.union` go bound b
+      Tup a b -> go bound a `S.union` go bound b
+      SigM f -> go bound f
+      All a b -> go bound a `S.union` go bound b
+      Lam _ t f -> maybe (go bound (f (Var "_dummy" 0))) (\t' -> go bound t' `S.union` go bound (f (Var "_dummy" 0))) t
+      App f a -> go bound f `S.union` go bound a
+      Eql t a b -> go bound t `S.union` go bound a `S.union` go bound b
+      EqlM f -> go bound f
+      Rwt e f -> go bound e `S.union` go bound f
+      Met _ t ctx -> go bound t `S.union` S.unions (map (go bound) ctx)
+      Sup l a b -> go bound l `S.union` go bound a `S.union` go bound b
+      SupM l f -> go bound l `S.union` go bound f
+      Loc _ t -> go bound t
+      Log s x -> go bound s `S.union` go bound x
+      Pat ts ms cs -> S.unions (map (go bound) ts) `S.union` 
+                     S.unions (map (go bound . snd) ms) `S.union`
+                     S.unions [S.unions (map (go bound) ps) `S.union` go bound b | (ps, b) <- cs]
+      Frk l a b -> go bound l `S.union` go bound a `S.union` go bound b
+      _ -> S.empty
 
 -- | Add depth suffix to variable name if shadowed
 varName :: S.Set String -> String -> Int -> String
