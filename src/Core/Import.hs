@@ -2,7 +2,7 @@
 
 module Core.Import (autoImport, autoImportWithExplicit) where
 
-import Data.List (intercalate)
+import Data.List (intercalate, isInfixOf, isSuffixOf)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import System.Directory (doesFileExist, doesDirectoryExist)
@@ -19,7 +19,70 @@ import qualified Data.Map.Strict as M
 -- Substitution types and functions
 type SubstMap = M.Map Name Name
 
--- | Apply a substitution map to all Ref and Var terms in a term
+-- | Substitute aliases in constructor names
+-- For example: "some::B::X" with {"some" -> "B::B"} becomes "B::B::X"  
+-- Also handles: "B::X" with {"B" -> "B::B"} becomes "B::B::X"
+-- The substitution maps module aliases and imported names to fully qualified names
+substituteInConstructorName :: SubstMap -> String -> String
+substituteInConstructorName subst name =
+  case splitConstructorName name of
+    [single] -> 
+      -- No :: found, check if the whole name needs substitution
+      case M.lookup single subst of
+        Just replacement -> replacement
+        Nothing -> single
+    [typeName, ctorName] ->
+      -- Two parts: could be Type::Constructor
+      -- Check if typeName is in substitution map (from selective import)
+      case M.lookup typeName subst of
+        Just replacement ->
+          -- replacement is like "B::B" for "from B import B"
+          -- Append the constructor name
+          replacement ++ "::" ++ ctorName
+        Nothing -> 
+          -- No substitution needed, keep original
+          name
+    parts@(prefix:typeName:rest) ->
+      -- Three or more parts: Module::Type::Constructor or similar
+      -- Check if prefix is an alias that needs substitution
+      case M.lookup prefix subst of
+        Just replacement ->
+          -- replacement is like "B::B" for "import B as some"
+          -- We need to check if prefix::typeName together form the qualified type
+          -- If replacement already contains the type name, use it directly
+          if "::" `isInfixOf` replacement && not ("::" `isSuffixOf` replacement)
+          then
+            -- replacement is already a qualified name like "B::B"
+            -- Just append the constructor name
+            if null rest
+            then replacement  -- No constructor, just the type
+            else replacement ++ "::" ++ intercalate "::" rest  -- Add constructor
+          else
+            -- replacement is just a module name, build the full path
+            intercalate "::" (replacement : typeName : rest)
+        Nothing -> 
+          -- Check if prefix::typeName together might be in the substitution map
+          let prefixWithType = prefix ++ "::" ++ typeName
+          in case M.lookup prefixWithType subst of
+            Just replacement ->
+              -- Found a match for the combined prefix::type
+              if null rest
+              then replacement
+              else replacement ++ "::" ++ intercalate "::" rest
+            Nothing ->
+              -- No substitution needed, keep original
+              name
+    _ -> name
+  where
+    -- Split on "::" to get components
+    splitConstructorName :: String -> [String]
+    splitConstructorName s = 
+      case break (== ':') s of
+        (part, ':':':':rest) -> part : splitConstructorName rest
+        (part, "") -> [part]
+        _ -> [s]
+
+-- | Apply a substitution map to all Ref, Var, and Sym terms in a term
 substituteRefs :: SubstMap -> Term -> Term
 substituteRefs subst = go S.empty
   where
@@ -36,6 +99,10 @@ substituteRefs subst = go S.empty
         else case M.lookup k subst of
           Just newName -> Var newName i  -- It's a free variable, substitute it
           Nothing -> Var k i
+      
+      -- Handle constructor names that might contain aliases
+      Sym name -> Sym (substituteInConstructorName subst name)
+      
       Sub t -> Sub (go bound t)
       Fix k f -> Fix k (\v -> go (S.insert k bound) (f v))
       Let k t v f -> Let k (fmap (go bound) t) (go bound v) (\u -> go (S.insert k bound) (f u))
@@ -61,7 +128,6 @@ substituteRefs subst = go S.empty
       Con h t -> Con (go bound h) (go bound t)
       LstM n c -> LstM (go bound n) (go bound c)
       Enu cs -> Enu cs
-      Sym s -> Sym s
       EnuM cs d -> EnuM (map (\(s, t) -> (s, go bound t)) cs) (go bound d)
       Num n -> Num n
       Val v -> Val v
@@ -272,6 +338,7 @@ processAliasImport alias modulePath = do
               substMap = if qualifiedName `M.member` bookDefs
                          then M.singleton alias qualifiedName
                          else M.empty
+          -- Also store module alias for constructor resolution
           pure $ Right (book, substMap)
     Nothing -> pure $ Left $ "Cannot find module for alias import: " ++ modulePath
 
