@@ -1321,8 +1321,9 @@ check d span book ctx term      goal =
     -- ------------------ Con
     -- ctx |- h<>t : T[]
     (Con h t, Lst tT) -> do
-      check d span book ctx h tT
-      check d span book ctx t (Lst tT)
+      h' <- check d span book ctx h tT
+      t' <- check d span book ctx t (Lst tT)
+      return $ Con h' t'
 
     -- ctx |- h : T{h1==h2}
     -- ctx |- t : T[]{t1==t2}
@@ -1337,8 +1338,8 @@ check d span book ctx term      goal =
     -- ctx |- λx. f : ∀x:A. B
     (Lam k t f, All a b) -> do
       -- check (d+1) span book (extend ctx k (Var k d) a) (f (Var k d)) (App b (Var k d))
-      -- traceM $ "FORCE( " ++ show (App b (Var k d)) ++ " == " ++ show (force book $ (App b (Var k d)))
-      -- traceM $ "WHNF ( " ++ show (App b (Var k d)) ++ " == " ++ show (whnf  book $ (App b (Var k d)))
+      -- traceM $ "FORCE " ++ show (App b (Var "AAAA" d)) ++ " == " ++ show (force book $ (App b (Var k d)))
+      -- traceM $ "WHNF  " ++ show (App b (Var "AAAA" d)) ++ " == " ++ show (whnf  book $ (App b (Var k d)))
       -- traceM $ "CTX:\n" ++ show (extend ctx k (Var k d) a)
       f' <- check (d+1) span book (extend ctx k (Var k d) a) (f (Var k d)) (App b (Var k d))
       return $ Lam k t (\v -> bindVarByName k v f')
@@ -1825,7 +1826,14 @@ check d span book ctx term      goal =
     (App fn@(cut -> LstM n c) x, _) -> do -- TODO: perhaps add a case for x = [], checking only `z`
       xT <- infer d span book ctx x
       x' <- check d span book ctx x xT
-      n' <- check d span book (rewriteCtx d book x Nil ctx) n (rewrite d book x Nil goal)
+      n' <- 
+        trace (
+           "CTX: \n" ++ show (rewriteCtx d book x Nil ctx)
+        ++ "\n GOAL: " ++ show nGoal 
+        ++ "\nRGOAL: " ++ show (rewrite d book x Nil nGoal)
+        ++ "\nx: " ++ show x
+        ) $
+        check d span book (rewriteCtx d book x Nil ctx) n (rewrite d book x Nil goal)
       case cut $ normal book xT of 
         Lst hT ->
           case cut c of
@@ -1925,22 +1933,22 @@ check d span book ctx term      goal =
             _ -> do
               verify d span book ctx term goal
         _ -> do
-          verify d span book ctx term goal
+          trace ("AAAAAAAAAAAAAAAA " ++ show (cut $ normal book xT)) $ verify d span book ctx term goal
 
     (App (cut -> EnuM cs df) x, _) -> do
       xT <- infer d span book ctx x
-      -- traceM $ "term : " ++ show term
-      -- traceM $ "x: " ++ show x ++ " :: " ++ show xT
+      traceM $ "term : " ++ show term
+      traceM $ "x: " ++ show x ++ " :: " ++ show xT
       let doT = case cs of
-            []          -> Nothing
-            ((s,t):_)   -> case infer d span book ctx (Sym s) of
+            []          -> trace "1111" $ Nothing
+            ((s,t):_)   -> trace ("2222: Sym " ++ s) $ case infer d span book ctx (Sym s) of
               Done doT' -> Just doT'
-              _         -> Nothing
+              _         -> trace "3333" Nothing
       -- case cut xT of
       --   Enu syms ->
       --     if equal d book (Enu syms) (Enu [s | s <- map ((\(s,t) -> s)) cs])
       case (cut xT, doT) of
-        (Enu syms, Just (Enu syms')) | syms == syms' -> do
+        (Enu syms, Just (Enu syms')) | syms == syms' -> trace "CCCC" $ do
               cs' <- mapM (\(s, t) -> do
                 -- traceM $ "term : " ++ show term
                 -- traceM $ "s    : " ++ s
@@ -1948,12 +1956,12 @@ check d span book ctx term      goal =
                 -- traceM $ "goal : " ++ show (rewrite d book x (Sym s) goal)
                 -- traceM $ "ctx  :\n" ++ show (rewriteCtx d book x (Sym s) ctx)
                 -- traceM $ "\n"
-                ty <- check d span book (rewriteCtx d book x (Sym s) ctx) t (rewrite d book x (Sym s) goal)
+                ty <- trace "FFFFF" $ check d span book (rewriteCtx d book x (Sym s) ctx) t (rewrite d book x (Sym s) goal)
                 return (s, ty)
                 ) cs
-              return $ App (EnuM cs' df) x
+              trace "BBBB" $ return $ App (EnuM cs' df) x
         _ -> do
-          verify d span book ctx term goal
+          trace ("AAA " ++ show xT ++ " ==== " ++ show doT) $ verify d span book ctx term goal
 
     -- Default case: try to infer and verify
     (term, _) -> do
