@@ -1230,7 +1230,7 @@ check d span book ctx (Loc l t) goal = do
   t' <- check d l book ctx t goal 
   return $ Loc l t'
 check d span book ctx term      goal =
-  trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
+  -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
   -- trace ("- check: " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
   -- trace ("- ctx:\n" ++ show ctx) $
   let nGoal = force book goal in
@@ -1252,13 +1252,13 @@ check d span book ctx term      goal =
     -- ctx, x:t |- f : T
     -- ------------------------- Let
     -- ctx |- (x : t = v ; f) : T
-    (Let k t v f, _) -> trace "BBBBBBBB" $ case t of
+    (Let k t v f, _) -> case t of
         Just t  -> do
           t' <- check d span book ctx t Set
           v' <- check d span book ctx v t
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
           return $ Lam k (Just t') (\v -> bindVarByName k v f')
-        Nothing -> trace "AAAAAAAAAAAA" $ do
+        Nothing -> do
           t <- infer d span book ctx v
           t' <- check d span book ctx t Set
           v' <- check d span book ctx v t
@@ -1750,10 +1750,11 @@ check d span book ctx term      goal =
       eT <- infer d span book ctx e
       case force book eT of
         Eql t a b -> do
-          -- let rewrittenCtx  = rewriteCtx d book a b ctx
           let rewrittenCtx  = rewriteCtx d book a b ctx
           let rewrittenGoal = rewrite d book a b goal
-          f' <- check d span book rewrittenCtx f rewrittenGoal
+          -- f' <- check d span book rewrittenCtx f rewrittenGoal
+          -- e' <- check d span book ctx e eT
+          f' <- check d span book ctx f rewrittenGoal
           e' <- check d span book ctx e eT
           return $ Rwt e' f'
         _ ->
@@ -1849,6 +1850,7 @@ check d span book ctx term      goal =
           let goalWithSucP = (rewrite (d+1) book x (Suc (Var p d)) goal)
           -- traceM $ "- CHECK NATM SUC: " ++ show bodyWithSucP ++ " :: " ++ show goalWithSucP
           -- s' <- reWrap s <$> check (d+1) (getSpan span body) book ctxWithSucP bodyWithSucP goalWithSucP
+          -- s' <- reWrap s <$> check (d+1) (getSpan span body) book ctxWithSucP body goalWithSucP
           s' <- reWrap s <$> check (d+1) (getSpan span body) book ctxWithSucP body goalWithSucP
           let fnType = (All Nat (NatM nGoal (Lam "_" Nothing (\_ -> nGoal))))
           case cut x of
@@ -1864,12 +1866,12 @@ check d span book ctx term      goal =
       xT <- infer d span book ctx x
       x' <- check d span book ctx x xT
       n' <- 
-        trace (
-           "CTX: \n" ++ show (rewriteCtx d book x Nil ctx)
-        ++ "\n GOAL: " ++ show nGoal 
-        ++ "\nRGOAL: " ++ show (rewrite d book x Nil nGoal)
-        ++ "\nx: " ++ show x
-        ) $
+        -- trace (
+        --    "CTX: \n" ++ show (rewriteCtx d book x Nil ctx)
+        -- ++ "\n GOAL: " ++ show nGoal 
+        -- ++ "\nRGOAL: " ++ show (rewrite d book x Nil nGoal)
+        -- ++ "\nx: " ++ show x
+        -- ) $
         check d span book (rewriteCtx d book x Nil ctx) n (rewrite d book x Nil goal)
       case cut $ normal book xT of 
         Lst hT ->
@@ -1970,22 +1972,20 @@ check d span book ctx term      goal =
             _ -> do
               verify d span book ctx term goal
         _ -> do
-          trace ("AAAAAAAAAAAAAAAA " ++ show (cut $ normal book xT)) $ verify d span book ctx term goal
+          verify d span book ctx term goal
 
     (App (cut -> EnuM cs df) x, _) -> do
       xT <- infer d span book ctx x
-      traceM $ "term : " ++ show term
-      traceM $ "x: " ++ show x ++ " :: " ++ show xT
       let doT = case cs of
-            []          -> trace "1111" $ Nothing
-            ((s,t):_)   -> trace ("2222: Sym " ++ s) $ case infer d span book ctx (Sym s) of
+            []          -> Nothing
+            ((s,t):_)   -> case infer d span book ctx (Sym s) of
               Done doT' -> Just doT'
-              _         -> trace "3333" Nothing
+              _         -> Nothing
       -- case cut xT of
       --   Enu syms ->
       --     if equal d book (Enu syms) (Enu [s | s <- map ((\(s,t) -> s)) cs])
       case (cut xT, doT) of
-        (Enu syms, Just (Enu syms')) | syms == syms' -> trace "CCCC" $ do
+        (Enu syms, Just (Enu syms')) | syms == syms' -> do
               cs' <- mapM (\(s, t) -> do
                 -- traceM $ "term : " ++ show term
                 -- traceM $ "s    : " ++ s
@@ -1993,15 +1993,15 @@ check d span book ctx term      goal =
                 -- traceM $ "goal : " ++ show (rewrite d book x (Sym s) goal)
                 -- traceM $ "ctx  :\n" ++ show (rewriteCtx d book x (Sym s) ctx)
                 -- traceM $ "\n"
-                ty <- trace "FFFFF" $ check d span book (rewriteCtx d book x (Sym s) ctx) t (rewrite d book x (Sym s) goal)
+                ty <- check d span book (rewriteCtx d book x (Sym s) ctx) t (rewrite d book x (Sym s) goal)
                 return (s, ty)
                 ) cs
-              trace "BBBB" $ return $ App (EnuM cs' df) x
+              return $ App (EnuM cs' df) x
         _ -> do
-          trace ("AAA " ++ show xT ++ " ==== " ++ show doT) $ verify d span book ctx term goal
+          verify d span book ctx term goal
 
     -- Default case: try to infer and verify
-    (term, _) -> trace ("AAAAAAAAAAAA: " ++ show term ++ " :: " ++ show goal) $  do 
+    (term, _) -> do 
       let (fn, xs) = collectApps term []
       if isLam fn then do
         verify d span book ctx term goal
@@ -2021,8 +2021,8 @@ verify d span book ctx term goal = do
     then do 
       -- check d span book ctx term t
       return term
-    -- else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book t) Nothing
-    else Fail $ TypeMismatch span (ctx) (goal) (normal book t) Nothing
+    else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book t) Nothing
+    -- else Fail $ TypeMismatch span (ctx) (goal) (normal book t) Nothing
 
 reWrap :: Term -> Term -> Term
 reWrap (Loc l _) z = Loc l z
