@@ -44,7 +44,10 @@ library
                       Core.Termination,
                       Core.WHNF,
                       Target.HVM,
-                      Target.JavaScript
+                      Target.JavaScript,
+                      Package.Types,
+                      Package.HTTP,
+                      Package.Hash
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
                       containers == 0.7,
@@ -61,7 +64,11 @@ library
                       file-embed,
                       HVM,
                       process,
-                      vector
+                      vector,
+                      cryptonite,
+                      memory,
+                      temporary,
+                      zip-archive
     hs-source-dirs:   src
     default-language: GHC2024
 
