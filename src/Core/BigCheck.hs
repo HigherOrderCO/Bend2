@@ -1254,16 +1254,16 @@ check d span book ctx term      goal =
     -- ctx |- (x : t = v ; f) : T
     (Let k t v f, _) -> case t of
         Just t  -> do
-          t' <- check d span book ctx t Set
+          t' <- whnf book <$> check d span book ctx t Set
           v' <- check d span book ctx v t
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
-          return $ Lam k (Just t') (\v -> bindVarByName k v f')
+          return $ Let k (Just t') v' (\v -> bindVarByName k v f')
         Nothing -> do
           t <- infer d span book ctx v
-          t' <- check d span book ctx t Set
+          t' <- whnf book <$> check d span book ctx t Set
           v' <- check d span book ctx v t
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
-          return $ Lam k (Just t') (\v -> bindVarByName k v f')
+          return $ Let k (Just t') v' (\v -> bindVarByName k v f')
 
     -- ctx |- f(v) : T
     -- -------------------------- Use
