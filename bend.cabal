@@ -66,6 +66,7 @@ library
                       cryptonite,
                       memory,
                       temporary,
+                      unix,
                       zip-archive
     hs-source-dirs:   src
     default-language: GHC2024

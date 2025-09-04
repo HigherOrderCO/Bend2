@@ -3,6 +3,7 @@
 module Package.HTTP where
 
 import Package.Types
+import qualified Package.Cache as Cache
 
 import Control.Exception (try, SomeException)
 import Data.Aeson ((.:), (.:?))
@@ -20,32 +21,90 @@ import System.FilePath
 import System.IO.Temp (withSystemTempDirectory, createTempDirectory, getCanonicalTemporaryDirectory)
 import qualified Codec.Archive.Zip as Zip
 
--- | Download a GitHub repository and extract it
+-- | Download a GitHub repository and extract it (with caching)
 downloadRepository :: GitHubRepo -> IO (Either PackageError DownloadResult)
-downloadRepository repo = do
+downloadRepository repo = downloadRepositoryWithCache repo =<< Cache.defaultCacheConfig
+
+-- | Download a GitHub repository with custom cache configuration
+downloadRepositoryWithCache :: GitHubRepo -> Cache.CacheConfig -> IO (Either PackageError DownloadResult)
+downloadRepositoryWithCache repo cacheConfig = do
   -- First, resolve the ref to a commit SHA if needed
   commitResult <- resolveRef repo
   case commitResult of
     Left err -> return $ Left err
     Right commitSha -> do
-      -- Download the archive
-      archiveResult <- downloadArchive repo commitSha
-      case archiveResult of
+      -- Check cache first
+      cacheResult <- Cache.lookupCached cacheConfig repo (Just commitSha)
+      case cacheResult of
+        Cache.CacheHit cachedPath -> do
+          -- Package found in cache, return cached version
+          return $ Right $ DownloadResult
+            { drRepo = repo
+            , drCommitHash = commitSha
+            , drFilePath = cachedPath
+            , drSize = 0  -- Size not tracked for cached packages currently
+            }
+        Cache.CacheMiss -> do
+          -- Package not in cache, download and cache it
+          downloadAndCache repo commitSha cacheConfig
+        Cache.CacheError err -> do
+          -- Cache error, proceed with download but don't cache
+          downloadWithoutCache repo commitSha
+
+-- | Download and cache a package
+downloadAndCache :: GitHubRepo -> String -> Cache.CacheConfig -> IO (Either PackageError DownloadResult)
+downloadAndCache repo commitSha cacheConfig = do
+  -- Download the archive
+  archiveResult <- downloadArchive repo commitSha
+  case archiveResult of
+    Left err -> return $ Left err
+    Right (archiveData, size) -> do
+      -- Extract to temp directory first
+      withSystemTempDirectory "bend-pkg-download-" $ \tmpDir -> do
+        extractResult <- extractArchive archiveData tmpDir
+        case extractResult of
+          Left err -> return $ Left err
+          Right extractedPath -> do
+            -- Cache the package
+            cacheResult <- Cache.cachePackage cacheConfig repo commitSha extractedPath
+            case cacheResult of
+              Left cacheErr -> do
+                -- Caching failed, but return temp path
+                return $ Right $ DownloadResult
+                  { drRepo = repo
+                  , drCommitHash = commitSha
+                  , drFilePath = extractedPath
+                  , drSize = size
+                  }
+              Right cachedPath -> do
+                return $ Right $ DownloadResult
+                  { drRepo = repo
+                  , drCommitHash = commitSha
+                  , drFilePath = cachedPath
+                  , drSize = size
+                  }
+
+-- | Download without caching (fallback)
+downloadWithoutCache :: GitHubRepo -> String -> IO (Either PackageError DownloadResult)
+downloadWithoutCache repo commitSha = do
+  -- Download the archive
+  archiveResult <- downloadArchive repo commitSha
+  case archiveResult of
+    Left err -> return $ Left err
+    Right (archiveData, size) -> do
+      -- Extract to temp directory (don't auto-delete for debugging)
+      tmpDir <- getCanonicalTemporaryDirectory >>= \tmp -> 
+        createTempDirectory tmp "bend-pkg-"
+      extractResult <- extractArchive archiveData tmpDir
+      case extractResult of
         Left err -> return $ Left err
-        Right (archiveData, size) -> do
-          -- Extract to temp directory (don't auto-delete for debugging)
-          tmpDir <- getCanonicalTemporaryDirectory >>= \tmp -> 
-            createTempDirectory tmp "bend-pkg-"
-          extractResult <- extractArchive archiveData tmpDir
-          case extractResult of
-            Left err -> return $ Left err
-            Right extractedPath -> do
-              return $ Right $ DownloadResult
-                { drRepo = repo
-                , drCommitHash = commitSha
-                , drFilePath = extractedPath
-                , drSize = size
-                }
+        Right extractedPath -> do
+          return $ Right $ DownloadResult
+            { drRepo = repo
+            , drCommitHash = commitSha
+            , drFilePath = extractedPath
+            , drSize = size
+            }
 
 -- | Resolve a ref (branch/tag) to a commit SHA
 -- If no ref is provided, uses the default branch
