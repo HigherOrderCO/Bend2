@@ -62,7 +62,11 @@ library
                       file-embed,
                       HVM,
                       process,
-                      vector
+                      vector,
+                      cryptonite,
+                      memory,
+                      temporary,
+                      zip-archive
     hs-source-dirs:   src
     default-language: GHC2024
 
