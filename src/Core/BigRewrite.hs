@@ -11,7 +11,7 @@ import GHC.Float (castDoubleToWord64, castWord64ToDouble)
 
 import Core.BigEqual
 import Core.Type
-import Core.WHNF
+import Core.BigWHNF
 
 import Debug.Trace
 
@@ -22,7 +22,6 @@ rewrite :: Int -> Book -> Term -> Term -> Term -> Term
 rewrite d book old neo val
   | equal d book old val = neo
   | otherwise            = rewriteGo d book old neo $ whnf book val
-
 -- Recursively rewrites occurrences of 'old' with 'neo' in 'val'
 rewriteGo :: Int -> Book -> Term -> Term -> Term -> Term
 rewriteGo d book old neo val =
@@ -54,7 +53,6 @@ rewriteGo d book old neo val =
     LstM n c    -> LstM (rewrite d book old neo n) (rewrite d book old neo c)
     Enu s       -> Enu s
     Sym s       -> Sym s
-    -- EnuM c e    -> EnuM (map (\(s,t) -> (s, rewrite d book old neo t)) c) (fmap (rewrite d book old neo) e)
     EnuM c e    -> EnuM (map (\(s,t) -> (s, rewrite d book old neo t)) c) (rewrite d book old neo e)
     Num t       -> Num t
     Val v       -> Val v
@@ -65,7 +63,9 @@ rewriteGo d book old neo val =
     SigM f      -> SigM (rewrite d book old neo f)
     All a b     -> All (rewrite d book old neo a) (rewrite d book old neo b)
     Lam k t f   -> Lam k (fmap (rewrite d book old neo) t) (\v -> rewrite d book old neo (f v))
-    App f x     -> App (rewrite d book old neo f) (rewrite d book old neo x)
+    -- App f x     -> App (rewrite d book old neo f) (rewrite d book old neo x)
+    App f x     -> foldl (\ f x -> App f (rewrite d book old neo x)) fn xs
+      where (fn,xs) = collectApps (App f x) []
     Eql t a b   -> Eql (rewrite d book old neo t) (rewrite d book old neo a) (rewrite d book old neo b)
     Rfl         -> Rfl
     EqlM f      -> EqlM (rewrite d book old neo f)
