@@ -20,8 +20,8 @@ import Core.Bind
 import Core.Type
 import Core.Show
 import Core.BigEqual
-import Core.BigRewrite
-import Core.BigWHNF
+import Core.Rewrite
+import Core.WHNF
 
 -- Utils
 -- -------
