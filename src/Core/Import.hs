@@ -13,7 +13,8 @@ import System.IO (hPutStrLn, stderr)
 import Core.Type
 import Core.Deps
 import Core.Parse.Book (doParseBook)
-import Core.Parse.Parse (ParserState(..))
+import Core.Parse.Parse (ParserState(..), GitHubImport(..))
+import qualified Package.Install as PkgInstall
 import qualified Data.Map.Strict as M
 
 -- Substitution types and functions
@@ -231,38 +232,58 @@ importAll currentFile base = do
 
 importAllWithExplicit :: FilePath -> Book -> ParserState -> IO (Either String Book)
 importAllWithExplicit currentFile base parserState = do
-  -- First process explicit imports to build initial substitution map
-  explicitResult <- processExplicitImports parserState
-  case explicitResult of
+  -- First process GitHub imports to install packages
+  githubResult <- processGitHubImports parserState
+  case githubResult of
     Left err -> pure (Left err)
-    Right (explicitBook, explicitSubstMap) -> do
-      let -- Build substitution map for local definitions
-          localSubstMap = buildLocalSubstMap currentFile base
-          -- Combine explicit and local substitution maps (explicit takes precedence)
-          combinedSubstMap = M.union explicitSubstMap localSubstMap
-          -- Apply combined substitutions to both books
-          substitutedBase = substituteRefsInBook combinedSubstMap base
-          substitutedExplicit = substituteRefsInBook combinedSubstMap explicitBook
-          mergedBook = mergeBooks substitutedBase substitutedExplicit
-          initial = ImportState
-            { stVisited = S.empty
-            , stLoaded  = S.union (bookNames substitutedBase) (bookNames substitutedExplicit)
-            , stBook    = mergedBook
-            , stSubstMap = combinedSubstMap
-            , stCurrentFile = currentFile
-            , stModuleImports = S.fromList (moduleImports parserState)
-            , stAliases = M.fromList (aliasImports parserState)
-            }
-          -- Collect dependencies from the substituted merged book
-          pending0 = getBookDeps mergedBook
-      res <- importLoop initial pending0
-      case res of
+    Right () -> do
+      -- Then process explicit imports to build initial substitution map
+      explicitResult <- processExplicitImports parserState
+      case explicitResult of
         Left err -> pure (Left err)
-        Right st -> do
-          -- Apply substitution map to the final book
-          let substMap = stSubstMap st
-              finalBook = substituteRefsInBook substMap (stBook st)
-          pure (Right finalBook)
+        Right (explicitBook, explicitSubstMap) -> do
+          let -- Build substitution map for local definitions
+              localSubstMap = buildLocalSubstMap currentFile base
+              -- Combine explicit and local substitution maps (explicit takes precedence)
+              combinedSubstMap = M.union explicitSubstMap localSubstMap
+              -- Apply combined substitutions to both books
+              substitutedBase = substituteRefsInBook combinedSubstMap base
+              substitutedExplicit = substituteRefsInBook combinedSubstMap explicitBook
+              mergedBook = mergeBooks substitutedBase substitutedExplicit
+              initial = ImportState
+                { stVisited = S.empty
+                , stLoaded  = S.union (bookNames substitutedBase) (bookNames substitutedExplicit)
+                , stBook    = mergedBook
+                , stSubstMap = combinedSubstMap
+                , stCurrentFile = currentFile
+                , stModuleImports = S.fromList (moduleImports parserState)
+                , stAliases = M.fromList (aliasImports parserState)
+                }
+              -- Collect dependencies from the substituted merged book
+              pending0 = getBookDeps mergedBook
+          res <- importLoop initial pending0
+          case res of
+            Left err -> pure (Left err)
+            Right st -> do
+              -- Apply substitution map to the final book
+              let substMap = stSubstMap st
+                  finalBook = substituteRefsInBook substMap (stBook st)
+              pure (Right finalBook)
+
+-- | Process GitHub imports by installing packages to bend_packages
+processGitHubImports :: ParserState -> IO (Either String ())
+processGitHubImports parserState = do
+  let ghImports = githubImports parserState
+  if null ghImports
+    then pure (Right ())
+    else do
+      -- Create install configuration
+      installConfig <- PkgInstall.defaultInstallConfig
+      -- Install packages
+      installResult <- PkgInstall.installPackages installConfig ghImports
+      case installResult of
+        Left err -> pure (Left $ "Package installation failed: " ++ err)
+        Right _ -> pure (Right ())
 
 -- | Process explicit imports from parser state
 processExplicitImports :: ParserState -> IO (Either String (Book, SubstMap))
@@ -514,10 +535,23 @@ firstExisting (p:ps) = do
   if ok then pure (Just p) else firstExisting ps
 
 -- Prefer Foo/Bar/_.bend if Foo/Bar/ is a directory; otherwise Foo/Bar.bend
+-- Also check in bend_packages directory
 generateImportPaths :: Name -> IO [FilePath]
 generateImportPaths name = do
   isDir <- doesDirectoryExist name
-  pure [ if isDir then name </> "_.bend" else name ++ ".bend" ]
+  let localPath = if isDir then name </> "_.bend" else name ++ ".bend"
+  
+  -- Check if bend_packages directory exists
+  hasBendPackages <- doesDirectoryExist "bend_packages"
+  if hasBendPackages
+    then do
+      -- Also check in bend_packages
+      let pkgPath = "bend_packages" </> name
+      isPkgDir <- doesDirectoryExist pkgPath
+      let bendPkgPath = if isPkgDir then pkgPath </> "_.bend" else "bend_packages" </> (name ++ ".bend")
+      pure [localPath, bendPkgPath]
+    else
+      pure [localPath]
 
 hasSlash :: String -> Bool
 hasSlash = any (== '/')

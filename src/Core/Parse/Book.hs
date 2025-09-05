@@ -9,7 +9,7 @@ module Core.Parse.Book
 
 import Control.Monad (when)
 import Control.Monad.State.Strict (State, get, put, evalState, runState)
-import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isAlphaNum)
 import Data.List (intercalate)
 import Data.Void
 import Text.Megaparsec
@@ -105,6 +105,7 @@ addAliasImport alias path = do
 parseImport :: Parser ()
 parseImport = choice
   [ try parseFromImport    -- from module import name1, name2
+  , try parseGitHubImport  -- import "gh:owner/repo" or import "gh:owner/repo" as alias
   , try parseAliasImport   -- import module as alias (more specific, should go first)
   , parseModuleImport      -- import module (no try needed, it's the fallback)
   ]
@@ -139,6 +140,46 @@ parseAliasImport = do
   _ <- symbol "as"
   alias <- name
   addAliasImport alias path
+
+-- | Parse: import "gh:owner/repo" or import "gh:owner/repo@ref" as alias
+parseGitHubImport :: Parser ()
+parseGitHubImport = do
+  _ <- symbol "import"
+  -- Parse quoted GitHub reference
+  ghRef <- lexeme $ between (char '"') (char '"') parseGitHubRef
+  -- Optional alias
+  maybeAlias <- optional (symbol "as" *> name)
+  addGitHubImport ghRef maybeAlias
+  where
+    -- Parse gh:owner/repo[@ref][/subpath]
+    parseGitHubRef :: Parser (String, String, Maybe String, Maybe String)
+    parseGitHubRef = do
+      _ <- string "gh:"
+      owner <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_'))
+      _ <- char '/'
+      repo <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.'))
+      -- Optional ref (@branch, @tag, or @commit)
+      ref <- optional $ do
+        _ <- char '@'
+        some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.'))
+      -- Optional subpath
+      subpath <- optional $ do
+        _ <- char '/'
+        many (satisfy (\c -> c /= '"'))
+      return (owner, repo, ref, subpath)
+
+-- | Add a GitHub import to the parser state
+addGitHubImport :: (String, String, Maybe String, Maybe String) -> Maybe String -> Parser ()
+addGitHubImport (owner, repo, ref, subpath) maybeAlias = do
+  st <- get
+  let ghImport = GitHubImport
+        { ghOwner = owner
+        , ghRepo = repo
+        , ghRef = ref
+        , ghSubpath = subpath
+        , ghAlias = maybeAlias
+        }
+  put st { githubImports = ghImport : githubImports st }
 
 -- | Syntax: import statements followed by definitions
 parseBook :: Parser Book
@@ -273,7 +314,7 @@ doParseBook file input =
 -- | Parse a book from a string, returning both the book and the import information
 doParseBookWithImports :: FilePath -> String -> Either String (Book, ParserState)
 doParseBookWithImports file input =
-  case runState (runParserT p file input) (ParserState True input [] M.empty [] [] [] 0 file) of
+  case runState (runParserT p file input) (ParserState True input [] M.empty [] [] [] [] 0 file) of
     (Left err, _)    -> Left (formatError input err)
     (Right res, st)  -> Right (res, st)
   where

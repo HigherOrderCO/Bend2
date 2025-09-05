@@ -5,6 +5,7 @@ module Core.Parse.Parse
   ( -- * Types
     Parser
   , ParserState(..)
+  , GitHubImport(..)
 
   -- * Basic parsers
   , skip
@@ -62,6 +63,15 @@ import Core.Type
 import qualified Core.Parse.WithSpan as WithSpan
 
 -- Parser state
+-- | Represents a GitHub package import
+data GitHubImport = GitHubImport
+  { ghOwner   :: String         -- ^ Repository owner (user or organization)
+  , ghRepo    :: String         -- ^ Repository name
+  , ghRef     :: Maybe String   -- ^ Optional ref (branch, tag, or commit SHA)
+  , ghSubpath :: Maybe String   -- ^ Optional subdirectory path within repo
+  , ghAlias   :: Maybe String   -- ^ Optional import alias
+  } deriving (Show, Eq)
+
 data ParserState = ParserState
   { tight         :: Bool                  -- ^ tracks whether previous token ended with no trailing space
   , source        :: String                -- ^ original file source, for error reporting
@@ -70,6 +80,7 @@ data ParserState = ParserState
   , moduleImports :: [String]              -- ^ module imports: ["Nat/add", "String/utils"] (for import ...)
   , selectiveImports :: [(String, [String])] -- ^ selective imports: [("Nat/add", ["Nat/add", "Nat/add/go"])] (for from ... import ...)
   , aliasImports :: [(String, String)]     -- ^ alias imports: [("NatOps", "Nat/add")] (for import ... as ...)
+  , githubImports :: [GitHubImport]        -- ^ GitHub package imports: [GitHubImport {ghOwner="bend-lang", ghRepo="std", ...}]
   , assertCounter :: Int                   -- ^ counter for generating unique assert names (E0, E1, E2...)
   , fileName      :: FilePath              -- ^ current file being parsed, for FQN generation
   }

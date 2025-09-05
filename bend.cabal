@@ -48,7 +48,9 @@ library
                       Package.Types,
                       Package.HTTP,
                       Package.Hash,
-                      Package.Cache
+                      Package.Cache,
+                      Package.Install,
+                      Package.Resolve
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
                       containers == 0.7,
