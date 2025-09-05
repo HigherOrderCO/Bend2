@@ -126,7 +126,7 @@ showPlain shadowed term depth = case term of
 showVar :: S.Set String -> String -> Int -> String
 showVar shadowed k i = case S.member k shadowed of
   True  -> k ++ "^" ++ show i
-  False -> k
+  False -> k ++ "^" ++ show i
 
 -- | μx. body
 showFix :: S.Set String -> String -> Body -> Int -> String
@@ -201,13 +201,16 @@ showLam shadowed k t f depth = case t of
 
 -- | Function application: f(x,y,z)
 showApp :: S.Set String -> Term -> Int -> String
-showApp shadowed term depth = fnStr ++ "(" ++ intercalate "," (map (\arg -> showPlain shadowed arg depth) args) ++ ")"
-  where 
-    (fn, args) = collectApps term []
-    fnStr = case cut fn of
-      Var k i -> showVar shadowed k i
-      Ref k i -> k  
-      _       -> "(" ++ showPlain shadowed fn depth ++ ")"
+-- showApp shadowed (App f x) depth = "("++show f ++ ")(" ++ show x ++ ")"
+showApp shadowed (App f x) depth = show f ++ "(" ++ show x ++ ")"
+-- showApp shadowed (App f x) depth = "(" ++show f ++ " " ++ show x ++ ")"
+-- showApp shadowed term depth = fnStr ++ "(" ++ intercalate "," (map (\arg -> showPlain shadowed arg depth) args) ++ ")"
+--   where 
+--     (fn, args) = collectApps term []
+--     fnStr = case cut fn of
+--       Var k i -> showVar shadowed k i
+--       Ref k i -> k -- ++ "_" ++ show i
+--       _       -> "(" ++ showPlain shadowed fn depth ++ ")"
 
 -- | Tuple: (a,b,c) or @Ctor{a,b}
 showTup :: S.Set String -> Term -> Int -> String
@@ -411,8 +414,8 @@ instance Show Error where
     CantInfer span ctx hint       -> "\x1b[1mCantInfer:\x1b[0m\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     Unsupported span ctx hint     -> "\x1b[1mUnsupported:\x1b[0m\nCurrently, Bend doesn't support matching on non-var expressions.\nThis will be added later. For now, please split this definition.\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     Undefined span ctx name hint  -> "\x1b[1mUndefined:\x1b[0m " ++ name ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    TypeMismatch span ctx goal typ hint -> "\x1b[1mMismatch:\x1b[0m\n- Goal: " ++ showTerm True goal ++ "\n- Type: " ++ showTerm True typ ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    TermMismatch span ctx a b hint -> "\x1b[1mMismatch:\x1b[0m\n- " ++ showTerm True a ++ "\n- " ++ showTerm True b ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    TypeMismatch span ctx goal typ hint -> "\x1b[1mType Mismatch:\x1b[0m\n- Goal: " ++ showTerm True goal ++ "\n- Type: " ++ showTerm True typ ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    TermMismatch span ctx a b hint -> "\x1b[1mTerm Mismatch:\x1b[0m\n- " ++ showTerm True a ++ "\n- " ++ showTerm True b ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     IncompleteMatch span ctx hint -> "\x1b[1mIncompleteMatch:\x1b[0m\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     UnknownTermination term  -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
     ImportError span msg     -> "\x1b[1mImportError:\x1b[0m " ++ msg ++ show span

@@ -1046,7 +1046,7 @@ check d span book ctx term      goal =
     -- Default case: try to infer and verify
     (term, _) -> do
       let (fn, xs) = collectApps term []
-      if isLam fn then do
+      if isLam (cut fn) then do
         Fail $ Unsupported span (normalCtx book ctx) Nothing
       else do
         verify d span book ctx term goal

@@ -20,6 +20,9 @@ import Control.Exception (catch, IOException)
 import System.IO (hPutStrLn, stderr)
 
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
+import Core.Adjust.Desugar (desugarBook)
+import Core.Adjust.Annotate (annotateBook)
+import Core.Adjust.Elaborate (elaborateBook)
 import Core.Bind
 import Core.Check
 import Core.Deps
@@ -93,14 +96,21 @@ runMain book = do
 processFile :: FilePath -> IO ()
 processFile file = do
   book <- parseFile file
-  let bookAdj@(Book defs _) = adjustBook book
+  -- let bookAdj@(Book defs _) = adjustBook book
+  let desBook@(Book defs _) = desugarBook book
+  chkBook@(Book defs _)    <- annotateBook desBook
+
+  let bookAdj@(Book defs _) = elaborateBook chkBook
+  -- let bookAdj@(Book defs _) = desBook
+  
   -- debug removed
   -- debug removed
   putStrLn $ show $ M.keys defs
   putStrLn $ ""
   putStrLn $ show $ getDefn bookAdj "Term/gen/intr" 
-  bookChk <- checkBook bookAdj
-  runMain bookChk
+  -- bookChk <- checkBook bookAdj
+  -- runMain bookChk
+  runMain bookAdj
 
 -- | Try to format JavaScript code using prettier if available
 formatJavaScript :: String -> IO String

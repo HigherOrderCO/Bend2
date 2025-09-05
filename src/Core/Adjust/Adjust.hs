@@ -179,10 +179,17 @@ adjustDef book visiting adjustFn name = do
         -- 3. After dependencies are adjusted, adjust the current definition.
         -- We need to get the latest version of the adjusted book from the state,
         -- as it has been updated by the recursive calls.
-        (partialAdjBook, _) <- get
+        (partialAdjBook@(Book defs n), _) <- get
 
-        let adjTerm = adjustFn partialAdjBook term (Just typ)
-        let adjType = adjustFn partialAdjBook typ Nothing
+        let termModelsADT = case cut term of
+              Sig a b -> case cut a of
+                Enu syms -> Just (Enu syms)
+                _        -> Nothing
+              _ -> Nothing
+        let bookWithADTLabels = Book (maybe defs (\typ -> M.insert "$enum" (False,Sig typ Set, Set) defs) termModelsADT) n
+
+        let adjType = adjustFn partialAdjBook typ  (Just Set)
+        let adjTerm = adjustFn bookWithADTLabels term (Just adjType) -- adjType is now bound
 
         -- 4. Update the state with the newly adjusted definition.
         -- The name is added to the `adjustedSet` to mark it as complete.

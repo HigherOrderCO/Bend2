@@ -31,9 +31,9 @@ import Core.BigCheck
 
 desugar :: Book -> Term -> Term
 desugar book term =
-  trace ("flat: " ++ show flat) $
-  trace ("npat: " ++ show npat) $
-  trace ("nfrk: " ++ show nfrk) $
+  -- trace ("flat: " ++ show flat) $
+  -- trace ("npat: " ++ show npat) $
+  -- trace ("nfrk: " ++ show nfrk) $
   trace ("hoas: " ++ show hoas) $
   hoas 
   where
@@ -124,3 +124,84 @@ desugarDef book visiting desugarFn name = do
           let newAdjMap  = M.insert name (inj, adjTerm, adjType) adjMap
               newDoneSet = S.insert name doneSet
           in (Book newAdjMap names, newDoneSet)
+
+
+
+
+--
+--
+-- addFix :: Name -> Term -> Term
+-- addFix name term = 
+--   if name `elem` getDeps term
+--   then Fix name (\f -> go name term [f] M.empty)
+--   else Set
+--     where
+--     go :: Name -> Term -> [Term] -> M.Map Name Term -> Term
+--     go lv term ctx@[fn] vars = case term of
+--       Var k i     -> Var k i
+--       Ref k i     -> if k == name then k i
+--       Sub t       -> t
+--       Let k t v f -> Let k (fmap (\u -> go lv u ctx vars) t) (go lv v ctx vars) (\x -> go lv (f (Sub x)) (ctx++[x]) (M.insert k x vars))
+--       Use k v f   -> Use k (go lv v ctx vars) (\x -> go lv (f (Sub x)) (ctx++[x]) (M.insert k x vars))
+--       Fix k f     -> Fix k (\x -> go (lv) (f (Sub x)) (ctx++[x]) (M.insert k x vars))
+--       Set         -> Set
+--       Chk x t     -> Chk (go lv x ctx vars) (go lv t ctx vars)
+--       Tst x       -> Tst (go lv x ctx vars)
+--       Emp         -> Emp
+--       EmpM        -> EmpM
+--       Uni         -> Uni
+--       One         -> One
+--       UniM f      -> UniM (go lv f ctx vars)
+--       Bit         -> Bit
+--       Bt0         -> Bt0
+--       Bt1         -> Bt1
+--       BitM f t    -> BitM (go lv f ctx vars) (go lv t ctx vars)
+--       Nat         -> Nat
+--       Zer         -> Zer
+--       Suc n       -> Suc (go lv n ctx vars)
+--       NatM z s    -> NatM (go lv z ctx vars) (go lv s ctx vars)
+--       Lst t       -> Lst (go lv t ctx vars)
+--       Nil         -> Nil
+--       Con h t     -> Con (go lv h ctx vars) (go lv t ctx vars)
+--       LstM n c    -> LstM (go lv n ctx vars) (go lv c ctx vars)
+--       Enu s       -> Enu s
+--       Sym s       -> Sym s
+--       EnuM c e    -> EnuM (map (\(s, t) -> (s, go lv t ctx vars)) c) (go lv e ctx vars)
+--       Sig a b     -> Sig (go lv a ctx vars) (go lv b ctx vars)
+--       Tup a b     -> Tup (go lv a ctx vars) (go lv b ctx vars)
+--       SigM f      -> SigM (go lv f ctx vars)
+--       All a b     -> All (go lv a ctx vars) (go lv b ctx vars)
+--       Lam k t f   -> Lam k (fmap (\t -> go lv t ctx vars) t) (\x -> go (lv+1) (f (Sub x)) (ctx++[x]) (M.insert k x vars))
+--       App f x     -> App (go lv f ctx vars) (go lv x ctx vars)
+--       Eql t a b   -> Eql (go lv t ctx vars) (go lv a ctx vars) (go lv b ctx vars)
+--       Rfl         -> Rfl
+--       EqlM f      -> EqlM (go lv f ctx vars)
+--       Rwt e f     -> Rwt (go lv e ctx vars) (go lv f ctx vars)
+--       Loc s t     -> Loc s (go lv t ctx vars)
+--       Era         -> Era
+--       Sup l a b   -> Sup (go lv l ctx vars) (go lv a ctx vars) (go lv b ctx vars)
+--       SupM l f    -> SupM (go lv l ctx vars) (go lv f ctx vars)
+--       Frk l a b   -> Frk (go lv l ctx vars) (go lv a ctx vars) (go lv b ctx vars)
+--       Num t       -> Num t
+--       Val v       -> Val v
+--       Op2 o a b   -> Op2 o (go lv a ctx vars) (go lv b ctx vars)
+--       Op1 o a     -> Op1 o (go lv a ctx vars)
+--       Pri p       -> Pri p
+--       Log s x     -> Log (go lv s ctx vars) (go lv x ctx vars)
+--       Met k t c   -> Met k (go lv t ctx vars) (map (\x -> go lv x ctx vars) c)
+--       Pat s m c   ->
+--         -- Since Pat doesn't bind with HOAS, keep as Var
+--         let s'     = map (\x -> go lv x ctx vars) s
+--             m'     = map (\(k,x) -> (k, go lv x ctx vars)) m
+--             c'     = map (\(p,x) -> (p, go lv x (ctx ++ map v mvar ++ map v (pvar p)) (M.union (M.fromList (map kv (mvar ++ pvar p))) vars))) c
+--             mvar   = map fst m
+--             pvar p = S.toList (S.unions (map (freeVars S.empty) p))
+--             kv nam = (nam, Var nam 0)
+--             v nam  = Var nam 0
+--         in Pat s' m' c'
+--     go lv term ctx vars = undefined
+--
+--
+--
+--
+--

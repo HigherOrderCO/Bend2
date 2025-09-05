@@ -36,6 +36,9 @@ library
                       Core.Adjust.DesugarPats,
                       Core.Adjust.DesugarFrks,
                       Core.Adjust.SplitMatch,
+                      Core.Adjust.Desugar,
+                      Core.Adjust.Elaborate,
+                      Core.Adjust.Annotate,
                       Core.FreeVars,
                       Core.Import,
                       Core.Parse.Parse,
@@ -46,6 +49,7 @@ library
                       Core.BigRewrite,
                       Core.Termination,
                       Core.WHNF,
+                      Core.BigWHNF,
                       Target.HVM,
                       Target.JavaScript
     build-depends:    base ^>= 4.21.0.0,

@@ -32,6 +32,7 @@ import Core.BigCheck
 
 elaborate :: Book -> Term -> Term
 elaborate book term =
+  trace ("term: " ++ show term) $
   trace ("splt: " ++ show splt) $
   trace ("etas: " ++ show etas) $
   etas
