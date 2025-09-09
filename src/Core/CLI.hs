@@ -100,7 +100,8 @@ processFile file = do
   let desBook@(Book defs _) = desugarBook book
   chkBook@(Book defs _)    <- annotateBook desBook
 
-  let bookAdj@(Book defs _) = elaborateBook chkBook
+  let bookAdj@(Book defs _) = chkBook
+  -- let bookAdj@(Book defs _) = elaborateBook chkBook
   -- let bookAdj@(Book defs _) = desBook
   
   -- debug removed
@@ -108,7 +109,7 @@ processFile file = do
   putStrLn $ show $ M.keys defs
   putStrLn $ ""
   putStrLn $ show $ getDefn bookAdj "Term/gen/intr" 
-  -- bookChk <- checkBook bookAdj
+  bookChk <- checkBook bookAdj
   -- runMain bookChk
   runMain bookAdj
 

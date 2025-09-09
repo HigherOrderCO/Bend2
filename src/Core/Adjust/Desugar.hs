@@ -16,6 +16,7 @@ import Debug.Trace
 import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
+import Core.Adjust.ReduceEtas
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -34,13 +35,16 @@ desugar book term =
   -- trace ("flat: " ++ show flat) $
   -- trace ("npat: " ++ show npat) $
   -- trace ("nfrk: " ++ show nfrk) $
-  trace ("hoas: " ++ show hoas) $
-  hoas 
+  -- trace ("hoas: " ++ show hoas) $
+  -- trace ("etas: " ++ show etas) $
+  -- hoas 
+  etas
   where
     flat = flattenPats 0 noSpan book term
     npat = desugarPats 0 noSpan flat
     nfrk = desugarFrks book 0 npat
     hoas = bind nfrk
+    etas = reduceEtas 0 hoas
 
 -- | Desugars a term. simplifying patterns but leaving terms as Pats.
 desugarWithPats :: Book -> Term -> Term
