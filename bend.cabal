@@ -45,7 +45,7 @@ library
                       Core.WHNF,
                       Target.HVM,
                       Target.JavaScript,
-                      Target.Haskell
+                      Package.Index
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
                       containers == 0.7,
