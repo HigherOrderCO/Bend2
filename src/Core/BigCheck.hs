@@ -45,7 +45,7 @@ specializeCtx book _ _ ctx = ctx
 
 inferIndirect :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 inferIndirect d span book ctx target term = 
-  trace ("- infer indirect: " ++ show d ++ " " ++ show target ++ " IN " ++ show term) $
+  -- trace ("- infer indirect: " ++ show d ++ " " ++ show target ++ " IN " ++ show term) $
   do
   result <- inferIndirectGo d span book ctx target term
   let def = findDefault target term
@@ -380,7 +380,7 @@ inferIndirectGo d span book ctx var@(Var k i) term = do
       Nothing -> Fail $ CantInfer span (normalCtx book ctx) Nothing
 
 inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> SigM g) x) = 
-  trace ("- infer go: " ++ show d ++ " " ++ show var ++ " IN " ++ show term) $
+  -- trace ("- infer go: " ++ show d ++ " " ++ show var ++ " IN " ++ show term) $
   do
   if equal d book var x
   then do
@@ -392,10 +392,17 @@ inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> Si
               rT <- inferIndirectGo d span book (extend ctx l (Var l d) aT) (Var r (d+1)) (rb (Var r (d+1)))
               Done $ Sig aT (Lam l (Just aT) (\v -> bindVarByName l v rT))
             _ -> do
-              Fail $ trace "AAAAAA" $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+              Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
         _ -> do
-          Fail $ trace "BBBBBBBB" $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
-  else Fail $ trace "CCCCCCCCCC" $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+          let aux_n = "$"++show d
+          let aux = (Var aux_n d)
+          bTFunc <- case infer (d+1) span book (extend ctx aux_n aux aT) (App g aux) of
+            Done typ -> do
+              return typ
+            Fail _ -> do
+              infer d span book ctx b
+          return $ Sig aT (Lam aux_n Nothing (\v -> bindVarByName aux_n v bTFunc))
+  else Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
 
 inferIndirectGo d span book ctx target@(cut -> SigM g) term@(cut -> App (cut -> SigM g') x@(cut -> Var k i)) = do
   if equal d book g g'
@@ -847,7 +854,10 @@ infer d span book@(Book defs names) ctx term =
         bT <- infer (d+1) span book (extend ctx k (Var k d) tk) (b (Var k d))
         Done (All tk (Lam k (Just tk) (\v -> bindVarByIndex d v bT)))
       Nothing -> do
-        Fail $ CantInfer span (normalCtx book ctx) Nothing
+        xT <- inferIndirect (d+1) span book ctx (Var k d) (b (Var k d))
+        bT <- infer (d+1) span book (extend ctx k (Var k d) xT) (b (Var k d))
+        Done (All xT (Lam k (Just xT) (\v -> bindVarByIndex d v bT)))
+        -- Fail $ CantInfer span (normalCtx book ctx) Nothing
 
     -- ctx |- f : ∀x:A. B
     -- ctx |- x : A
@@ -951,7 +961,6 @@ infer d span book@(Book defs names) ctx term =
                 _ -> Fail $ CantInfer (getSpan span (ab (Var a d))) (normalCtx book ctx) Nothing
             _ -> Fail $ CantInfer (getSpan span g) (normalCtx book ctx) Nothing
 
-        --
         -- SigM g -> do -- TODO: complete the Tup case \/
         --   case cut x of
         --     -- can't infer a dependent type from a single tuple
@@ -1235,7 +1244,8 @@ check d span book ctx (Loc l t) goal = do
   t' <- check d l book ctx t goal 
   return $ Loc l t'
 check d span book ctx term      goal =
-  trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal)) $
+  -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal)) $
+  -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal) ++ "\n- ctx:\n" ++ show ctx) $
   -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show goal) $
   -- trace ("- check: " ++ show term ++ " :: " ++ show (force book (normal book goal))) $
   -- trace ("- ctx:\n" ++ show ctx) $
@@ -1820,11 +1830,12 @@ check d span book ctx term      goal =
         Just t -> do
           t' <- check d span book ctx t Set
           x' <- check d span book ctx x t'
-          check (d+1) span book ctx (b x') goal
+          check d span book ctx (b x') goal
         Nothing -> do
-          xT <- infer d span book ctx x
-          x'  <- check d span book ctx x xT
-          check (d+1) span book ctx (b x') goal
+          -- xT <- infer d span book ctx x
+          -- x' <- check d span book ctx x xT
+          -- check (d+1) span book ctx (b x') goal
+          check d span book ctx (b x) goal
 
     (App fn@(EqlM f) x@(cut -> Rfl), _) -> do
       let fn_name = "$aux_"++show d
@@ -1856,6 +1867,8 @@ check d span book ctx term      goal =
       goal' <- check d span book ctx goal Set
       check d span book ctx (Let fn_name (Just (reduceEtas d $ All Nat (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
     
+    (App fn@(cut -> LstM n c) x@(cut -> Nil), _) -> do
+      check d span book ctx n goal
     (App fn@(cut -> LstM n c) x, _) -> do
       let fn_name = "$aux_"++show d
       xT <- infer d span book ctx x
@@ -1863,6 +1876,7 @@ check d span book ctx term      goal =
         Lst hT -> do
           x'    <- check d span book ctx x xT
           goal' <- check d span book ctx goal Set
+          
           check d span book ctx (Let fn_name (Just (reduceEtas d $ All (Lst hT) (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
         _      -> do
           Fail $ TypeMismatch span (normalCtx book ctx) (All (Var "_" 0) (Lam "_" Nothing (\_ -> (Var "_" 0)))) (normal book xT) Nothing
