@@ -104,10 +104,10 @@ addAliasImport alias path = do
 -- | Syntax: import Path/To/Lib as Lib
 parseImport :: Parser ()
 parseImport = choice
-  [ try parseFromImport    -- from module import name1, name2
-  , try parseGitHubImport  -- import "gh:owner/repo" or import "gh:owner/repo" as alias
-  , try parseAliasImport   -- import module as alias (more specific, should go first)
-  , parseModuleImport      -- import module (no try needed, it's the fallback)
+  [ try parseFromImport         -- from module import name1, name2
+  , try parsePackageIndexImport -- import VictorTaelin/VecAlg#7/List/dot as dot
+  , try parseAliasImport        -- import module as alias (more specific, should go first)
+  , parseModuleImport           -- import module (no try needed, it's the fallback)
   ]
 
 -- | Parse: from module_path import name1, name2, ...
@@ -141,45 +141,64 @@ parseAliasImport = do
   alias <- name
   addAliasImport alias path
 
--- | Parse: import "gh:owner/repo" or import "gh:owner/repo@ref" as alias
-parseGitHubImport :: Parser ()
-parseGitHubImport = do
+-- | Parse: import VictorTaelin/VecAlg#7/List/dot as dot
+parsePackageIndexImport :: Parser ()
+parsePackageIndexImport = do
   _ <- symbol "import"
-  -- Parse quoted GitHub reference
-  ghRef <- lexeme $ between (char '"') (char '"') parseGitHubRef
+  importStr <- parsePackageIndexPath
   -- Optional alias
   maybeAlias <- optional (symbol "as" *> name)
-  addGitHubImport ghRef maybeAlias
+  addPackageIndexImport importStr maybeAlias
   where
-    -- Parse gh:owner/repo[@ref][/subpath]
-    parseGitHubRef :: Parser (String, String, Maybe String, Maybe String)
-    parseGitHubRef = do
-      _ <- string "gh:"
+    -- Parse owner/package[#version]/path/to/definition
+    parsePackageIndexPath :: Parser String
+    parsePackageIndexPath = do
       owner <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_'))
       _ <- char '/'
-      repo <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.'))
-      -- Optional ref (@branch, @tag, or @commit)
-      ref <- optional $ do
-        _ <- char '@'
-        some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.'))
-      -- Optional subpath
-      subpath <- optional $ do
-        _ <- char '/'
-        many (satisfy (\c -> c /= '"'))
-      return (owner, repo, ref, subpath)
+      packageWithVersion <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.' || c == '#'))
+      _ <- char '/'
+      pathParts <- sepBy1 (some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.'))) (char '/')
+      skip -- consume whitespace after path
+      return $ owner ++ "/" ++ packageWithVersion ++ "/" ++ intercalate "/" pathParts
 
--- | Add a GitHub import to the parser state
-addGitHubImport :: (String, String, Maybe String, Maybe String) -> Maybe String -> Parser ()
-addGitHubImport (owner, repo, ref, subpath) maybeAlias = do
+-- | Add a package index import to the parser state
+addPackageIndexImport :: String -> Maybe String -> Parser ()
+addPackageIndexImport importStr maybeAlias = do
   st <- get
-  let ghImport = GitHubImport
-        { ghOwner = owner
-        , ghRepo = repo
-        , ghRef = ref
-        , ghSubpath = subpath
-        , ghAlias = maybeAlias
-        }
-  put st { githubImports = ghImport : githubImports st }
+  -- Parse the import string to extract components
+  case parseImportString importStr of
+    Just (owner, package, path, version) -> do
+      let pkgImport = PackageIndexImport
+            { piOwner = owner
+            , piPackage = package
+            , piPath = path
+            , piVersion = version
+            , piAlias = maybeAlias
+            }
+      put st { packageIndexImports = pkgImport : packageIndexImports st }
+    Nothing -> fail $ "Invalid package import format: " ++ importStr
+  where
+    parseImportString :: String -> Maybe (String, String, String, Maybe String)
+    parseImportString str = do
+      case splitOn '/' str of
+        (owner : packageWithVersion : pathParts) | length pathParts > 0 -> do
+          let path = intercalate "/" pathParts
+              (package, version) = parseVersion packageWithVersion
+          return (owner, package, path, version)
+        _ -> Nothing
+    
+    parseVersion :: String -> (String, Maybe String)
+    parseVersion str = 
+      case break (== '#') str of
+        (pkg, '#':ver) -> (pkg, Just ver)
+        (pkg, "") -> (pkg, Nothing)
+        _ -> (str, Nothing)
+    
+    splitOn :: Eq a => a -> [a] -> [[a]]
+    splitOn delimiter = foldr f [[]]
+      where f c l@(x:xs) | c == delimiter = []:l
+                         | otherwise = (c:x):xs
+            f c [] = [[c]]
 
 -- | Syntax: import statements followed by definitions
 parseBook :: Parser Book

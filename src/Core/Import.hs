@@ -2,10 +2,10 @@
 
 module Core.Import (autoImport, autoImportWithExplicit) where
 
-import Data.List (intercalate, isInfixOf, isSuffixOf)
+import Data.List (intercalate, isInfixOf, isSuffixOf, isPrefixOf)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import System.Directory (doesFileExist, doesDirectoryExist)
+import System.Directory (doesFileExist, doesDirectoryExist, listDirectory)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
@@ -13,8 +13,8 @@ import System.IO (hPutStrLn, stderr)
 import Core.Type
 import Core.Deps
 import Core.Parse.Book (doParseBook)
-import Core.Parse.Parse (ParserState(..), GitHubImport(..))
-import qualified Package.Install as PkgInstall
+import Core.Parse.Parse (ParserState(..), PackageIndexImport(..))
+import qualified Package.Index as PkgIndex
 import qualified Data.Map.Strict as M
 
 -- Substitution types and functions
@@ -232,9 +232,9 @@ importAll currentFile base = do
 
 importAllWithExplicit :: FilePath -> Book -> ParserState -> IO (Either String Book)
 importAllWithExplicit currentFile base parserState = do
-  -- First process GitHub imports to install packages
-  githubResult <- processGitHubImports parserState
-  case githubResult of
+  -- First process package index imports to install packages
+  packageIndexResult <- processPackageIndexImports parserState
+  case packageIndexResult of
     Left err -> pure (Left err)
     Right () -> do
       -- Then process explicit imports to build initial substitution map
@@ -270,20 +270,84 @@ importAllWithExplicit currentFile base parserState = do
                   finalBook = substituteRefsInBook substMap (stBook st)
               pure (Right finalBook)
 
--- | Process GitHub imports by installing packages to bend_packages
-processGitHubImports :: ParserState -> IO (Either String ())
-processGitHubImports parserState = do
-  let ghImports = githubImports parserState
-  if null ghImports
+-- | Process package index imports by installing definitions to bend_packages
+processPackageIndexImports :: ParserState -> IO (Either String ())
+processPackageIndexImports parserState = do
+  let pkgImports = packageIndexImports parserState
+  if null pkgImports
     then pure (Right ())
     else do
-      -- Create install configuration
-      installConfig <- PkgInstall.defaultInstallConfig
-      -- Install packages
-      installResult <- PkgInstall.installPackages installConfig ghImports
-      case installResult of
-        Left err -> pure (Left $ "Package installation failed: " ++ err)
-        Right _ -> pure (Right ())
+      -- Create package index configuration
+      indexConfig <- PkgIndex.defaultIndexConfig
+      -- Process each import
+      results <- mapM (processPackageIndexImport indexConfig) pkgImports
+      -- Check for errors
+      let errors = [err | Left err <- results]
+      if not (null errors)
+        then pure (Left $ "Package index import failed: " ++ unlines errors)
+        else pure (Right ())
+
+-- | Process a single package index import
+processPackageIndexImport :: PkgIndex.IndexConfig -> PackageIndexImport -> IO (Either String ())
+processPackageIndexImport config pkgImport = do
+  let importStr = piOwner pkgImport ++ "/" ++ piPackage pkgImport ++ "/" ++ piPath pkgImport
+      importStrWithVersion = case piVersion pkgImport of
+        Nothing -> importStr
+        Just v -> piOwner pkgImport ++ "/" ++ piPackage pkgImport ++ "#" ++ v ++ "/" ++ piPath pkgImport
+  result <- PkgIndex.importDefinition config importStrWithVersion (piAlias pkgImport)
+  case result of
+    Left err -> pure (Left err)
+    Right _ -> pure (Right ())
+
+-- | Process a package index import for the book and substitution map
+processPackageIndexImportForBook :: PackageIndexImport -> IO (Either String (Book, SubstMap))
+processPackageIndexImportForBook pkgImport = do
+  -- Find the actual downloaded file (it will have a specific version)
+  let baseDir = "bend_packages" </> piOwner pkgImport
+  packageDirs <- listDirectory baseDir
+  let matchingDirs = filter (piPackage pkgImport `isPrefixOf`) packageDirs
+  
+  case matchingDirs of
+    [] -> pure $ Right (Book M.empty [], M.empty)
+    (matchingDir:_) -> do
+      let filePath = baseDir </> matchingDir </> piPath pkgImport ++ ".bend"
+      
+      fileExists <- doesFileExist filePath
+      if not fileExists
+        then pure $ Right (Book M.empty [], M.empty)
+        else do
+          content <- readFile filePath
+          case doParseBook filePath content of
+            Left err -> pure $ Left $ "Failed to parse " ++ filePath ++ ": " ++ err
+            Right rawBook -> do
+              -- Build local substitution map for the imported file
+              let localSubstMap = buildLocalSubstMap filePath rawBook
+                  -- Apply local substitutions to resolve internal references  
+                  book = substituteRefsInBook localSubstMap rawBook
+              
+              -- Build the substitution map for the alias
+              case piAlias pkgImport of
+                Nothing -> pure $ Right (book, M.empty)
+                Just alias -> do
+                  -- Find the correct FQN for the imported definition
+                  let Book defs _ = book
+                      possibleFQNs = M.keys defs
+                      defName = last $ splitOn '/' (piPath pkgImport)  -- "add" from "Nat/add"
+                      matchingFQNs = filter (\fqn -> ("::" ++ defName) `isSuffixOf` fqn || ("::" ++ piPath pkgImport) `isSuffixOf` fqn) possibleFQNs
+                  
+                  case matchingFQNs of
+                    [fqn] -> pure $ Right (book, M.singleton alias fqn)
+                    [] -> pure $ Right (book, M.empty)
+                    (fqn:_) -> pure $ Right (book, M.singleton alias fqn)
+  where
+    splitOn :: Eq a => a -> [a] -> [[a]]
+    splitOn delimiter = foldr f [[]]
+      where f c l@(x:xs) | c == delimiter = []:l
+                         | otherwise = (c:x):xs
+            f c [] = [[c]]
+    
+    isSuffixOf :: Eq a => [a] -> [a] -> Bool
+    isSuffixOf suffix str = suffix == drop (length str - length suffix) str
 
 -- | Process explicit imports from parser state
 processExplicitImports :: ParserState -> IO (Either String (Book, SubstMap))
@@ -294,9 +358,11 @@ processExplicitImports parserState = do
   selectiveResults <- mapM (uncurry processSelectiveImport) (selectiveImports parserState)
   -- Process alias imports: import Nat/add as NatOps
   aliasResults <- mapM (uncurry processAliasImport) (aliasImports parserState)
+  -- Process package index imports: import Owner/Package/Path as Alias
+  packageIndexResults <- mapM processPackageIndexImportForBook (packageIndexImports parserState)
   
   -- Combine results
-  case sequence (moduleResults ++ selectiveResults ++ aliasResults) of
+  case sequence (moduleResults ++ selectiveResults ++ aliasResults ++ packageIndexResults) of
     Left err -> pure (Left err)
     Right results -> do
       let (books, substMaps) = unzip results
