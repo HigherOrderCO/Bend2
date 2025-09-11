@@ -2,7 +2,7 @@
 
 module Core.Import (autoImport, autoImportWithExplicit) where
 
-import Data.List (intercalate, isInfixOf, isSuffixOf, isPrefixOf)
+import Data.List (intercalate, isInfixOf, isSuffixOf, isPrefixOf, sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import System.Directory (doesFileExist, doesDirectoryExist, listDirectory)
@@ -301,10 +301,24 @@ processPackageIndexImport config pkgImport = do
 -- | Process a package index import for the book and substitution map
 processPackageIndexImportForBook :: PackageIndexImport -> IO (Either String (Book, SubstMap))
 processPackageIndexImportForBook pkgImport = do
-  -- Find the actual downloaded file (it will have a specific version)
+  -- Find the actual downloaded file with the specific version
   let baseDir = "bend_packages" </> piOwner pkgImport
   packageDirs <- listDirectory baseDir
-  let matchingDirs = filter (piPackage pkgImport `isPrefixOf`) packageDirs
+  let (expectedDirName, matchingDirs) = case piVersion pkgImport of
+        Nothing -> 
+          -- No version specified, find the latest version (highest number)
+          let packagePrefix = piPackage pkgImport ++ "#"
+              versionedDirs = filter (packagePrefix `isPrefixOf`) packageDirs
+              -- Sort by version number (simple string sort should work for most cases)
+              sortedDirs = reverse (sort versionedDirs)  -- Reverse to get highest first
+          in case sortedDirs of
+               (latestDir:_) -> (latestDir, [latestDir])
+               [] -> (piPackage pkgImport, [])  -- Fallback to unversioned
+        Just version -> 
+          -- Specific version requested
+          let expectedDir = piPackage pkgImport ++ "#" ++ version
+              matchingDirsForVersion = filter (== expectedDir) packageDirs
+          in (expectedDir, matchingDirsForVersion)
   
   case matchingDirs of
     [] -> pure $ Right (Book M.empty [], M.empty)

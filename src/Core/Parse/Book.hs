@@ -150,16 +150,16 @@ parsePackageIndexImport = do
   maybeAlias <- optional (symbol "as" *> name)
   addPackageIndexImport importStr maybeAlias
   where
-    -- Parse owner/package[#version]/path/to/definition
+    -- Parse owner/package[@version]/path/to/definition[@version]
     parsePackageIndexPath :: Parser String
     parsePackageIndexPath = do
       owner <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_'))
       _ <- char '/'
-      packageWithVersion <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.' || c == '#'))
+      packageWithVersion <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.' || c == '@'))
       _ <- char '/'
-      pathParts <- sepBy1 (some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.'))) (char '/')
+      pathWithVersion <- sepBy1 (some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.' || c == '@'))) (char '/')
       skip -- consume whitespace after path
-      return $ owner ++ "/" ++ packageWithVersion ++ "/" ++ intercalate "/" pathParts
+      return $ owner ++ "/" ++ packageWithVersion ++ "/" ++ intercalate "/" pathWithVersion
 
 -- | Add a package index import to the parser state
 addPackageIndexImport :: String -> Maybe String -> Parser ()
@@ -182,15 +182,20 @@ addPackageIndexImport importStr maybeAlias = do
     parseImportString str = do
       case splitOn '/' str of
         (owner : packageWithVersion : pathParts) | length pathParts > 0 -> do
-          let path = intercalate "/" pathParts
-              (package, version) = parseVersion packageWithVersion
+          let fullPath = intercalate "/" pathParts
+              (package, packageVersion) = parseVersion packageWithVersion
+              (path, definitionVersion) = parseVersion fullPath
+              -- If there's a definition-level version, use that; otherwise use package-level version
+              version = case definitionVersion of
+                         Just v -> Just v
+                         Nothing -> packageVersion
           return (owner, package, path, version)
         _ -> Nothing
     
     parseVersion :: String -> (String, Maybe String)
     parseVersion str = 
-      case break (== '#') str of
-        (pkg, '#':ver) -> (pkg, Just ver)
+      case break (== '@') str of
+        (pkg, '@':ver) -> (pkg, Just ver)
         (pkg, "") -> (pkg, Nothing)
         _ -> (str, Nothing)
     
