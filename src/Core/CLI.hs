@@ -2,6 +2,7 @@ module Core.CLI
   ( parseFile
   , runMain
   , processFile
+  , processFileToCore
   , processFileToJS
   , processFileToHVM
   , processFileToHS
@@ -28,9 +29,8 @@ import Core.Import (autoImport, autoImportWithExplicit)
 import Core.Parse.Book (doParseBook, doParseBookWithImports)
 import Core.Parse.Parse (ParserState(..))
 import Core.Type
-import Core.Show
+import Core.Show (showTerm)
 import Core.WHNF
--- debug import removed
 
 import qualified Target.JavaScript as JS
 import qualified Target.HVM as HVM
@@ -99,6 +99,17 @@ processFile file = do
   let bookAdj = adjustBook book
   bookChk <- checkBook bookAdj
   runMain bookChk
+
+-- | Process a Bend file and return it's Core form
+processFileToCore :: FilePath -> IO ()
+processFileToCore file = do
+  book <- parseFile file
+  let bookAdj = adjustBook book
+  bookChk <- checkBook bookAdj
+  putStrLn $ showBookWithFQN bookChk
+  where
+    showBookWithFQN (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
+    showDefn k (_, x, t) = k ++ " : " ++ showTerm True False t ++ " = " ++ showTerm True False x
 
 -- | Try to format JavaScript code using prettier if available
 formatJavaScript :: String -> IO String
