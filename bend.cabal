@@ -44,6 +44,7 @@ library
                       Core.Termination,
                       Core.WHNF,
                       Target.HVM,
+                      Target.Haskell,
                       Target.JavaScript,
                       Package.Index
     build-depends:    base ^>= 4.21.0.0,
