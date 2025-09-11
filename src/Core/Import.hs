@@ -9,7 +9,6 @@ import System.Directory (doesFileExist, doesDirectoryExist, listDirectory)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
-
 import Core.Type
 import Core.Deps
 import Core.Parse.Book (doParseBook)
@@ -525,21 +524,73 @@ takeBaseName' path =
 -- | Build substitution map for local definitions
 -- For each definition in the book with FQN "module::name", 
 -- add a mapping from "name" to "module::name"
+-- Also handles constructor names: "module::Type::Constructor" -> "Constructor" maps to full FQN
 buildLocalSubstMap :: FilePath -> Book -> SubstMap
 buildLocalSubstMap currentFile (Book defs _) = 
   let filePrefix = takeBaseName' currentFile ++ "::"
       localDefs = M.filterWithKey (\k _ -> filePrefix `isPrefixOf` k) defs
+      
       -- For each local definition, extract the unqualified name and map it to the FQN
-      mappings = [(drop (length filePrefix) fqn, fqn) | fqn <- M.keys localDefs]
-  in M.fromList mappings
+      extractMappings fqn defn =
+        let withoutFilePrefix = drop (length filePrefix) fqn
+            parts = splitOnDoubleColon withoutFilePrefix
+            basicMappings = case parts of
+                              -- Regular function: ["add"] -> "add" -> "examples/main::add"
+                              [name] -> [(name, fqn)]
+                              -- Constructor: ["WTreeTag", "WLeaf"] -> both "WTreeTag::WLeaf" and "WLeaf" map to full FQN
+                              [typeName, constructorName] -> 
+                                [(withoutFilePrefix, fqn), (constructorName, fqn)]
+                              -- Fallback
+                              _ -> [(withoutFilePrefix, fqn)]
+            -- Extract constructor names from type definitions
+            constructorMappings = extractConstructorsFromDefn defn
+        in basicMappings ++ constructorMappings
+        
+      -- Extract constructor names from a definition's term
+      extractConstructorsFromDefn :: Defn -> [(String, String)]
+      extractConstructorsFromDefn (_, term, _) = extractConstructorsFromTerm term
+      
+      -- Extract constructor names from a term (look for Enu constructors)
+      extractConstructorsFromTerm :: Term -> [(String, String)]
+      extractConstructorsFromTerm term = case term of
+        -- Look for enum types which contain fully qualified constructor names
+        Sig (Enu tags) _ -> [(takeUnqualified tag, tag) | tag <- tags]
+        -- Recursively search in other term constructors
+        Lam _ _ f -> extractConstructorsFromTerm (f (Var "dummy" 0))
+        App f x -> extractConstructorsFromTerm f ++ extractConstructorsFromTerm x
+        Sig a b -> extractConstructorsFromTerm a ++ extractConstructorsFromTerm b
+        All a b -> extractConstructorsFromTerm a ++ extractConstructorsFromTerm b
+        _ -> []
+        
+      -- Extract unqualified name from a fully qualified constructor name
+      -- "examples/main::WTreeTag::WLeaf" -> "WLeaf" 
+      takeUnqualified :: String -> String
+      takeUnqualified fqn = 
+        case reverse (splitOnDoubleColon fqn) of
+          (lastPart:_) -> lastPart
+          [] -> fqn
+      
+      -- Split on "::" separator
+      splitOnDoubleColon :: String -> [String]
+      splitOnDoubleColon s = 
+        case findDoubleColon s of
+          Nothing -> [s]
+          Just (before, after) -> before : splitOnDoubleColon after
+      
+      findDoubleColon :: String -> Maybe (String, String)
+      findDoubleColon s = findDoubleColon' s ""
+        where
+          findDoubleColon' [] _ = Nothing
+          findDoubleColon' (':':':':rest) acc = Just (reverse acc, rest)
+          findDoubleColon' (c:rest) acc = findDoubleColon' rest (c:acc)
+      mappings = concatMap (\(fqn, defn) -> extractMappings fqn defn) (M.toList localDefs)
+      substMap = M.fromList mappings
+  in substMap
   where
     isPrefixOf :: Eq a => [a] -> [a] -> Bool
     isPrefixOf [] _ = True
     isPrefixOf _ [] = False
     isPrefixOf (x:xs) (y:ys) = x == y && isPrefixOf xs ys
-    
-    isSuffixOf :: Eq a => [a] -> [a] -> Bool
-    isSuffixOf suffix str = suffix == drop (length str - length suffix) str
 
 loadRef :: ImportState -> Name -> IO (Either String ImportState)
 loadRef st refName = do

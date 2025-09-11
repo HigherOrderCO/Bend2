@@ -4,7 +4,7 @@ import Control.Monad (unless)
 import qualified Data.Map as M
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, getGenDeps, processFileToCore)
+import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, getGenDeps, processFileToCore, processFileToHS)
 import Core.Adjust.ReduceEtas
 
 -- | Show usage information
