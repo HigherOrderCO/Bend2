@@ -5,6 +5,7 @@ module Core.Parse.Parse
   ( -- * Types
     Parser
   , ParserState(..)
+  , PackageIndexImport(..)
 
   -- * Basic parsers
   , skip
@@ -38,6 +39,9 @@ module Core.Parse.Parse
   
   -- * Error recovery
   , expectBody
+  
+  -- * FQN generation
+  , qualifyName
   ) where
 
 import Control.Monad (when, replicateM, void, guard)
@@ -59,12 +63,26 @@ import Core.Type
 import qualified Core.Parse.WithSpan as WithSpan
 
 -- Parser state
+-- | Represents a package index import
+data PackageIndexImport = PackageIndexImport
+  { piOwner :: String           -- ^ Package owner (e.g., "VictorTaelin")
+  , piPackage :: String         -- ^ Package name (e.g., "VecAlg") 
+  , piPath :: String            -- ^ Path to definition (e.g., "List/dot")
+  , piVersion :: Maybe String   -- ^ Version (Nothing = latest)
+  , piAlias :: Maybe String     -- ^ Optional import alias
+  } deriving (Show, Eq)
+
 data ParserState = ParserState
   { tight         :: Bool                  -- ^ tracks whether previous token ended with no trailing space
   , source        :: String                -- ^ original file source, for error reporting
   , blocked       :: [String]              -- ^ list of blocked operators
-  , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/"
+  , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/" (legacy, for compatibility)
+  , moduleImports :: [String]              -- ^ module imports: ["Nat/add", "String/utils"] (for import ...)
+  , selectiveImports :: [(String, [String])] -- ^ selective imports: [("Nat/add", ["Nat/add", "Nat/add/go"])] (for from ... import ...)
+  , aliasImports :: [(String, String)]     -- ^ alias imports: [("NatOps", "Nat/add")] (for import ... as ...)
+  , packageIndexImports :: [PackageIndexImport] -- ^ Package index imports: [PackageIndexImport {piOwner="VictorTaelin", piPackage="VecAlg", ...}]
   , assertCounter :: Int                   -- ^ counter for generating unique assert names (E0, E1, E2...)
+  , fileName      :: FilePath              -- ^ current file being parsed, for FQN generation
   }
 
 type Parser = ParsecT Void String (Control.Monad.State.Strict.State ParserState)
@@ -209,3 +227,24 @@ formatError input bundle = do
         then "\nAt end of file.\n"
         else "\nAt line " ++ show lin ++ ", column " ++ show col ++ ":\n" ++ src
   "\nPARSE_ERROR\n" ++ msg ++ cod
+
+-- | Generate a fully qualified name by prefixing with current file
+qualifyName :: String -> Parser String
+qualifyName defName = do
+  st <- get
+  let filePrefix = toModulePath (fileName st)
+  return $ filePrefix ++ "::" ++ defName
+  where
+    -- Convert file path to module path (preserve directory structure, remove .bend extension and /_ suffix)
+    toModulePath :: FilePath -> String
+    toModulePath path = 
+      let withoutBend = if ".bend" `isSuffixOf` path
+                        then take (length path - 5) path  -- Remove .bend extension
+                        else path
+          -- Also remove /_ suffix if present (for files like Term/_.bend)
+          withoutUnderscore = if "/_" `isSuffixOf` withoutBend
+                              then take (length withoutBend - 2) withoutBend  -- Remove /_
+                              else withoutBend
+      in withoutUnderscore
+    isSuffixOf :: Eq a => [a] -> [a] -> Bool
+    isSuffixOf suffix str = suffix == drop (length str - length suffix) str

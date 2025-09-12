@@ -33,6 +33,7 @@ library
                       Core.Adjust.FlattenPats,
                       Core.Adjust.DesugarPats,
                       Core.Adjust.DesugarFrks,
+                      Core.Adjust.ResolveConstructors,
                       Core.FreeVars,
                       Core.Import,
                       Core.Parse.Parse,
@@ -43,8 +44,9 @@ library
                       Core.Termination,
                       Core.WHNF,
                       Target.HVM,
+                      Target.Haskell,
                       Target.JavaScript,
-                      Target.Haskell
+                      Package.Index
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
                       containers == 0.7,
@@ -61,7 +63,12 @@ library
                       file-embed,
                       HVM,
                       process,
-                      vector
+                      vector,
+                      cryptonite,
+                      memory,
+                      temporary,
+                      unix,
+                      zip-archive
     hs-source-dirs:   src
     default-language: GHC2024
 

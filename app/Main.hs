@@ -4,7 +4,7 @@ import Control.Monad (unless)
 import qualified Data.Map as M
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import Core.CLI (processFile, processFileToJS, processFileToHVM, processFileToHS, listDependencies, getGenDeps)
+import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, getGenDeps, processFileToCore, processFileToHS)
 import Core.Adjust.ReduceEtas
 
 -- | Show usage information
@@ -18,6 +18,7 @@ showUsage = do
   putStrLn "  --to-haskell       Compile to Haskell"
   putStrLn "  --list-dependencies List all dependencies (recursive)"
   putStrLn "  --get-gen-deps      Get dependencies for code generation"
+  putStrLn "  --show-core        Returns the book of Core terms"
 
 -- | Main entry point
 main :: IO ()
@@ -34,6 +35,8 @@ main = do
     [file, "--list-dependencies"] | ".bend.py" `isSuffixOf` file -> listDependencies file
     [file, "--get-gen-deps"] | ".bend"    `isSuffixOf` file -> getGenDeps file
     [file, "--get-gen-deps"] | ".bend.py" `isSuffixOf` file -> getGenDeps file
+    [file, "--show-core"] | ".bend"    `isSuffixOf` file -> processFileToCore file
+    [file, "--show-core"] | ".bend.py" `isSuffixOf` file -> processFileToCore file
     [file] | ".bend"    `isSuffixOf` file -> processFile file
     [file] | ".bend.py" `isSuffixOf` file -> processFile file
     otherwise                             -> showUsage

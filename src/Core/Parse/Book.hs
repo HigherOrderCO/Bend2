@@ -3,12 +3,13 @@
 module Core.Parse.Book 
   ( parseBook
   , doParseBook
+  , doParseBookWithImports
   , doReadBook
   ) where
 
 import Control.Monad (when)
-import Control.Monad.State.Strict (State, get, put, evalState)
-import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Control.Monad.State.Strict (State, get, put, evalState, runState)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isAlphaNum)
 import Data.List (intercalate)
 import Data.Void
 import Text.Megaparsec
@@ -37,9 +38,10 @@ parseDef :: Parser (Name, Defn)
 parseDef = do
   _ <- symbol "def"
   f <- name
+  qualifiedName <- qualifyName f
   choice
-    [ parseDefFunction f
-    , parseDefSimple f ]
+    [ parseDefFunction qualifiedName
+    , parseDefSimple qualifiedName ]
 
 -- | Syntax: def name : Type = term
 parseDefSimple :: Name -> Parser (Name, Defn)
@@ -81,23 +83,127 @@ parseModulePath = do
   skip -- consume whitespace after path
   return $ intercalate "/" (firstPart : restParts)
 
--- | Add an import mapping to the parser state
-addImportMapping :: String -> String -> Parser ()
-addImportMapping alias path = do
+addModuleImport :: String -> Parser ()
+addModuleImport path = do
   st <- get
-  let aliasKey = alias ++ "/"
-      pathValue = path ++ "/"
-      newImports = M.insert aliasKey pathValue (imports st)
-  put st { imports = newImports }
+  let newModuleImports = path : moduleImports st
+  put st { moduleImports = newModuleImports }
+
+addSelectiveImport :: String -> [String] -> Parser ()
+addSelectiveImport path names = do
+  st <- get
+  let newSelectiveImports = (path, names) : selectiveImports st
+  put st { selectiveImports = newSelectiveImports }
+
+addAliasImport :: String -> String -> Parser ()
+addAliasImport alias path = do
+  st <- get
+  let newAliasImports = (alias, path) : aliasImports st
+  put st { aliasImports = newAliasImports }
 
 -- | Syntax: import Path/To/Lib as Lib
 parseImport :: Parser ()
-parseImport = do
+parseImport = choice
+  [ try parseFromImport         -- from module import name1, name2
+  , try parsePackageIndexImport -- import VictorTaelin/VecAlg#7/List/dot as dot
+  , try parseAliasImport        -- import module as alias (more specific, should go first)
+  , parseModuleImport           -- import module (no try needed, it's the fallback)
+  ]
+
+-- | Parse: from module_path import name1, name2, ...
+parseFromImport :: Parser ()
+parseFromImport = do
+  _ <- symbol "from"
+  path <- parseModulePath
+  _ <- symbol "import"
+  -- Parse either: name1, name2, name3  or  (name1, name2, name3)
+  names <- choice
+    [ parens (sepBy1 name (symbol ","))
+    , sepBy1 name (symbol ",")
+    ]
+  addSelectiveImport path names
+
+-- | Parse: import module_path  
+parseModuleImport :: Parser ()
+parseModuleImport = do
+  _ <- symbol "import"  
+  path <- parseModulePath
+  -- Make sure it's not followed by "as" (that would be parseAliasImport)
+  notFollowedBy (symbol "as")
+  addModuleImport path
+
+-- | Parse: import module_path as alias
+parseAliasImport :: Parser ()
+parseAliasImport = do
   _ <- symbol "import"
   path <- parseModulePath
   _ <- symbol "as"
   alias <- name
-  addImportMapping alias path
+  addAliasImport alias path
+
+-- | Parse: import VictorTaelin/VecAlg#7/List/dot as dot
+parsePackageIndexImport :: Parser ()
+parsePackageIndexImport = do
+  _ <- symbol "import"
+  importStr <- parsePackageIndexPath
+  -- Optional alias
+  maybeAlias <- optional (symbol "as" *> name)
+  addPackageIndexImport importStr maybeAlias
+  where
+    -- Parse owner/package[@version]/path/to/definition[@version]
+    parsePackageIndexPath :: Parser String
+    parsePackageIndexPath = do
+      owner <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_'))
+      _ <- char '/'
+      packageWithVersion <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.' || c == '@'))
+      _ <- char '/'
+      pathWithVersion <- sepBy1 (some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.' || c == '@'))) (char '/')
+      skip -- consume whitespace after path
+      return $ owner ++ "/" ++ packageWithVersion ++ "/" ++ intercalate "/" pathWithVersion
+
+-- | Add a package index import to the parser state
+addPackageIndexImport :: String -> Maybe String -> Parser ()
+addPackageIndexImport importStr maybeAlias = do
+  st <- get
+  -- Parse the import string to extract components
+  case parseImportString importStr of
+    Just (owner, package, path, version) -> do
+      let pkgImport = PackageIndexImport
+            { piOwner = owner
+            , piPackage = package
+            , piPath = path
+            , piVersion = version
+            , piAlias = maybeAlias
+            }
+      put st { packageIndexImports = pkgImport : packageIndexImports st }
+    Nothing -> fail $ "Invalid package import format: " ++ importStr
+  where
+    parseImportString :: String -> Maybe (String, String, String, Maybe String)
+    parseImportString str = do
+      case splitOn '/' str of
+        (owner : packageWithVersion : pathParts) | length pathParts > 0 -> do
+          let fullPath = intercalate "/" pathParts
+              (package, packageVersion) = parseVersion packageWithVersion
+              (path, definitionVersion) = parseVersion fullPath
+              -- If there's a definition-level version, use that; otherwise use package-level version
+              version = case definitionVersion of
+                         Just v -> Just v
+                         Nothing -> packageVersion
+          return (owner, package, path, version)
+        _ -> Nothing
+    
+    parseVersion :: String -> (String, Maybe String)
+    parseVersion str = 
+      case break (== '@') str of
+        (pkg, '@':ver) -> (pkg, Just ver)
+        (pkg, "") -> (pkg, Nothing)
+        _ -> (str, Nothing)
+    
+    splitOn :: Eq a => a -> [a] -> [[a]]
+    splitOn delimiter = foldr f [[]]
+      where f c l@(x:xs) | c == delimiter = []:l
+                         | otherwise = (c:x):xs
+            f c [] = [[c]]
 
 -- | Syntax: import statements followed by definitions
 parseBook :: Parser Book
@@ -114,12 +220,13 @@ parseType :: Parser (Name, Defn)
 parseType = label "datatype declaration" $ do
   _       <- symbol "type"
   tName   <- name
+  qualifiedTypeName <- qualifyName tName
   params  <- option [] $ angles (sepEndBy (parseArg True) (symbol ","))
   indices <- option [] $ parens (sepEndBy (parseArg False) (symbol ","))
   args    <- return $ params ++ indices
   retTy   <- option Set (symbol "->" *> parseTerm)
   _       <- symbol ":"
-  cases   <- many parseTypeCase
+  cases   <- many (parseTypeCase qualifiedTypeName)
   when (null cases) $ fail "datatype must have at least one constructor case"
   let tags = map fst cases
       mkFields :: [(Name, Term)] -> Term
@@ -133,17 +240,19 @@ parseType = label "datatype declaration" $ do
       nest (n, ty) (tyAcc, bdAcc) = (All ty  (Lam n (Just ty) (\_ -> tyAcc)) , Lam n (Just ty) (\_ -> bdAcc))
       (fullTy, fullBody) = foldr nest (retTy, body0) args
       term = fullBody
-  return (tName, (True, term, fullTy))
+  return (qualifiedTypeName, (True, term, fullTy))
 
 -- | Syntax: case @Tag: field1: Type1 field2: Type2
-parseTypeCase :: Parser (String, [(Name, Term)])
-parseTypeCase = label "datatype constructor" $ do
+parseTypeCase :: String -> Parser (String, [(Name, Term)])
+parseTypeCase typeName = label "datatype constructor" $ do
   _    <- symbol "case"
   _    <- symbol "@"
   tag  <- some (satisfy isNameChar)
   _    <- symbol ":"
   flds <- many parseField
-  return (tag, flds)
+  -- Return the fully qualified constructor name
+  let qualifiedTag = typeName ++ "::" ++ tag
+  return (qualifiedTag, flds)
   where
     -- Parse a field declaration  name : Type
     parseField :: Parser (Name, Term)
@@ -172,8 +281,9 @@ parseTry = do
   (sp, (f, x, t)) <- withSpan $ do
     _ <- symbol "try"
     f <- name
-    (x, t) <- choice [parseTryFunction f, parseTrySimple f]
-    return (f, x, t)
+    qualifiedName <- qualifyName f
+    (x, t) <- choice [parseTryFunction qualifiedName, parseTrySimple qualifiedName]
+    return (qualifiedName, x, t)
   return (f, (False, Loc sp x, t))
 
 parseTrySimple :: Name -> Parser (Term, Type)
@@ -221,10 +331,16 @@ parseAssert = do
 -- | Parse a book from a string, returning an error message on failure
 doParseBook :: FilePath -> String -> Either String Book
 doParseBook file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0) of
-    Left err  -> Left (formatError input err)
-    Right res -> Right res
-      -- in Right (trace (show book) book)
+  case doParseBookWithImports file input of
+    Left err -> Left err
+    Right (book, _) -> Right book
+
+-- | Parse a book from a string, returning both the book and the import information
+doParseBookWithImports :: FilePath -> String -> Either String (Book, ParserState)
+doParseBookWithImports file input =
+  case runState (runParserT p file input) (ParserState True input [] M.empty [] [] [] [] 0 file) of
+    (Left err, _)    -> Left (formatError input err)
+    (Right res, st)  -> Right (res, st)
   where
     p = do
       skip
