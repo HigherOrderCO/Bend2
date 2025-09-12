@@ -105,7 +105,7 @@ reduceEtas d t = case t of
 
       NATM -> NatM z s where
           z = bindVarByName k Zer (reduceEtas d (resolveMatches d k NATM 0 "" [] (f (Var k d))))
-          s = reduceEtas d (Lam (extendName k "p") Nothing (\q -> bindVarByName k (Suc q) (resolveMatches (d+1) k NATM 1 "" [Sub q] (f (Var k d)))))
+          s = reduceEtas d (Lam (extendName k "p") (Just Nat) (\q -> bindVarByName k (Suc q) (resolveMatches (d+1) k NATM 1 "" [Sub q] (f (Var k d)))))
 
       LSTM -> LstM nil cons where
           nil = bindVarByName k Nil (reduceEtas d (resolveMatches d k LSTM 0 "" [] (f (Var k d))))
