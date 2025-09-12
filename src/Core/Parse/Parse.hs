@@ -5,7 +5,7 @@ module Core.Parse.Parse
   ( -- * Types
     Parser
   , ParserState(..)
-  , PackageIndexImport(..)
+  , Import(..)
 
   -- * Basic parsers
   , skip
@@ -64,24 +64,18 @@ import Core.Type
 import qualified Core.Parse.WithSpan as WithSpan
 
 -- Parser state
--- | Represents a package index import
-data PackageIndexImport = PackageIndexImport
-  { piOwner :: String           -- ^ Package owner (e.g., "VictorTaelin")
-  , piPackage :: String         -- ^ Package name (e.g., "VecAlg") 
-  , piPath :: String            -- ^ Path to definition (e.g., "List/dot")
-  , piVersion :: Maybe String   -- ^ Version (Nothing = latest)
-  , piAlias :: Maybe String     -- ^ Optional import alias
-  } deriving (Show, Eq)
+-- | Represents different kinds of imports parsed from syntax
+data Import 
+  = ModuleImport String (Maybe String)           -- ^ import module [as alias] 
+  | SelectiveImport String [(String, Maybe String)]  -- ^ from module import name1 [as alias1], name2 [as alias2], ...
+  deriving (Show, Eq)
 
 data ParserState = ParserState
   { tight         :: Bool                  -- ^ tracks whether previous token ended with no trailing space
   , source        :: String                -- ^ original file source, for error reporting
   , blocked       :: [String]              -- ^ list of blocked operators
   , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/" (legacy, for compatibility)
-  , moduleImports :: [String]              -- ^ module imports: ["Nat/add", "String/utils"] (for import ...)
-  , selectiveImports :: [(String, [String])] -- ^ selective imports: [("Nat/add", ["Nat/add", "Nat/add/go"])] (for from ... import ...)
-  , aliasImports :: [(String, String)]     -- ^ alias imports: [("NatOps", "Nat/add")] (for import ... as ...)
-  , packageIndexImports :: [PackageIndexImport] -- ^ Package index imports: [PackageIndexImport {piOwner="VictorTaelin", piPackage="VecAlg", ...}]
+  , parsedImports :: [Import]              -- ^ imports parsed from syntax, to be resolved later
   , assertCounter :: Int                   -- ^ counter for generating unique assert names (E0, E1, E2...)
   , fileName      :: FilePath              -- ^ current file being parsed, for FQN generation
   }

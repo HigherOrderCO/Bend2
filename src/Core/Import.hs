@@ -4,16 +4,18 @@ module Core.Import (autoImport, autoImportWithExplicit) where
 
 import Data.List (intercalate, isInfixOf, isSuffixOf, isPrefixOf, sort)
 import Data.List.Split (splitOn)
+import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import System.Directory (doesFileExist, doesDirectoryExist, listDirectory)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
+import qualified System.FilePath as FP
 import System.IO (hPutStrLn, stderr)
 import Core.Type
 import Core.Deps
 import Core.Parse.Book (doParseBook)
-import Core.Parse.Parse (ParserState(..), PackageIndexImport(..))
+import Core.Parse.Parse (ParserState(..), Import(..))
 import qualified Package.Index as PkgIndex
 import qualified Data.Map.Strict as M
 
@@ -193,6 +195,11 @@ autoImportWithExplicit root book parserState = do
 
 -- Internal
 
+data ImportResult 
+  = ImportSuccess Book SubstMap  -- ^ Successful import with book and substitution map
+  | ImportFailed String          -- ^ Import failed with error message
+  deriving (Show)
+
 data ImportState = ImportState
   { stVisited :: S.Set FilePath   -- files already parsed (cycle/dup prevention)
   , stLoaded  :: S.Set Name       -- names we consider resolved/loaded
@@ -232,151 +239,157 @@ importAll currentFile base = do
 
 importAllWithExplicit :: FilePath -> Book -> ParserState -> IO (Either String Book)
 importAllWithExplicit currentFile base parserState = do
-  -- First process package index imports to install packages
-  packageIndexResult <- processPackageIndexImports parserState
-  case packageIndexResult of
+  -- Process explicit imports using cascading resolution (local then external)
+  explicitResult <- processExplicitImports parserState
+  case explicitResult of
     Left err -> pure (Left err)
-    Right () -> do
-      -- Then process explicit imports to build initial substitution map
-      explicitResult <- processExplicitImports parserState
-      case explicitResult of
+    Right (explicitBook, explicitSubstMap) -> do
+      let -- Build substitution map for local definitions
+          localSubstMap = buildLocalSubstMap currentFile base
+          -- Combine explicit and local substitution maps (explicit takes precedence)
+          combinedSubstMap = M.union explicitSubstMap localSubstMap
+          -- Apply combined substitutions to both books
+          substitutedBase = substituteRefsInBook combinedSubstMap base
+          substitutedExplicit = substituteRefsInBook combinedSubstMap explicitBook
+          mergedBook = mergeBooks substitutedBase substitutedExplicit
+          initial = ImportState
+            { stVisited = S.empty
+            , stLoaded  = S.union (bookNames substitutedBase) (bookNames substitutedExplicit)
+            , stBook    = mergedBook
+            , stSubstMap = combinedSubstMap
+            , stCurrentFile = currentFile
+            , stModuleImports = S.empty -- Will be populated from parsed imports
+            , stAliases = M.empty       -- Will be populated from parsed imports
+            }
+          -- Collect dependencies from the substituted merged book
+          pending0 = getBookDeps mergedBook
+      res <- importLoop initial pending0
+      case res of
         Left err -> pure (Left err)
-        Right (explicitBook, explicitSubstMap) -> do
-          let -- Build substitution map for local definitions
-              localSubstMap = buildLocalSubstMap currentFile base
-              -- Combine explicit and local substitution maps (explicit takes precedence)
-              combinedSubstMap = M.union explicitSubstMap localSubstMap
-              -- Apply combined substitutions to both books
-              substitutedBase = substituteRefsInBook combinedSubstMap base
-              substitutedExplicit = substituteRefsInBook combinedSubstMap explicitBook
-              mergedBook = mergeBooks substitutedBase substitutedExplicit
-              initial = ImportState
-                { stVisited = S.empty
-                , stLoaded  = S.union (bookNames substitutedBase) (bookNames substitutedExplicit)
-                , stBook    = mergedBook
-                , stSubstMap = combinedSubstMap
-                , stCurrentFile = currentFile
-                , stModuleImports = S.fromList (moduleImports parserState)
-                , stAliases = M.fromList (aliasImports parserState)
-                }
-              -- Collect dependencies from the substituted merged book
-              pending0 = getBookDeps mergedBook
-          res <- importLoop initial pending0
-          case res of
-            Left err -> pure (Left err)
-            Right st -> do
-              -- Apply substitution map to the final book
-              let substMap = stSubstMap st
-                  finalBook = substituteRefsInBook substMap (stBook st)
-              pure (Right finalBook)
+        Right st -> do
+          -- Apply substitution map to the final book
+          let substMap = stSubstMap st
+              finalBook = substituteRefsInBook substMap (stBook st)
+          pure (Right finalBook)
 
--- | Process package index imports by installing definitions to bend_packages
-processPackageIndexImports :: ParserState -> IO (Either String ())
-processPackageIndexImports parserState = do
-  let pkgImports = packageIndexImports parserState
-  if null pkgImports
-    then pure (Right ())
-    else do
-      -- Create package index configuration
-      indexConfig <- PkgIndex.defaultIndexConfig
-      -- Process each import
-      results <- mapM (processPackageIndexImport indexConfig) pkgImports
-      -- Check for errors
-      let errors = [err | Left err <- results]
-      if not (null errors)
-        then pure (Left $ "Package index import failed: " ++ unlines errors)
-        else pure (Right ())
 
--- | Process a single package index import
-processPackageIndexImport :: PkgIndex.IndexConfig -> PackageIndexImport -> IO (Either String ())
-processPackageIndexImport config pkgImport = do
-  let importStr = piOwner pkgImport ++ "/" ++ piPackage pkgImport ++ "/" ++ piPath pkgImport
-      importStrWithVersion = case piVersion pkgImport of
-        Nothing -> importStr
-        Just v -> piOwner pkgImport ++ "/" ++ piPackage pkgImport ++ "#" ++ v ++ "/" ++ piPath pkgImport
-  result <- PkgIndex.importDefinition config importStrWithVersion (piAlias pkgImport)
-  case result of
-    Left err -> pure (Left err)
-    Right _ -> pure (Right ())
-
--- | Process a package index import for the book and substitution map
-processPackageIndexImportForBook :: PackageIndexImport -> IO (Either String (Book, SubstMap))
-processPackageIndexImportForBook pkgImport = do
-  -- Find the actual downloaded file with the specific version
-  let baseDir = "bend_packages" </> piOwner pkgImport
-  packageDirs <- listDirectory baseDir
-  let (expectedDirName, matchingDirs) = case piVersion pkgImport of
-        Nothing -> 
-          -- No version specified, find the latest version (highest number)
-          let packagePrefix = piPackage pkgImport ++ "#"
-              versionedDirs = filter (packagePrefix `isPrefixOf`) packageDirs
-              -- Sort by version number (simple string sort should work for most cases)
-              sortedDirs = reverse (sort versionedDirs)  -- Reverse to get highest first
-          in case sortedDirs of
-               (latestDir:_) -> (latestDir, [latestDir])
-               [] -> (piPackage pkgImport, [])  -- Fallback to unversioned
-        Just version -> 
-          -- Specific version requested
-          let expectedDir = piPackage pkgImport ++ "#" ++ version
-              matchingDirsForVersion = filter (== expectedDir) packageDirs
-          in (expectedDir, matchingDirsForVersion)
-  
-  case matchingDirs of
-    [] -> pure $ Right (Book M.empty [], M.empty)
-    (matchingDir:_) -> do
-      let filePath = baseDir </> matchingDir </> piPath pkgImport ++ ".bend"
-      
-      fileExists <- doesFileExist filePath
-      if not fileExists
-        then pure $ Right (Book M.empty [], M.empty)
-        else do
-          content <- readFile filePath
-          case doParseBook filePath content of
-            Left err -> pure $ Left $ "Failed to parse " ++ filePath ++ ": " ++ err
-            Right (rawBook, _) -> do
-              -- Build local substitution map for the imported file
-              let localSubstMap = buildLocalSubstMap filePath rawBook
-                  -- Apply local substitutions to resolve internal references  
-                  book = substituteRefsInBook localSubstMap rawBook
-              
-              -- Build the substitution map for the alias
-              case piAlias pkgImport of
-                Nothing -> pure $ Right (book, M.empty)
-                Just alias -> do
-                  -- Find the correct FQN for the imported definition
-                  let Book defs _ = book
-                      possibleFQNs = M.keys defs
-                      defName = last $ splitOn "/" (piPath pkgImport)  -- "add" from "Nat/add"
-                      matchingFQNs = filter (\fqn -> ("::" ++ defName) `isSuffixOf` fqn || ("::" ++ piPath pkgImport) `isSuffixOf` fqn) possibleFQNs
-                  
-                  case matchingFQNs of
-                    [fqn] -> pure $ Right (book, M.singleton alias fqn)
-                    [] -> pure $ Right (book, M.empty)
-                    (fqn:_) -> pure $ Right (book, M.singleton alias fqn)
-
--- | Process explicit imports from parser state
+-- | Process explicit imports using cascading resolution (local first, then external)
 processExplicitImports :: ParserState -> IO (Either String (Book, SubstMap))
 processExplicitImports parserState = do
-  -- Process module imports: import Nat/add
-  moduleResults <- mapM processModuleImport (moduleImports parserState)
-  -- Process selective imports: from Nat/add import Nat/add, Nat/add/go  
-  selectiveResults <- mapM (uncurry processSelectiveImport) (selectiveImports parserState)
-  -- Process alias imports: import Nat/add as NatOps
-  aliasResults <- mapM (uncurry processAliasImport) (aliasImports parserState)
-  -- Process package index imports: import Owner/Package/Path as Alias
-  packageIndexResults <- mapM processPackageIndexImportForBook (packageIndexImports parserState)
+  let imports = parsedImports parserState
+  results <- mapM resolveCascadingImport imports
   
-  -- Combine results
-  case sequence (moduleResults ++ selectiveResults ++ aliasResults ++ packageIndexResults) of
-    Left err -> pure (Left err)
-    Right results -> do
-      let (books, substMaps) = unzip results
+  -- Check for errors
+  let errors = [err | ImportFailed err <- results]
+  if not (null errors)
+    then pure (Left $ unlines errors)
+    else do
+      let successes = [result | ImportSuccess book substMap <- results, result <- [(book, substMap)]]
+          (books, substMaps) = unzip successes
           combinedBook = foldr mergeBooks (Book M.empty []) books
           combinedSubstMap = M.unions substMaps
       pure (Right (combinedBook, combinedSubstMap))
 
+-- | Cascading resolution: try local first, then external
+resolveCascadingImport :: Import -> IO ImportResult
+resolveCascadingImport imp = do
+  localResult <- resolveLocalImport imp
+  case localResult of
+    ImportSuccess book substMap -> pure (ImportSuccess book substMap)
+    ImportFailed localErr -> do
+      externalResult <- resolveExternalImport imp
+      case externalResult of
+        ImportSuccess book substMap -> pure (ImportSuccess book substMap)
+        ImportFailed externalErr -> 
+          pure $ ImportFailed $ "Failed to resolve import: " ++ localErr ++ " (local), " ++ externalErr ++ " (external)"
+
+-- | Try to resolve import locally (in local files or bend_packages)
+resolveLocalImport :: Import -> IO ImportResult
+resolveLocalImport (ModuleImport modulePath maybeAlias) = do
+  case maybeAlias of
+    Nothing -> do
+      -- Regular module import: import and return the book
+      result <- processModuleImport modulePath
+      case result of
+        Left err -> pure (ImportFailed err)
+        Right (book, _substMap, _actualPath) -> pure (ImportSuccess book M.empty)
+    Just alias -> do
+      -- Aliased module import: import the module and create alias mappings
+      result <- processModuleImport modulePath
+      case result of
+        Left err -> pure (ImportFailed err)
+        Right (book, _substMap, actualPath) -> do
+          let Book defs _ = book
+              possibleFQNs = M.keys defs
+              -- Create mappings for ALL functions in the module
+              -- e.g., "tst::mul2" -> "examples/main::mul2", "tst::id" -> "examples/main::id", etc.
+              modulePrefix = takeBaseName' actualPath
+              aliasEntries = [(alias ++ "::" ++ dropModulePrefix modulePrefix fqn, fqn) | fqn <- possibleFQNs]
+              
+              -- For external imports, also check if there's a main function that matches the original module path
+              -- If so, create a direct alias (e.g., "external_add" -> "Nat/add")
+              -- Extract the main function name from the original import path
+              -- "Lorenzobattistela/bendLib/Nat/add" -> "Nat/add"
+              extractMainFunctionName path = 
+                let parts = splitOn "/" path
+                in if length parts >= 2 then intercalate "/" (drop 2 parts) else ""
+              mainFunctionName = extractMainFunctionName modulePath
+              mainFunctionFQN = modulePrefix ++ "::" ++ mainFunctionName  
+              directAliasEntries = if not (null mainFunctionName) && mainFunctionFQN `elem` possibleFQNs
+                                  then [(alias, mainFunctionFQN)]
+                                  else []
+                                  
+              substMap = M.fromList (aliasEntries ++ directAliasEntries)
+              
+          pure (ImportSuccess book substMap)
+          where
+            -- Drop module prefix from FQN: "examples/main::mul2" -> "mul2"
+            dropModulePrefix :: String -> String -> String
+            dropModulePrefix prefix fqn = 
+              let expectedPrefix = prefix ++ "::"
+              in if expectedPrefix `isPrefixOf` fqn
+                 then drop (length expectedPrefix) fqn
+                 else fqn
+resolveLocalImport (SelectiveImport modulePath names) = do
+  result <- processSelectiveImport modulePath names
+  case result of
+    Left err -> pure (ImportFailed err)
+    Right (book, substMap) -> pure (ImportSuccess book substMap)
+
+-- | Try to resolve import externally (via package index)
+resolveExternalImport :: Import -> IO ImportResult
+resolveExternalImport (ModuleImport modulePath maybeAlias) = do
+  -- Try to parse as package index format: owner/package/path/to/definition
+  case splitOn "/" modulePath of
+    (owner:package:pathParts) | length pathParts >= 1 -> do
+      -- Try to fetch from package index
+      indexConfig <- PkgIndex.defaultIndexConfig
+      let importStr = modulePath
+      result <- PkgIndex.importDefinition indexConfig importStr maybeAlias
+      case result of
+        Left err -> pure (ImportFailed err)
+        Right resolved -> do
+          -- Use the actual file path returned by the API (includes version)
+          let actualFilePath = PkgIndex.rrFile resolved
+          resolveLocalImport (ModuleImport actualFilePath maybeAlias)
+    _ -> pure (ImportFailed $ "Invalid external import format (expected owner/package/path): " ++ modulePath)
+resolveExternalImport (SelectiveImport modulePath nameAliases) = do
+  -- First try to import the module externally
+  case splitOn "/" modulePath of
+    (owner:package:pathParts) | length pathParts >= 1 -> do
+      indexConfig <- PkgIndex.defaultIndexConfig
+      let importStr = modulePath
+      result <- PkgIndex.importDefinition indexConfig importStr Nothing
+      case result of
+        Left err -> pure (ImportFailed err)
+        Right resolved -> do
+          -- Use the actual file path returned by the API (includes version)
+          let actualFilePath = PkgIndex.rrFile resolved
+          resolveLocalImport (SelectiveImport actualFilePath nameAliases)
+    _ -> pure (ImportFailed $ "Invalid external import format (expected owner/package/path): " ++ modulePath)
+
 -- | Process a single module import: import Nat/add
-processModuleImport :: String -> IO (Either String (Book, SubstMap))
+processModuleImport :: String -> IO (Either String (Book, SubstMap, String))
 processModuleImport modulePath = do
   candidates <- generateImportPaths modulePath
   mFound <- firstExisting candidates
@@ -386,14 +399,16 @@ processModuleImport modulePath = do
       case doParseBook path content of
         Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
         Right (book, _) -> do
-          -- For module imports, we don't add names to substitution map
-          -- They are accessed via qualified syntax (module::name)
-          pure $ Right (book, M.empty)
+          -- Build local substitution map for the imported file to resolve internal references
+          let localSubstMap = buildLocalSubstMap path book
+          -- Apply substitutions to resolve internal references
+          let substitutedBook = substituteRefsInBook localSubstMap book
+          pure $ Right (substitutedBook, M.empty, path)
     Nothing -> pure $ Left $ "Cannot find module: " ++ modulePath
 
--- | Process a selective import: from Nat/add import [Nat/add, Nat/add/go]
-processSelectiveImport :: String -> [String] -> IO (Either String (Book, SubstMap))
-processSelectiveImport modulePath names = do
+-- | Process a selective import: from Nat/add import name1 [as alias1], name2 [as alias2], ...
+processSelectiveImport :: String -> [(String, Maybe String)] -> IO (Either String (Book, SubstMap))
+processSelectiveImport modulePath nameAliases = do
   candidates <- generateImportPaths modulePath
   mFound <- firstExisting candidates
   case mFound of
@@ -403,36 +418,22 @@ processSelectiveImport modulePath names = do
         Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
         Right (book, _) -> do
           let modulePrefix = takeBaseName' path
-          -- Build substitution map for selected names
-          let substEntries = [(name, modulePrefix ++ "::" ++ name) | name <- names]
+              Book defs defNames = book
+              -- Extract just the function names for filtering
+              functionNames = map fst nameAliases
+              -- Filter book to only include selected functions
+              selectedFQNs = [modulePrefix ++ "::" ++ name | name <- functionNames]
+              filteredDefs = M.filterWithKey (\fqn _ -> fqn `elem` selectedFQNs) defs
+              filteredNames = filter (`elem` selectedFQNs) defNames
+              filteredBook = Book filteredDefs filteredNames
+              -- Build substitution map with aliases
+              substEntries = [(alias, modulePrefix ++ "::" ++ name) 
+                             | (name, maybeAlias) <- nameAliases
+                             , let alias = fromMaybe name maybeAlias]
               substMap = M.fromList substEntries
-          pure $ Right (book, substMap)
+          pure $ Right (filteredBook, substMap)
     Nothing -> pure $ Left $ "Cannot find module for selective import: " ++ modulePath
 
--- | Process an alias import: import Nat/add as NatOps
-processAliasImport :: String -> String -> IO (Either String (Book, SubstMap))
-processAliasImport alias modulePath = do
-  candidates <- generateImportPaths modulePath
-  mFound <- firstExisting candidates
-  case mFound of
-    Just path -> do
-      content <- readFile path
-      case doParseBook path content of
-        Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
-        Right (book, _) -> do
-          let modulePrefix = takeBaseName' path
-              -- For alias imports, if the alias matches the module name,
-              -- we create a substitution mapping from alias to module::module
-              -- e.g., "import fixme/add_for_import as add" creates add -> fixme/add_for_import::fixme/add_for_import
-              qualifiedName = modulePrefix ++ "::" ++ modulePath
-              Book bookDefs _ = book
-              -- Check if the expected definition exists
-              substMap = if qualifiedName `M.member` bookDefs
-                         then M.singleton alias qualifiedName
-                         else M.empty
-          -- Also store module alias for constructor resolution
-          pure $ Right (book, substMap)
-    Nothing -> pure $ Left $ "Cannot find module for alias import: " ++ modulePath
 
 importLoop :: ImportState -> S.Set Name -> IO (Either String ImportState)
 importLoop st pending =

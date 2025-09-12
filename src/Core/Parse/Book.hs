@@ -83,31 +83,16 @@ parseModulePath = do
   skip -- consume whitespace after path
   return $ intercalate "/" (firstPart : restParts)
 
-addModuleImport :: String -> Parser ()
-addModuleImport path = do
+addImport :: Import -> Parser ()
+addImport imp = do
   st <- get
-  let newModuleImports = path : moduleImports st
-  put st { moduleImports = newModuleImports }
+  put st { parsedImports = imp : parsedImports st }
 
-addSelectiveImport :: String -> [String] -> Parser ()
-addSelectiveImport path names = do
-  st <- get
-  let newSelectiveImports = (path, names) : selectiveImports st
-  put st { selectiveImports = newSelectiveImports }
-
-addAliasImport :: String -> String -> Parser ()
-addAliasImport alias path = do
-  st <- get
-  let newAliasImports = (alias, path) : aliasImports st
-  put st { aliasImports = newAliasImports }
-
--- | Syntax: import Path/To/Lib as Lib
+-- | Syntax: import module [as alias] | from module import name1, name2
 parseImport :: Parser ()
 parseImport = choice
   [ try parseFromImport         -- from module import name1, name2
-  , try parsePackageIndexImport -- import VictorTaelin/VecAlg#7/List/dot as dot
-  , try parseAliasImport        -- import module as alias (more specific, should go first)
-  , parseModuleImport           -- import module (no try needed, it's the fallback)
+  , parseModuleImport           -- import module [as alias]
   ]
 
 -- | Parse: from module_path import name1, name2, ...
@@ -116,88 +101,29 @@ parseFromImport = do
   _ <- symbol "from"
   path <- parseModulePath
   _ <- symbol "import"
-  -- Parse either: name1, name2, name3  or  (name1, name2, name3)
-  names <- choice
-    [ parens (sepBy1 name (symbol ","))
-    , sepBy1 name (symbol ",")
+  -- Parse either: name1 [as alias1], name2 [as alias2], ...  or  (name1 [as alias1], name2 [as alias2], ...)
+  nameAliases <- choice
+    [ parens (sepBy1 parseNameWithAlias (symbol ","))
+    , sepBy1 parseNameWithAlias (symbol ",")
     ]
-  addSelectiveImport path names
+  addImport (SelectiveImport path nameAliases)
 
--- | Parse: import module_path  
+-- | Parse: name [as alias]
+parseNameWithAlias :: Parser (String, Maybe String)
+parseNameWithAlias = do
+  n <- name
+  maybeAlias <- optional (symbol "as" *> name)
+  return (n, maybeAlias)
+
+-- | Parse: import module_path [as alias]
 parseModuleImport :: Parser ()
 parseModuleImport = do
   _ <- symbol "import"  
   path <- parseModulePath
-  -- Make sure it's not followed by "as" (that would be parseAliasImport)
-  notFollowedBy (symbol "as")
-  addModuleImport path
-
--- | Parse: import module_path as alias
-parseAliasImport :: Parser ()
-parseAliasImport = do
-  _ <- symbol "import"
-  path <- parseModulePath
-  _ <- symbol "as"
-  alias <- name
-  addAliasImport alias path
-
--- | Parse: import VictorTaelin/VecAlg#7/List/dot as dot
-parsePackageIndexImport :: Parser ()
-parsePackageIndexImport = do
-  _ <- symbol "import"
-  importStr <- parsePackageIndexPath
   -- Optional alias
   maybeAlias <- optional (symbol "as" *> name)
-  addPackageIndexImport importStr maybeAlias
-  where
-    -- Parse owner/package[@version]/path/to/definition[@version]
-    parsePackageIndexPath :: Parser String
-    parsePackageIndexPath = do
-      owner <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_'))
-      _ <- char '/'
-      packageWithVersion <- some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.' || c == '@'))
-      _ <- char '/'
-      pathWithVersion <- sepBy1 (some (satisfy (\c -> isAlphaNum c || c == '-' || c == '_' || c == '.' || c == '@'))) (char '/')
-      skip -- consume whitespace after path
-      return $ owner ++ "/" ++ packageWithVersion ++ "/" ++ intercalate "/" pathWithVersion
+  addImport (ModuleImport path maybeAlias)
 
--- | Add a package index import to the parser state
-addPackageIndexImport :: String -> Maybe String -> Parser ()
-addPackageIndexImport importStr maybeAlias = do
-  st <- get
-  -- Parse the import string to extract components
-  case parseImportString importStr of
-    Just (owner, package, path, version) -> do
-      let pkgImport = PackageIndexImport
-            { piOwner = owner
-            , piPackage = package
-            , piPath = path
-            , piVersion = version
-            , piAlias = maybeAlias
-            }
-      put st { packageIndexImports = pkgImport : packageIndexImports st }
-    Nothing -> fail $ "Invalid package import format: " ++ importStr
-  where
-    parseImportString :: String -> Maybe (String, String, String, Maybe String)
-    parseImportString str = do
-      case splitOn "/" str of
-        (owner : packageWithVersion : pathParts) | length pathParts > 0 -> do
-          let fullPath = intercalate "/" pathParts
-              (package, packageVersion) = parseVersion packageWithVersion
-              (path, definitionVersion) = parseVersion fullPath
-              -- If there's a definition-level version, use that; otherwise use package-level version
-              version = case definitionVersion of
-                         Just v -> Just v
-                         Nothing -> packageVersion
-          return (owner, package, path, version)
-        _ -> Nothing
-    
-    parseVersion :: String -> (String, Maybe String)
-    parseVersion str = 
-      case break (== '@') str of
-        (pkg, '@':ver) -> (pkg, Just ver)
-        (pkg, "") -> (pkg, Nothing)
-        _ -> (str, Nothing)
 
 -- | Syntax: import statements followed by definitions
 parseBook :: Parser Book
@@ -325,7 +251,7 @@ parseAssert = do
 -- | Parse a book from a string, returning both the book and the import information
 doParseBook :: FilePath -> String -> Either String (Book, ParserState)
 doParseBook file input =
-  case runState (runParserT p file input) (ParserState True input [] M.empty [] [] [] [] 0 file) of
+  case runState (runParserT p file input) (ParserState True input [] M.empty [] 0 file) of
     (Left err, _)    -> Left (formatError input err)
     (Right res, st)  -> Right (res, st)
   where
