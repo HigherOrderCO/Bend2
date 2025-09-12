@@ -83,24 +83,14 @@ import Core.WHNF
 -- It uses a book of already-adjusted definitions for context during flattening.
 -- Note: This does NOT check for free variables, as it may be called during
 -- book adjustment where recursive references aren't available yet.
--- Also note: When called from adjustBook, constructors have already been resolved.
+-- When called from adjustBook, constructors have already been resolved at the book level.
+-- When called standalone (e.g., from parseTerm), constructors are resolved here.
 adjust :: Book -> Term -> Term
 adjust book term =
   -- trace ("done: " ++ show done) $
   done
   where
-    flat = flattenPats 0 noSpan book term
-    npat = desugarPats 0 noSpan flat
-    nfrk = desugarFrks book 0 npat
-    etas = reduceEtas 0 nfrk
-    done = bind etas
-
--- | Like adjust but also resolves constructors first (for standalone use)
-adjustWithResolve :: Book -> Term -> Term  
-adjustWithResolve book term =
-  done
-  where
-    -- First resolve constructors to their FQNs
+    -- First resolve constructors to their FQNs (needed for standalone use)
     resolved = case resolveConstructorsInTerm (extractConstructors book) term of
       Done t -> t
       Fail e -> error $ show e
@@ -109,6 +99,7 @@ adjustWithResolve book term =
     nfrk = desugarFrks book 0 npat
     etas = reduceEtas 0 nfrk
     done = bind etas
+
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
 adjustWithPats :: Book -> Term -> Term

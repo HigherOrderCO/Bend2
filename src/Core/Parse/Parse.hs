@@ -47,6 +47,7 @@ module Core.Parse.Parse
 import Control.Monad (when, replicateM, void, guard)
 import Control.Monad.State.Strict (State, get, put, evalState)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isSpace)
+import Data.List (isSuffixOf)
 import Data.Void
 import Debug.Trace
 import Highlight (highlightError)
@@ -246,5 +247,3 @@ qualifyName defName = do
                               then take (length withoutBend - 2) withoutBend  -- Remove /_
                               else withoutBend
       in withoutUnderscore
-    isSuffixOf :: Eq a => [a] -> [a] -> Bool
-    isSuffixOf suffix str = suffix == drop (length str - length suffix) str

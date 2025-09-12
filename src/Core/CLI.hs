@@ -26,7 +26,7 @@ import Core.Bind
 import Core.Check
 import Core.Deps
 import Core.Import (autoImport, autoImportWithExplicit)
-import Core.Parse.Book (doParseBook, doParseBookWithImports)
+import Core.Parse.Book (doParseBook)
 import Core.Parse.Parse (ParserState(..))
 import Core.Type
 import Core.Show (showTerm)
@@ -65,7 +65,7 @@ checkBook book@(Book defs names) = do
 parseFile :: FilePath -> IO Book
 parseFile file = do
   content <- readFile file
-  case doParseBookWithImports file content of
+  case doParseBook file content of
     Left err -> do
       hPutStrLn stderr $ err
       exitFailure

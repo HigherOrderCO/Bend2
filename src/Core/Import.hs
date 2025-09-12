@@ -3,6 +3,7 @@
 module Core.Import (autoImport, autoImportWithExplicit) where
 
 import Data.List (intercalate, isInfixOf, isSuffixOf, isPrefixOf, sort)
+import Data.List.Split (splitOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import System.Directory (doesFileExist, doesDirectoryExist, listDirectory)
@@ -332,7 +333,7 @@ processPackageIndexImportForBook pkgImport = do
           content <- readFile filePath
           case doParseBook filePath content of
             Left err -> pure $ Left $ "Failed to parse " ++ filePath ++ ": " ++ err
-            Right rawBook -> do
+            Right (rawBook, _) -> do
               -- Build local substitution map for the imported file
               let localSubstMap = buildLocalSubstMap filePath rawBook
                   -- Apply local substitutions to resolve internal references  
@@ -345,22 +346,13 @@ processPackageIndexImportForBook pkgImport = do
                   -- Find the correct FQN for the imported definition
                   let Book defs _ = book
                       possibleFQNs = M.keys defs
-                      defName = last $ splitOn '/' (piPath pkgImport)  -- "add" from "Nat/add"
+                      defName = last $ splitOn "/" (piPath pkgImport)  -- "add" from "Nat/add"
                       matchingFQNs = filter (\fqn -> ("::" ++ defName) `isSuffixOf` fqn || ("::" ++ piPath pkgImport) `isSuffixOf` fqn) possibleFQNs
                   
                   case matchingFQNs of
                     [fqn] -> pure $ Right (book, M.singleton alias fqn)
                     [] -> pure $ Right (book, M.empty)
                     (fqn:_) -> pure $ Right (book, M.singleton alias fqn)
-  where
-    splitOn :: Eq a => a -> [a] -> [[a]]
-    splitOn delimiter = foldr f [[]]
-      where f c l@(x:xs) | c == delimiter = []:l
-                         | otherwise = (c:x):xs
-            f c [] = [[c]]
-    
-    isSuffixOf :: Eq a => [a] -> [a] -> Bool
-    isSuffixOf suffix str = suffix == drop (length str - length suffix) str
 
 -- | Process explicit imports from parser state
 processExplicitImports :: ParserState -> IO (Either String (Book, SubstMap))
@@ -393,7 +385,7 @@ processModuleImport modulePath = do
       content <- readFile path
       case doParseBook path content of
         Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
-        Right book -> do
+        Right (book, _) -> do
           -- For module imports, we don't add names to substitution map
           -- They are accessed via qualified syntax (module::name)
           pure $ Right (book, M.empty)
@@ -409,7 +401,7 @@ processSelectiveImport modulePath names = do
       content <- readFile path
       case doParseBook path content of
         Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
-        Right book -> do
+        Right (book, _) -> do
           let modulePrefix = takeBaseName' path
           -- Build substitution map for selected names
           let substEntries = [(name, modulePrefix ++ "::" ++ name) | name <- names]
@@ -427,7 +419,7 @@ processAliasImport alias modulePath = do
       content <- readFile path
       case doParseBook path content of
         Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
-        Right book -> do
+        Right (book, _) -> do
           let modulePrefix = takeBaseName' path
               -- For alias imports, if the alias matches the module name,
               -- we create a substitution mapping from alias to module::module
@@ -518,8 +510,6 @@ resolveRef st refName = do
       if ".bend" `isSuffixOf` path
          then take (length path - 5) path  -- Remove .bend extension but keep full path
          else path
-    isSuffixOf :: Eq a => [a] -> [a] -> Bool
-    isSuffixOf suffix str = suffix == drop (length str - length suffix) str
 
 takeBaseName' :: FilePath -> String
 takeBaseName' path = 
@@ -600,11 +590,6 @@ buildLocalSubstMap currentFile (Book defs _) =
       mappings = concatMap (\(fqn, defn) -> extractMappings fqn defn) (M.toList localDefs)
       substMap = M.fromList mappings
   in substMap
-  where
-    isPrefixOf :: Eq a => [a] -> [a] -> Bool
-    isPrefixOf [] _ = True
-    isPrefixOf _ [] = False
-    isPrefixOf (x:xs) (y:ys) = x == y && isPrefixOf xs ys
 
 loadRef :: ImportState -> Name -> IO (Either String ImportState)
 loadRef st refName = do
@@ -621,7 +606,7 @@ loadRef st refName = do
           content <- readFile path
           case doParseBook path content of
             Left perr -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ perr
-            Right imported -> do
+            Right (imported, _) -> do
               -- Build local substitution map for the imported file
               let importedLocalSubstMap = buildLocalSubstMap path imported
                   -- Apply local substitutions to the imported book

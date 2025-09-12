@@ -3,7 +3,6 @@
 module Core.Parse.Book 
   ( parseBook
   , doParseBook
-  , doParseBookWithImports
   , doReadBook
   ) where
 
@@ -11,6 +10,7 @@ import Control.Monad (when)
 import Control.Monad.State.Strict (State, get, put, evalState, runState)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isAlphaNum)
 import Data.List (intercalate)
+import Data.List.Split (splitOn)
 import Data.Void
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -180,7 +180,7 @@ addPackageIndexImport importStr maybeAlias = do
   where
     parseImportString :: String -> Maybe (String, String, String, Maybe String)
     parseImportString str = do
-      case splitOn '/' str of
+      case splitOn "/" str of
         (owner : packageWithVersion : pathParts) | length pathParts > 0 -> do
           let fullPath = intercalate "/" pathParts
               (package, packageVersion) = parseVersion packageWithVersion
@@ -198,12 +198,6 @@ addPackageIndexImport importStr maybeAlias = do
         (pkg, '@':ver) -> (pkg, Just ver)
         (pkg, "") -> (pkg, Nothing)
         _ -> (str, Nothing)
-    
-    splitOn :: Eq a => a -> [a] -> [[a]]
-    splitOn delimiter = foldr f [[]]
-      where f c l@(x:xs) | c == delimiter = []:l
-                         | otherwise = (c:x):xs
-            f c [] = [[c]]
 
 -- | Syntax: import statements followed by definitions
 parseBook :: Parser Book
@@ -328,16 +322,9 @@ parseAssert = do
 
 -- | Main entry points
 
--- | Parse a book from a string, returning an error message on failure
-doParseBook :: FilePath -> String -> Either String Book
-doParseBook file input =
-  case doParseBookWithImports file input of
-    Left err -> Left err
-    Right (book, _) -> Right book
-
 -- | Parse a book from a string, returning both the book and the import information
-doParseBookWithImports :: FilePath -> String -> Either String (Book, ParserState)
-doParseBookWithImports file input =
+doParseBook :: FilePath -> String -> Either String (Book, ParserState)
+doParseBook file input =
   case runState (runParserT p file input) (ParserState True input [] M.empty [] [] [] [] 0 file) of
     (Left err, _)    -> Left (formatError input err)
     (Right res, st)  -> Right (res, st)
@@ -354,4 +341,4 @@ doReadBook :: String -> Book
 doReadBook input =
   case doParseBook "<input>" input of
     Left err  -> error err
-    Right res -> res
+    Right (book, _) -> book

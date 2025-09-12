@@ -68,7 +68,8 @@ library
                       memory,
                       temporary,
                       unix,
-                      zip-archive
+                      zip-archive,
+                      split
     hs-source-dirs:   src
     default-language: GHC2024
 

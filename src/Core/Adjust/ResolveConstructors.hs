@@ -17,7 +17,8 @@ module Core.Adjust.ResolveConstructors where
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Data.List (intercalate)
+import Data.List (intercalate, isPrefixOf)
+import Data.List.Split (splitOn)
 import Data.Maybe (fromMaybe)
 import Control.Monad (foldM)
 import Debug.Trace
@@ -55,24 +56,6 @@ extractConstructors (Book defs _) =
             [] -> ctorName
           -- For lookup, we use the base name
       in M.insertWith (++) baseName [ctorName] cmap
-    
-    splitOn :: String -> String -> [String]
-    splitOn _ "" = []
-    splitOn sep str = case breakOn sep str of
-      (before, "") -> [before]
-      (before, rest) -> before : splitOn sep (drop (length sep) rest)
-    
-    breakOn :: String -> String -> (String, String)
-    breakOn sep str = go str ""
-      where
-        go [] acc = (reverse acc, "")
-        go s@(c:cs) acc
-          | sep `isPrefixOf` s = (reverse acc, s)
-          | otherwise = go cs (c:acc)
-        
-        isPrefixOf [] _ = True
-        isPrefixOf _ [] = False
-        isPrefixOf (x:xs) (y:ys) = x == y && isPrefixOf xs ys
 
 -- | Check if a constructor name is already fully qualified
 isFullyQualified :: String -> Bool
@@ -128,26 +111,57 @@ resolveConstructorsInTerm cmap = go
             Done (Loc span resolved)
       
       -- Recursive cases
-      Sub t -> Sub <$> go t
+      Sub t -> do
+        t2 <- go t
+        Done (Sub t2)
       Fix k f -> Done $ Fix k (\v -> case go (f v) of Done t -> t; Fail e -> error (show e))
       Let k t v f -> do
-        t' <- mapM go t
-        v' <- go v
-        Done $ Let k t' v' (\u -> case go (f u) of Done t -> t; Fail e -> error (show e))
+        t2 <- mapM go t
+        v2 <- go v
+        Done $ Let k t2 v2 (\u -> case go (f u) of Done t -> t; Fail e -> error (show e))
       Use k v f -> do
-        v' <- go v
-        Done $ Use k v' (\u -> case go (f u) of Done t -> t; Fail e -> error (show e))
-      Chk x t -> Chk <$> go x <*> go t
-      Tst x -> Tst <$> go x
-      UniM f -> UniM <$> go f
-      BitM f t -> BitM <$> go f <*> go t
-      NatM z s -> NatM <$> go z <*> go s
-      Lst t -> Lst <$> go t
-      Con h t -> Con <$> go h <*> go t
-      LstM n c -> LstM <$> go n <*> go c
-      Op2 op a b -> Op2 op <$> go a <*> go b
-      Op1 op a -> Op1 op <$> go a
-      Sig a b -> Sig <$> go a <*> go b
+        v2 <- go v
+        Done $ Use k v2 (\u -> case go (f u) of Done t -> t; Fail e -> error (show e))
+      Chk x t -> do
+        x2 <- go x
+        t2 <- go t
+        Done (Chk x2 t2)
+      Tst x -> do
+        x2 <- go x
+        Done (Tst x2)
+      UniM f -> do
+        f2 <- go f
+        Done (UniM f2)
+      BitM f t -> do
+        f2 <- go f
+        t2 <- go t
+        Done (BitM f2 t2)
+      NatM z s -> do
+        z2 <- go z
+        s2 <- go s
+        Done (NatM z2 s2)
+      Lst t -> do
+        t2 <- go t
+        Done (Lst t2)
+      Con h t -> do
+        h2 <- go h
+        t2 <- go t
+        Done (Con h2 t2)
+      LstM n c -> do
+        n2 <- go n
+        c2 <- go c
+        Done (LstM n2 c2)
+      Op2 op a b -> do
+        a2 <- go a
+        b2 <- go b
+        Done (Op2 op a2 b2)
+      Op1 op a -> do
+        a2 <- go a
+        Done (Op1 op a2)
+      Sig a b -> do
+        a2 <- go a
+        b2 <- go b
+        Done (Sig a2 b2)
       -- Special handling for constructor syntax @Ctor{...} which desugars to (Sym "Ctor", ...) or (Loc _ (Sym "Ctor"), ...)
       Tup (Sym name) rest -> do
         resolved <- resolveConstructor noSpan cmap name
@@ -157,26 +171,63 @@ resolveConstructorsInTerm cmap = go
         resolved <- resolveConstructor span cmap name
         resolvedRest <- go rest
         Done (Tup (Loc span (Sym resolved)) resolvedRest)
-      Tup a b -> Tup <$> go a <*> go b
-      SigM f -> SigM <$> go f
-      All a b -> All <$> go a <*> go b
+      Tup a b -> do
+        a2 <- go a
+        b2 <- go b
+        Done (Tup a2 b2)
+      SigM f -> do
+        f2 <- go f
+        Done (SigM f2)
+      All a b -> do
+        a2 <- go a
+        b2 <- go b
+        Done (All a2 b2)
       Lam k t f -> do
-        t' <- mapM go t
-        Done $ Lam k t' (\u -> case go (f u) of Done t -> t; Fail e -> error (show e))
-      App f x -> App <$> go f <*> go x
-      Eql t a b -> Eql <$> go t <*> go a <*> go b
-      EqlM f -> EqlM <$> go f
-      Met n t ctx -> Met n <$> go t <*> mapM go ctx
-      Sup l a b -> Sup <$> go l <*> go a <*> go b
-      SupM l f -> SupM <$> go l <*> go f
-      Log s x -> Log <$> go s <*> go x
-      Rwt e f -> Rwt <$> go e <*> go f
+        t2 <- mapM go t
+        Done $ Lam k t2 (\u -> case go (f u) of Done t -> t; Fail e -> error (show e))
+      App f x -> do
+        f2 <- go f
+        x2 <- go x
+        Done (App f2 x2)
+      Eql t a b -> do
+        t2 <- go t
+        a2 <- go a
+        b2 <- go b
+        Done (Eql t2 a2 b2)
+      EqlM f -> do
+        f2 <- go f
+        Done (EqlM f2)
+      Met n t ctx -> do
+        t2 <- go t
+        ctx2 <- mapM go ctx
+        Done (Met n t2 ctx2)
+      Sup l a b -> do
+        l2 <- go l
+        a2 <- go a
+        b2 <- go b
+        Done (Sup l2 a2 b2)
+      SupM l f -> do
+        l2 <- go l
+        f2 <- go f
+        Done (SupM l2 f2)
+      Log s x -> do
+        s2 <- go s
+        x2 <- go x
+        Done (Log s2 x2)
+      Rwt e f -> do
+        e2 <- go e
+        f2 <- go f
+        Done (Rwt e2 f2)
       Pat s m c -> do
-        s' <- mapM go s
-        m' <- mapM (\(n, t) -> do t' <- go t; Done (n, t')) m
-        c' <- mapM (\(ps, b) -> do ps' <- mapM go ps; b' <- go b; Done (ps', b')) c
-        Done (Pat s' m' c')
-      Frk l a b -> Frk <$> go l <*> go a <*> go b
+        s2 <- mapM go s
+        m2 <- mapM (\(n, t) -> do t2 <- go t; Done (n, t2)) m
+        c2 <- mapM (\(ps, b) -> do ps2 <- mapM go ps; b2 <- go b; Done (ps2, b2)) c
+        Done (Pat s2 m2 c2)
+      Frk l a b -> do
+        l2 <- go l
+        a2 <- go a
+        b2 <- go b
+        Done (Frk l2 a2 b2)
       
       -- Leaf nodes that don't contain constructors
       Var _ _ -> Done term
@@ -191,7 +242,9 @@ resolveConstructorsInTerm cmap = go
       Bt1 -> Done term
       Nat -> Done term
       Zer -> Done term
-      Suc n -> Suc <$> go n
+      Suc n -> do
+        n2 <- go n
+        Done (Suc n2)
       Nil -> Done term
       Enu cs -> Done term  -- Type definition, not usage
       Num n -> Done term

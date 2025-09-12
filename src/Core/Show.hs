@@ -5,7 +5,8 @@
 module Core.Show where
 
 import Core.Type
-import Data.List (intercalate, unsnoc, isInfixOf)
+import Data.List (intercalate, unsnoc, isInfixOf, isPrefixOf)
+import Data.List.Split (splitOn)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -334,23 +335,6 @@ extractUnqualifiedName name =
   case reverse (splitOn "::" name) of
     (last:_) -> last
     []       -> name
-  where
-    splitOn :: String -> String -> [String]
-    splitOn delim str = go "" str
-      where
-        go :: String -> String -> [String]
-        go acc [] = if null acc then [] else [reverse acc]
-        go acc s@(c:cs)
-          | delim `isPrefixOf` s = 
-              if null acc 
-              then go "" (drop (length delim) s)
-              else reverse acc : go "" (drop (length delim) s)
-          | otherwise = go (c:acc) cs
-    
-    isPrefixOf :: Eq a => [a] -> [a] -> Bool
-    isPrefixOf [] _ = True
-    isPrefixOf _ [] = False
-    isPrefixOf (x:xs) (y:ys) = x == y && isPrefixOf xs ys
 
 -- | Collect all qualified names and detect ambiguities
 getAmbiguousNames :: Term -> S.Set String
