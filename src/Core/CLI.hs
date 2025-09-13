@@ -77,13 +77,16 @@ parseFile file = do
     takeDirectory path = reverse . dropWhile (/= '/') . reverse $ path
 
 -- | Run the main function from a book
-runMain :: Book -> IO ()
-runMain book = do
-  case getDefn book "main" of
+runMain :: FilePath -> Book -> IO ()
+runMain filePath book = do
+  -- Extract module name from file path (same logic as takeBaseName')
+  let moduleName = takeBaseName' filePath
+      mainFQN = moduleName ++ "::main"
+  case getDefn book mainFQN of
     Nothing -> do
       return ()
     Just _ -> do
-      let mainCall = Ref "main" 1
+      let mainCall = Ref mainFQN 1
       case infer 0 noSpan book (Ctx []) mainCall of
         Fail e -> do
           hPutStrLn stderr $ show e
@@ -91,6 +94,21 @@ runMain book = do
         Done typ -> do
           putStrLn ""
           print $ normal book mainCall
+  where
+    -- Helper function to extract module name from filepath (mirrors Import.hs logic)
+    takeBaseName' :: FilePath -> String
+    takeBaseName' path = 
+      let withoutBend = if ".bend" `isSuffixOf'` path
+                        then take (length path - 5) path  -- Remove .bend extension
+                        else path
+          -- Also remove /_ suffix if present (for files like Term/_.bend)
+          withoutUnderscore = if "/_" `isSuffixOf'` withoutBend
+                              then take (length withoutBend - 2) withoutBend  -- Remove /_
+                              else withoutBend
+      in withoutUnderscore
+      where
+        isSuffixOf' :: Eq a => [a] -> [a] -> Bool
+        isSuffixOf' suffix str = suffix == drop (length str - length suffix) str
 
 -- | Process a Bend file: parse, check, and run
 processFile :: FilePath -> IO ()
@@ -98,7 +116,7 @@ processFile file = do
   book <- parseFile file
   let bookAdj = adjustBook book
   bookChk <- checkBook bookAdj
-  runMain bookChk
+  runMain file bookChk
 
 -- | Process a Bend file and return it's Core form
 processFileToCore :: FilePath -> IO ()
