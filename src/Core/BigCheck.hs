@@ -1321,7 +1321,7 @@ check d span book ctx term      goal =
         Nothing -> do
           t <- infer d span book ctx v Nothing
           t' <- check d span book ctx t Set
-          v' <- check d span book ctx v t
+          v' <- cutChk <$> check d span book ctx v t
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
           return $ Let k (Just t') v' (\x -> bindVarByName k x f')
 
@@ -1866,11 +1866,12 @@ check d span book ctx term      goal =
     -- ctx |- f : T -> T -> P
     -- ----------------------
     -- ctx |- (λ{&L:f} x) : P
-    -- (App (SupM l f) x, _) -> do
-    --   xT <- infer d span book ctx x
-    --   x' <- check d span book ctx x xT
-    --   f' <- check d span book ctx f (All xT (Lam "_" Nothing (\_ -> All xT (Lam "_" Nothing (\_ -> goal)))))
-    --   return $ App (SupM l f') x'
+    (App (SupM l f) x, _) -> do
+      xT <- infer d span book ctx x Nothing
+      x' <- check d span book ctx x xT
+      f' <- check d span book ctx f (All xT (Lam "_" Nothing (\_ -> All xT (Lam "_" Nothing (\_ -> goal)))))
+      l' <- check d span book ctx l (Num U64_T)
+      return $ App (SupM l' f') x'
 
     (App fn@(Lam k mt b) x, _) -> do
       case mt of
@@ -1931,7 +1932,7 @@ check d span book ctx term      goal =
       xT' <- infer d span book ctx x (Just term)
       xT  <- derefADT <$> check d span book ctx xT' Set
 
-      case cut $ whnf book xT of
+      case cut $ force book xT of
         Sig _ _ -> do
           x' <- check d span book ctx x xT
           goal' <- check d span book ctx goal Set
@@ -2027,7 +2028,7 @@ check d span book ctx term      goal =
 -- Verify that a term has the expected type by inference
 verify :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 verify d span book ctx term goal = do
-  traceM ("-verify infer: " ++ show term ++ " :: " ++ show goal)
+  -- traceM ("-verify infer: " ++ show term ++ " :: " ++ show goal)
   t <- infer d span book ctx term Nothing
   if
     equal d book t goal
@@ -2040,6 +2041,11 @@ reWrap :: Term -> Term -> Term
 reWrap (Loc l _) z = Loc l z
 reWrap (Chk x t) z = Chk z t
 reWrap _        z = z
+
+cutChk :: Term -> Term
+cutChk (Loc l x) = Loc l (cutChk x)
+cutChk (Chk x t) = x
+cutChk x         = x
 
 getSpan :: Span -> Term -> Span
 getSpan span (Loc l _) = l

@@ -97,8 +97,8 @@ processFile :: FilePath -> IO ()
 processFile file = do
   book <- parseFile file
   -- let bookAdj@(Book defs _) = adjustBook book
-  let desBook@(Book defs _) = desugarBook book
-  chkBook@(Book defs _)    <- annotateBook desBook
+  let desBook@(Book defs _)         = desugarBook book
+  (chkBook@(Book defs _), success) <- annotateBook desBook
 
   let bookAdj@(Book defs _) = chkBook
   -- let bookAdj@(Book defs _) = elaborateBook chkBook
@@ -107,10 +107,11 @@ processFile file = do
   -- debug removed
   -- debug removed
   -- putStrLn $ show $ M.keys defs
-  putStrLn $ ""
-  putStrLn $ show $ getDefn bookAdj "Term/gen/intr" 
-  bookChk <- checkBook bookAdj
+  -- putStrLn $ ""
+  -- putStrLn $ show $ getDefn bookAdj "Term/gen/intr" 
+  -- bookChk <- checkBook bookAdj
   -- runMain bookChk
+  unless success exitFailure
   runMain bookAdj
 
 -- | Try to format JavaScript code using prettier if available
