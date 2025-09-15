@@ -21,7 +21,6 @@ import Data.List (intercalate, isPrefixOf)
 import Data.List.Split (splitOn)
 import Data.Maybe (fromMaybe)
 import Control.Monad (foldM)
-import Debug.Trace
 
 import Core.Type
 import Core.Show
@@ -31,7 +30,7 @@ type ConstructorMap = M.Map String [String]
 
 -- | Extract all constructors from a Book and build the constructor map
 extractConstructors :: Book -> ConstructorMap
-extractConstructors (Book defs _) = 
+extractConstructors (Book defs _) =
   M.foldrWithKey extractFromDefn M.empty defs
   where
     extractFromDefn :: Name -> Defn -> ConstructorMap -> ConstructorMap

@@ -28,7 +28,13 @@ type SubstMap = M.Map Name Name
 -- The substitution maps module aliases and imported names to fully qualified names
 substituteInConstructorName :: SubstMap -> String -> String
 substituteInConstructorName subst name =
-  case splitConstructorName name of
+  -- If the name is already a fully qualified constructor (Module::Type::Constructor), don't substitute
+  -- This prevents incorrect substitution when module name conflicts with function names
+  let parts = splitConstructorName name
+      -- A fully qualified constructor has at least 3 parts and contains ::
+  in if length parts >= 3 && "::" `isInfixOf` name
+  then name
+  else case parts of
     [single] -> 
       -- No :: found, check if the whole name needs substitution
       case M.lookup single subst of
@@ -531,10 +537,10 @@ takeBaseName' path =
 -- add a mapping from "name" to "module::name"
 -- Also handles constructor names: "module::Type::Constructor" -> "Constructor" maps to full FQN
 buildLocalSubstMap :: FilePath -> Book -> SubstMap
-buildLocalSubstMap currentFile (Book defs _) = 
+buildLocalSubstMap currentFile (Book defs _) =
   let filePrefix = takeBaseName' currentFile ++ "::"
       localDefs = M.filterWithKey (\k _ -> filePrefix `isPrefixOf` k) defs
-      
+
       -- For each local definition, extract the unqualified name and map it to the FQN
       extractMappings fqn defn =
         let withoutFilePrefix = drop (length filePrefix) fqn
