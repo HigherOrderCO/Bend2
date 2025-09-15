@@ -1413,7 +1413,8 @@ check d span book ctx term      goal =
       -- traceM $ "WHNF  " ++ show (App b (Var "AAAA" d)) ++ " == " ++ show (whnf  book $ (App b (Var k d)))
       -- traceM $ "CTX:\n" ++ show (extend ctx k (Var k d) a)
       f' <- check (d+1) span book (extend ctx k (Var k d) a) (f (Var k d)) (App b (Var k d))
-      return $ Lam k t (\v -> bindVarByName k v f')
+      -- return $ Lam k t (\v -> bindVarByName k v f')
+      return $ Lam k t (\v -> bindVarByIndex d v f')
 
     -- ctx |- 
     -- --------------------------------- EmpM-Eql-Zer-Suc
@@ -1619,7 +1620,8 @@ check d span book ctx term      goal =
     -- -------------------------------------------------- EnuM
     -- ctx |- λ{cs;df} : ∀x:enum{syms}. R
     (EnuM cs df, All (force book -> Enu syms) rT) -> do
-      mapM_ (\(s, t) -> check d span book ctx t (App rT (Sym s))) cs
+      -- mapM_ (\(s, t) -> check d span book ctx t (App rT (Sym s))) cs
+      cs' <- mapM (\(s, t) -> do t' <-check d span book ctx t (App rT (Sym s)); return (s,t')) cs
       let covered_syms = map fst cs
       let all_covered = length covered_syms >= length syms
                      && all (`elem` syms) covered_syms
@@ -1636,8 +1638,8 @@ check d span book ctx term      goal =
           let enu_type = Enu syms
           let lam_goal = All enu_type (Lam "_" Nothing (\v -> App rT v))
           df' <- check d span book ctx df lam_goal
-          return $ EnuM cs df'
-        else return term
+          return $ EnuM cs' df'
+        else return (EnuM cs' (Lam "_" Nothing (\_ -> One)))
 
     -- Type mismatch for EnuM
     (EnuM cs df, _) -> do
@@ -1926,15 +1928,23 @@ check d span book ctx term      goal =
       do
       let fn_name = "$aux_"++show d
       xT' <- infer d span book ctx x (Just term)
-      xT  <- check d span book ctx xT' Set
+      xT  <- derefADT <$> check d span book ctx xT' Set
 
       case cut $ whnf book xT of
         Sig _ _ -> do
           x' <- check d span book ctx x xT
           goal' <- check d span book ctx goal Set
           check d span book ctx (Let fn_name (Just (reduceEtas d $ All xT (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
-        _      -> do
-          Fail $ TypeMismatch span (normalCtx book ctx) (All (Var "_" 0) (Lam "_" Nothing (\_ -> (Var "_" 0)))) (normal book term) Nothing
+        _       -> do
+          Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (Var "Σ_:_._" 0) (normal book xT) Nothing
+        where
+          derefADT trm = case cut trm of
+            Ref k i ->
+              let xTbody = getDefn book k in
+              case xTbody of
+                Just (_, cut -> bod@(Sig (cut -> Enu _) _), _) -> bod
+                _ -> trm
+            _ -> trm
 
     -- (App fn@(cut -> SigM g) x, _) -> do
     --   xT <- case cut x of
