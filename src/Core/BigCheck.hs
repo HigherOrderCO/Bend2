@@ -1748,7 +1748,7 @@ check d span book ctx term      goal =
     (Op2 op a b, _) -> do
       ta <- infer d span book ctx a Nothing
       tb <- infer d span book ctx b Nothing
-      tr <- inferOp2Type d span book ctx op ta tb
+      tr <- inferOp2Type d (getSpan span b) book ctx op ta tb
       if equal d book tr goal
         then return term
         else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book tr) Nothing
@@ -2026,7 +2026,7 @@ check d span book ctx term      goal =
 -- Verify that a term has the expected type by inference
 verify :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 verify d span book ctx term goal = do
-  -- traceM ("-verify infer: " ++ show term ++ " :: " ++ show goal)
+  traceM ("-verify infer: " ++ show term ++ " :: " ++ show goal)
   t <- infer d span book ctx term Nothing
   if
     equal d book t goal
