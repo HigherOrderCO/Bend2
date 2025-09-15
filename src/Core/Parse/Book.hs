@@ -164,20 +164,20 @@ parseType = label "datatype declaration" $ do
 
 -- | Syntax: case @Tag: field1: Type1 field2: Type2
 parseTypeCase :: String -> Parser (String, [(Name, Term)])
-parseTypeCase typeName = label "datatype constructor" $ do
+parseTypeCase typeName = label "datatype enum" $ do
   _    <- symbol "case"
   _    <- symbol "@"
   tag  <- some (satisfy isNameChar)
   _    <- symbol ":"
   flds <- many parseField
-  -- Return the fully qualified constructor name
+  -- Return the fully qualified enum name
   let qualifiedTag = typeName ++ "::" ++ tag
   return (qualifiedTag, flds)
   where
     -- Parse a field declaration  name : Type
     parseField :: Parser (Name, Term)
     parseField = do
-      -- Stop if next token is 'case' (start of next constructor) or 'def'/'data'
+      -- Stop if next token is 'case' (start of next enum) or 'def'/'data'
       notFollowedBy (symbol "case")
       n <- try $ do
         n <- name

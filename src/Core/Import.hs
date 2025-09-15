@@ -22,16 +22,16 @@ import qualified Data.Map.Strict as M
 -- Substitution types and functions
 type SubstMap = M.Map Name Name
 
--- | Substitute aliases in constructor names
+-- | Substitute aliases in enum names
 -- For example: "some::B::X" with {"some" -> "B::B"} becomes "B::B::X"  
 -- Also handles: "B::X" with {"B" -> "B::B"} becomes "B::B::X"
 -- The substitution maps module aliases and imported names to fully qualified names
-substituteInConstructorName :: SubstMap -> String -> String
-substituteInConstructorName subst name =
-  -- If the name is already a fully qualified constructor (Module::Type::Constructor), don't substitute
+substituteInEnumName :: SubstMap -> String -> String
+substituteInEnumName subst name =
+  -- If the name is already a fully qualified enum (Module::Type::Enum), don't substitute
   -- This prevents incorrect substitution when module name conflicts with function names
-  let parts = splitConstructorName name
-      -- A fully qualified constructor has at least 3 parts and contains ::
+  let parts = splitEnumName name
+      -- A fully qualified enum has at least 3 parts and contains ::
   in if length parts >= 3 && "::" `isInfixOf` name
   then name
   else case parts of
@@ -40,19 +40,19 @@ substituteInConstructorName subst name =
       case M.lookup single subst of
         Just replacement -> replacement
         Nothing -> single
-    [typeName, ctorName] ->
-      -- Two parts: could be Type::Constructor
+    [typeName, enumName] ->
+      -- Two parts: could be Type::Enum
       -- Check if typeName is in substitution map (from selective import)
       case M.lookup typeName subst of
         Just replacement ->
           -- replacement is like "B::B" for "from B import B"
-          -- Append the constructor name
-          replacement ++ "::" ++ ctorName
+          -- Append the enum name
+          replacement ++ "::" ++ enumName
         Nothing -> 
           -- No substitution needed, keep original
           name
     parts@(prefix:typeName:rest) ->
-      -- Three or more parts: Module::Type::Constructor or similar
+      -- Three or more parts: Module::Type::Enum or similar
       -- Check if prefix is an alias that needs substitution
       case M.lookup prefix subst of
         Just replacement ->
@@ -62,10 +62,10 @@ substituteInConstructorName subst name =
           if "::" `isInfixOf` replacement && not ("::" `isSuffixOf` replacement)
           then
             -- replacement is already a qualified name like "B::B"
-            -- Just append the constructor name
+            -- Just append the enum name
             if null rest
-            then replacement  -- No constructor, just the type
-            else replacement ++ "::" ++ intercalate "::" rest  -- Add constructor
+            then replacement  -- No enum, just the type
+            else replacement ++ "::" ++ intercalate "::" rest  -- Add enum
           else
             -- replacement is just a module name, build the full path
             intercalate "::" (replacement : typeName : rest)
@@ -84,10 +84,10 @@ substituteInConstructorName subst name =
     _ -> name
   where
     -- Split on "::" to get components
-    splitConstructorName :: String -> [String]
-    splitConstructorName s = 
+    splitEnumName :: String -> [String]
+    splitEnumName s = 
       case break (== ':') s of
-        (part, ':':':':rest) -> part : splitConstructorName rest
+        (part, ':':':':rest) -> part : splitEnumName rest
         (part, "") -> [part]
         _ -> [s]
 
@@ -109,8 +109,8 @@ substituteRefs subst = go S.empty
           Just newName -> Var newName i  -- It's a free variable, substitute it
           Nothing -> Var k i
       
-      -- Handle constructor names that might contain aliases
-      Sym name -> Sym (substituteInConstructorName subst name)
+      -- Handle enum names that might contain aliases
+      Sym name -> Sym (substituteInEnumName subst name)
       
       Sub t -> Sub (go bound t)
       Fix k f -> Fix k (\v -> go (S.insert k bound) (f v))
@@ -207,12 +207,12 @@ data ImportResult
   deriving (Show)
 
 data ImportState = ImportState
-  { stVisited :: S.Set FilePath   -- files already parsed (cycle/dup prevention)
-  , stLoaded  :: S.Set Name       -- names we consider resolved/loaded
-  , stBook    :: Book             -- accumulated book
-  , stSubstMap :: SubstMap        -- substitution map for reference resolution
-  , stCurrentFile :: FilePath     -- current file being processed
-  , stModuleImports :: S.Set String -- modules imported via "import Module" (blocks auto-import for their definitions)
+  { stVisited :: S.Set FilePath      -- files already parsed (cycle/dup prevention)
+  , stLoaded  :: S.Set Name          -- names we consider resolved/loaded
+  , stBook    :: Book                -- accumulated book
+  , stSubstMap :: SubstMap           -- substitution map for reference resolution
+  , stCurrentFile :: FilePath        -- current file being processed
+  , stModuleImports :: S.Set String  -- modules imported via "import Module" (blocks auto-import for their definitions)
   , stAliases :: M.Map String String -- alias mapping: "NatOps" -> "Nat/add"
   }
 
@@ -290,10 +290,10 @@ processExplicitImports parserState = do
   if not (null errors)
     then pure (Left $ unlines errors)
     else do
-      let successes = [result | ImportSuccess book substMap <- results, result <- [(book, substMap)]]
+      let successes          = [result | ImportSuccess book substMap <- results, result <- [(book, substMap)]]
           (books, substMaps) = unzip successes
-          combinedBook = foldr mergeBooks (Book M.empty []) books
-          combinedSubstMap = M.unions substMaps
+          combinedBook       = foldr mergeBooks (Book M.empty []) books
+          combinedSubstMap   = M.unions substMaps
       pure (Right (combinedBook, combinedSubstMap))
 
 -- | Cascading resolution: try local first, then external
@@ -302,28 +302,28 @@ resolveCascadingImport imp = do
   localResult <- resolveLocalImport imp
   case localResult of
     ImportSuccess book substMap -> pure (ImportSuccess book substMap)
-    ImportFailed localErr -> do
+    ImportFailed localErr       -> do
       externalResult <- resolveExternalImport imp
       case externalResult of
         ImportSuccess book substMap -> pure (ImportSuccess book substMap)
-        ImportFailed externalErr -> 
-          pure $ ImportFailed $ "Failed to resolve import: " ++ localErr ++ " (local), " ++ externalErr ++ " (external)"
+        ImportFailed externalErr    -> pure $ ImportFailed $ "Failed to resolve import: " ++ localErr ++ " (local), " ++ externalErr ++ " (external)"
 
 -- | Try to resolve import locally (in local files or bend_packages)
 resolveLocalImport :: Import -> IO ImportResult
 resolveLocalImport (ModuleImport modulePath maybeAlias) = do
   case maybeAlias of
-    Nothing -> do
+    Nothing    -> do
       -- Regular module import: import and return the book
       result <- processModuleImport modulePath
       case result of
-        Left err -> pure (ImportFailed err)
+        Left err                             -> pure (ImportFailed err)
         Right (book, _substMap, _actualPath) -> pure (ImportSuccess book M.empty)
+
     Just alias -> do
       -- Aliased module import: import the module and create alias mappings
       result <- processModuleImport modulePath
       case result of
-        Left err -> pure (ImportFailed err)
+        Left err                            -> pure (ImportFailed err)
         Right (book, _substMap, actualPath) -> do
           let Book defs _ = book
               possibleFQNs = M.keys defs
@@ -339,11 +339,12 @@ resolveLocalImport (ModuleImport modulePath maybeAlias) = do
               extractMainFunctionName path = 
                 let parts = splitOn "/" path
                 in if length parts >= 2 then intercalate "/" (drop 2 parts) else ""
+
               mainFunctionName = extractMainFunctionName modulePath
               mainFunctionFQN = modulePrefix ++ "::" ++ mainFunctionName  
               directAliasEntries = if not (null mainFunctionName) && mainFunctionFQN `elem` possibleFQNs
-                                  then [(alias, mainFunctionFQN)]
-                                  else []
+                                   then [(alias, mainFunctionFQN)]
+                                   else []
                                   
               substMap = M.fromList (aliasEntries ++ directAliasEntries)
               
@@ -356,10 +357,11 @@ resolveLocalImport (ModuleImport modulePath maybeAlias) = do
               in if expectedPrefix `isPrefixOf` fqn
                  then drop (length expectedPrefix) fqn
                  else fqn
+
 resolveLocalImport (SelectiveImport modulePath names) = do
   result <- processSelectiveImport modulePath names
   case result of
-    Left err -> pure (ImportFailed err)
+    Left err               -> pure (ImportFailed err)
     Right (book, substMap) -> pure (ImportSuccess book substMap)
 
 -- | Try to resolve import externally (via package index)
@@ -378,7 +380,9 @@ resolveExternalImport (ModuleImport modulePath maybeAlias) = do
           -- Use the actual file path returned by the API (includes version)
           let actualFilePath = PkgIndex.rrFile resolved
           resolveLocalImport (ModuleImport actualFilePath maybeAlias)
+
     _ -> pure (ImportFailed $ "Invalid external import format (expected owner/package/path): " ++ modulePath)
+
 resolveExternalImport (SelectiveImport modulePath nameAliases) = do
   -- First try to import the module externally
   case splitOn "/" modulePath of
@@ -387,11 +391,12 @@ resolveExternalImport (SelectiveImport modulePath nameAliases) = do
       let importStr = modulePath
       result <- PkgIndex.importDefinition indexConfig importStr Nothing
       case result of
-        Left err -> pure (ImportFailed err)
+        Left err       -> pure (ImportFailed err)
         Right resolved -> do
           -- Use the actual file path returned by the API (includes version)
           let actualFilePath = PkgIndex.rrFile resolved
           resolveLocalImport (SelectiveImport actualFilePath nameAliases)
+
     _ -> pure (ImportFailed $ "Invalid external import format (expected owner/package/path): " ++ modulePath)
 
 -- | Process a single module import: import Nat/add
@@ -403,7 +408,7 @@ processModuleImport modulePath = do
     Just path -> do
       content <- readFile path
       case doParseBook path content of
-        Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
+        Left err        -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
         Right (book, _) -> do
           -- Build local substitution map for the imported file to resolve internal references
           let localSubstMap = buildLocalSubstMap path book
@@ -421,7 +426,7 @@ processSelectiveImport modulePath nameAliases = do
     Just path -> do
       content <- readFile path
       case doParseBook path content of
-        Left err -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
+        Left err        -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
         Right (book, _) -> do
           let modulePrefix = takeBaseName' path
               Book defs defNames = book
@@ -535,7 +540,7 @@ takeBaseName' path =
 -- | Build substitution map for local definitions
 -- For each definition in the book with FQN "module::name", 
 -- add a mapping from "name" to "module::name"
--- Also handles constructor names: "module::Type::Constructor" -> "Constructor" maps to full FQN
+-- Also handles enum names: "module::Type::Enum" -> "Enum" maps to full FQN
 buildLocalSubstMap :: FilePath -> Book -> SubstMap
 buildLocalSubstMap currentFile (Book defs _) =
   let filePrefix = takeBaseName' currentFile ++ "::"
@@ -548,32 +553,32 @@ buildLocalSubstMap currentFile (Book defs _) =
             basicMappings = case parts of
                               -- Regular function: ["add"] -> "add" -> "examples/main::add"
                               [name] -> [(name, fqn)]
-                              -- Constructor: ["WTreeTag", "WLeaf"] -> both "WTreeTag::WLeaf" and "WLeaf" map to full FQN
-                              [typeName, constructorName] -> 
-                                [(withoutFilePrefix, fqn), (constructorName, fqn)]
+                              -- Enum: ["WTreeTag", "WLeaf"] -> both "WTreeTag::WLeaf" and "WLeaf" map to full FQN
+                              [typeName, enumName] -> 
+                                [(withoutFilePrefix, fqn), (enumName, fqn)]
                               -- Fallback
                               _ -> [(withoutFilePrefix, fqn)]
-            -- Extract constructor names from type definitions
-            constructorMappings = extractConstructorsFromDefn defn
-        in basicMappings ++ constructorMappings
+            -- Extract enum names from type definitions
+            enumMappings = extractEnumsFromDefn defn
+        in basicMappings ++ enumMappings
         
-      -- Extract constructor names from a definition's term
-      extractConstructorsFromDefn :: Defn -> [(String, String)]
-      extractConstructorsFromDefn (_, term, _) = extractConstructorsFromTerm term
+      -- Extract enum names from a definition's term
+      extractEnumsFromDefn :: Defn -> [(String, String)]
+      extractEnumsFromDefn (_, term, _) = extractEnumsFromTerm term
       
-      -- Extract constructor names from a term (look for Enu constructors)
-      extractConstructorsFromTerm :: Term -> [(String, String)]
-      extractConstructorsFromTerm term = case term of
-        -- Look for enum types which contain fully qualified constructor names
+      -- Extract enum names from a term (look for Enu constructors)
+      extractEnumsFromTerm :: Term -> [(String, String)]
+      extractEnumsFromTerm term = case term of
+        -- Look for enum types which contain fully qualified enum names
         Sig (Enu tags) _ -> [(takeUnqualified tag, tag) | tag <- tags]
         -- Recursively search in other term constructors
-        Lam _ _ f -> extractConstructorsFromTerm (f (Var "dummy" 0))
-        App f x -> extractConstructorsFromTerm f ++ extractConstructorsFromTerm x
-        Sig a b -> extractConstructorsFromTerm a ++ extractConstructorsFromTerm b
-        All a b -> extractConstructorsFromTerm a ++ extractConstructorsFromTerm b
+        Lam _ _ f -> extractEnumsFromTerm (f (Var "dummy" 0))
+        App f x -> extractEnumsFromTerm f ++ extractEnumsFromTerm x
+        Sig a b -> extractEnumsFromTerm a ++ extractEnumsFromTerm b
+        All a b -> extractEnumsFromTerm a ++ extractEnumsFromTerm b
         _ -> []
         
-      -- Extract unqualified name from a fully qualified constructor name
+      -- Extract unqualified name from a fully qualified enum name
       -- "examples/main::WTreeTag::WLeaf" -> "WLeaf" 
       takeUnqualified :: String -> String
       takeUnqualified fqn = 
