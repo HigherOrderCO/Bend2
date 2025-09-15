@@ -23,10 +23,10 @@ import Control.Monad (foldM)
 import Core.Type
 import Core.Show
 
--- | Map from unprefixed constructor name to list of possible FQNs
+-- | Map from unprefixed enum name to list of possible FQNs
 type EnumMap = M.Map String [String]
 
--- | Extract all constructors from a Book and build the constructor map
+-- | Extract all enums from a Book and build the enum map
 extractEnums :: Book -> EnumMap
 extractEnums (Book defs _) =
   M.foldrWithKey extractFromDefn M.empty defs
@@ -72,7 +72,7 @@ resolveEnum span emap enumName =
   then Done enumName  -- Already qualified, leave as-is
   else
     case M.lookup enumName emap of
-      Nothing -> Done enumName  -- Not a known constructor, leave as-is
+      Nothing -> Done enumName  -- Not a known enum, leave as-is
       Just [fqn] -> Done fqn    -- Unique, auto-prefix
       Just fqns -> 
         -- Ambiguous Enum
