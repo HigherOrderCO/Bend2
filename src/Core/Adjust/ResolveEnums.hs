@@ -1,19 +1,17 @@
--- # Core.Adjust.ResolveConstructors
---
--- Resolves constructor names to their fully qualified names (FQNs).
--- This ensures that all constructors are globally unique by prefixing them
--- with their type's FQN (module::Type::Constructor).
+-- Resolves Enums names to their fully qualified names (FQNs).
+-- This ensures that all enums are globally unique by prefixing them
+-- with their type's FQN (module::Type::Enum).
 --
 -- Example:
---   Sym "Circle" in shapes.bend becomes Sym "shapes::Shape::Circle"
+--   Sym "Circle" fields in shapes.bend becomes Sym "shapes::Shape::Circle" fields
 --
 -- The resolution process:
--- 1. Extract all constructors from type definitions in the Book
+-- 1. Extract all enum from type definitions in the Book
 -- 2. Build a map from unprefixed names to their FQNs
--- 3. Traverse all terms and resolve constructor references
--- 4. Error on ambiguous constructors, auto-prefix unique ones
+-- 3. Traverse all terms and resolve enum references
+-- 4. Error on ambiguous enums, auto-prefix unique ones
 
-module Core.Adjust.ResolveConstructors where
+module Core.Adjust.ResolveEnums where
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -26,37 +24,37 @@ import Core.Type
 import Core.Show
 
 -- | Map from unprefixed constructor name to list of possible FQNs
-type ConstructorMap = M.Map String [String]
+type EnumMap = M.Map String [String]
 
 -- | Extract all constructors from a Book and build the constructor map
-extractConstructors :: Book -> ConstructorMap
-extractConstructors (Book defs _) =
+extractEnums :: Book -> EnumMap
+extractEnums (Book defs _) =
   M.foldrWithKey extractFromDefn M.empty defs
   where
-    extractFromDefn :: Name -> Defn -> ConstructorMap -> ConstructorMap
-    extractFromDefn typeName (_, term, _) cmap = 
+    extractFromDefn :: Name -> Defn -> EnumMap -> EnumMap
+    extractFromDefn typeName (_, term, _) emap = 
       case term of
         -- Look for Enum type definitions
-        Enu constructors -> 
-          foldr (addConstructor typeName) cmap constructors
+        Enu enums -> 
+          foldr (addEnum typeName) emap enums
         -- Type definitions are often Sig types with Enu as the first component
-        Sig (Enu constructors) _ ->
-          foldr (addConstructor typeName) cmap constructors
+        Sig (Enu enums) _ ->
+          foldr (addEnum typeName) emap enums
         -- Also check in Loc wrappers
         Loc _ innerTerm -> 
-          extractFromDefn typeName (True, innerTerm, Set) cmap
-        _ -> cmap
+          extractFromDefn typeName (True, innerTerm, Set) emap
+        _ -> emap
     
-    addConstructor :: Name -> String -> ConstructorMap -> ConstructorMap
-    addConstructor typeFQN ctorName cmap =
-      -- The constructor name might already be FQN (from parser), extract the base name
-      let baseName = case reverse (splitOn "::" ctorName) of
+    addEnum :: Name -> String -> EnumMap -> EnumMap
+    addEnum typeFQN enumName emap =
+      -- The enum name might already be FQN (from parser), extract the base name
+      let baseName = case reverse (splitOn "::" enumName) of
             (base:_) -> base  -- Take the last part after ::
-            [] -> ctorName
+            [] -> enumName
           -- For lookup, we use the base name
-      in M.insertWith (++) baseName [ctorName] cmap
+      in M.insertWith (++) baseName [enumName] emap
 
--- | Check if a constructor name is already fully qualified
+-- | Check if an enum name is already fully qualified
 isFullyQualified :: String -> Bool
 isFullyQualified s = "::" `isInfixOf` s
   where
@@ -67,32 +65,32 @@ isFullyQualified s = "::" `isInfixOf` s
     tails [] = [[]]
     tails xs@(_:xs') = xs : tails xs'
 
--- | Resolve a single constructor name
-resolveConstructor :: Span -> ConstructorMap -> String -> Result String
-resolveConstructor span cmap ctorName =
-  if isFullyQualified ctorName
-  then Done ctorName  -- Already qualified, leave as-is
+-- | Resolve a single enum name
+resolveEnum :: Span -> EnumMap -> String -> Result String
+resolveEnum span emap enumName =
+  if isFullyQualified enumName
+  then Done enumName  -- Already qualified, leave as-is
   else
-    case M.lookup ctorName cmap of
-      Nothing -> Done ctorName  -- Not a known constructor, leave as-is
-      Just [fqn] -> Done fqn  -- Unique, auto-prefix
+    case M.lookup enumName emap of
+      Nothing -> Done enumName  -- Not a known constructor, leave as-is
+      Just [fqn] -> Done fqn    -- Unique, auto-prefix
       Just fqns -> 
-        -- Ambiguous constructor
-        Fail $ AmbiguousConstructor span (Ctx []) ctorName fqns 
+        -- Ambiguous Enum
+        Fail $ AmbiguousEnum span (Ctx []) enumName fqns 
                  (Just $ "Please use one of: " ++ intercalate ", " (map ("&" ++) fqns))
 
--- | Resolve constructors in a term
-resolveConstructorsInTerm :: ConstructorMap -> Term -> Result Term
-resolveConstructorsInTerm cmap = go
+-- | Resolve enums in a term
+resolveEnumsInTerm :: EnumMap -> Term -> Result Term
+resolveEnumsInTerm emap = go
   where
     go :: Term -> Result Term
     go term = case term of
-      -- Constructor usage
+      -- Enum usage
       Sym name -> do
-        resolved <- resolveConstructor noSpan cmap name
+        resolved <- resolveEnum noSpan emap name
         Done (Sym resolved)
       
-      -- Pattern matching on constructors
+      -- Pattern matching on Enums
       EnuM cases def -> do
         resolvedCases <- mapM resolveCase cases
         resolvedDef <- go def
@@ -103,7 +101,7 @@ resolveConstructorsInTerm cmap = go
         -- Use the actual span for error reporting
         case innerTerm of
           Sym name -> do
-            resolved <- resolveConstructor span cmap name
+            resolved <- resolveEnum span emap name
             Done (Loc span (Sym resolved))
           _ -> do
             resolved <- go innerTerm
@@ -161,13 +159,13 @@ resolveConstructorsInTerm cmap = go
         a2 <- go a
         b2 <- go b
         Done (Sig a2 b2)
-      -- Special handling for constructor syntax @Ctor{...} which desugars to (Sym "Ctor", ...) or (Loc _ (Sym "Ctor"), ...)
+      -- Special handling for enum syntax @Enum{...} which desugars to (Sym "Enum", ...) or (Loc _ (Sym "Enum"), ...)
       Tup (Sym name) rest -> do
-        resolved <- resolveConstructor noSpan cmap name
+        resolved <- resolveEnum noSpan emap name
         resolvedRest <- go rest
         Done (Tup (Sym resolved) resolvedRest)
       Tup (Loc span (Sym name)) rest -> do
-        resolved <- resolveConstructor span cmap name
+        resolved <- resolveEnum span emap name
         resolvedRest <- go rest
         Done (Tup (Loc span (Sym resolved)) resolvedRest)
       Tup a b -> do
@@ -228,7 +226,7 @@ resolveConstructorsInTerm cmap = go
         b2 <- go b
         Done (Frk l2 a2 b2)
       
-      -- Leaf nodes that don't contain constructors
+      -- Leaf nodes that don't contain Enums
       Var _ _ -> Done term
       Ref _ _ -> Done term
       Set -> Done term
@@ -253,21 +251,21 @@ resolveConstructorsInTerm cmap = go
       Pri p -> Done term
     
     resolveCase :: (String, Term) -> Result (String, Term)
-    resolveCase (ctorName, body) = do
-      resolvedCtor <- resolveConstructor noSpan cmap ctorName
+    resolveCase (enumName, body) = do
+      resolvedEnum <- resolveEnum noSpan emap enumName
       resolvedBody <- go body
-      Done (resolvedCtor, resolvedBody)
+      Done (resolvedEnum, resolvedBody)
 
--- | Resolve constructors in a definition
-resolveConstructorsInDefn :: ConstructorMap -> Defn -> Result Defn
-resolveConstructorsInDefn cmap (inj, term, typ) = do
-  resolvedTerm <- resolveConstructorsInTerm cmap term
-  resolvedType <- resolveConstructorsInTerm cmap typ
+-- | Resolve enums in a definition
+resolveEnumsInDefn :: EnumMap -> Defn -> Result Defn
+resolveEnumsInDefn emap (inj, term, typ) = do
+  resolvedTerm <- resolveEnumsInTerm emap term
+  resolvedType <- resolveEnumsInTerm emap typ
   Done (inj, resolvedTerm, resolvedType)
 
--- | Resolve constructors in an entire Book
-resolveConstructorsInBook :: Book -> Result Book
-resolveConstructorsInBook book@(Book defs names) = do
-  let cmap = extractConstructors book
-  resolvedDefs <- M.traverseWithKey (\_ defn -> resolveConstructorsInDefn cmap defn) defs
+-- | Resolve enums in an entire Book
+resolveEnumsInBook :: Book -> Result Book
+resolveEnumsInBook book@(Book defs names) = do
+  let emap = extractEnums book
+  resolvedDefs <- M.traverseWithKey (\_ defn -> resolveEnumsInDefn emap defn) defs
   Done (Book resolvedDefs names)

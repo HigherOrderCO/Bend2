@@ -71,7 +71,7 @@ import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ReduceEtas
-import Core.Adjust.ResolveConstructors
+import Core.Adjust.ResolveEnums
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -83,15 +83,15 @@ import Core.WHNF
 -- It uses a book of already-adjusted definitions for context during flattening.
 -- Note: This does NOT check for free variables, as it may be called during
 -- book adjustment where recursive references aren't available yet.
--- When called from adjustBook, constructors have already been resolved at the book level.
--- When called standalone (e.g., from parseTerm), constructors are resolved here.
+-- When called from adjustBook, enums have already been resolved at the book level.
+-- When called standalone (e.g., from parseTerm), enums are resolved here.
 adjust :: Book -> Term -> Term
 adjust book term =
   -- trace ("done: " ++ show done) $
   done
   where
-    -- First resolve constructors to their FQNs (needed for standalone use)
-    resolved = case resolveConstructorsInTerm (extractConstructors book) term of
+    -- First resolve enums to their FQNs (needed for standalone use)
+    resolved = case resolveEnumsInTerm (extractEnums book) term of
       Done t -> t
       Fail e -> error $ show e
     flat = flattenPats 0 noSpan book resolved
@@ -121,8 +121,8 @@ type AdjustState = (Book, S.Set Name)
 -- After adjusting all definitions, it checks for free variables.
 adjustBook :: Book -> Book
 adjustBook book@(Book defs names) =
-  -- First resolve all constructors in the entire book
-  let resolvedBook = case resolveConstructorsInBook book of
+  -- First resolve all enums in the entire book
+  let resolvedBook = case resolveEnumsInBook book of
         Done b -> b
         Fail e -> error $ show e
       adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjust) (M.keys defs)) (Book M.empty names, S.empty)
@@ -131,8 +131,8 @@ adjustBook book@(Book defs names) =
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
 adjustBookWithPats :: Book -> Book
 adjustBookWithPats book@(Book defs names) =
-  -- First resolve all constructors in the entire book
-  let resolvedBook = case resolveConstructorsInBook book of
+  -- First resolve all enums in the entire book
+  let resolvedBook = case resolveEnumsInBook book of
         Done b -> b
         Fail e -> error $ show e
       adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustWithPats) (M.keys defs)) (Book M.empty names, S.empty)

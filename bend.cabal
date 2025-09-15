@@ -33,7 +33,7 @@ library
                       Core.Adjust.FlattenPats,
                       Core.Adjust.DesugarPats,
                       Core.Adjust.DesugarFrks,
-                      Core.Adjust.ResolveConstructors,
+                      Core.Adjust.ResolveEnums,
                       Core.FreeVars,
                       Core.Import,
                       Core.Parse.Parse,
