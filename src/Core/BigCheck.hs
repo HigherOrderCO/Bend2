@@ -1820,7 +1820,7 @@ check d span book ctx term      goal =
           let rewrittenCtx  = rewriteCtx d book a b ctx
           let rewrittenGoal = rewrite d book a b goal
           -- traceM $ "REWRITE TERM(" ++ show (Eql t a b) ++ ") = " ++ show goal ++ " --> " ++ show (whnf book rewrittenGoal)
-          f' <- check d span book ctx f rewrittenGoal
+          f' <- check d span book rewrittenCtx f rewrittenGoal
           -- e' <- check d span book ctx e eT
           -- check d span book rewrittenCtx f rewrittenGoal
           -- return $ Rwt e' f'
