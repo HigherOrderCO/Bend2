@@ -29,7 +29,7 @@ annotateBook book@(Book defs names) = do
       let checkResult = do 
             typ'  <- check 0 noSpan book (Ctx []) typ Set
             term' <- check 0 noSpan book (Ctx []) term typ'
-            traceM $ "chec: " ++ show term'
+            -- traceM $ "chec: " ++ show term'
             return (inj, term', typ')
       case checkResult of
         Done (inj', term', typ') -> do

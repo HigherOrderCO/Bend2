@@ -32,6 +32,7 @@ import Core.BigCheck
 
 desugar :: Book -> Term -> Term
 desugar book term =
+  -- trace ("term: " ++ show term) $
   -- trace ("flat: " ++ show flat) $
   -- trace ("npat: " ++ show npat) $
   -- trace ("nfrk: " ++ show nfrk) $
