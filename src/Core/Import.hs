@@ -20,7 +20,22 @@ import qualified Package.Index as PkgIndex
 import qualified Data.Map.Strict as M
 
 -- Substitution types and functions
-type SubstMap = M.Map Name Name
+data SubstMap = SubstMap
+  { functionMap     :: M.Map Name Name  -- For resolving Ref terms (function calls)
+  , constructorMap  :: M.Map Name Name  -- For resolving Sym terms (enum constructors)
+  } deriving (Show, Eq)
+
+-- Helper functions for SubstMap operations
+emptySubstMap :: SubstMap
+emptySubstMap = SubstMap M.empty M.empty
+
+unionSubstMap :: SubstMap -> SubstMap -> SubstMap
+unionSubstMap (SubstMap f1 c1) (SubstMap f2 c2) =
+  SubstMap (M.union f1 f2) (M.union c1 c2)
+
+insertFunction :: Name -> Name -> SubstMap -> SubstMap
+insertFunction k v (SubstMap fMap cMap) = SubstMap (M.insert k v fMap) cMap
+
 
 -- | Substitute aliases in enum names
 -- For example: "some::B::X" with {"some" -> "B::B"} becomes "B::B::X"  
@@ -31,19 +46,20 @@ substituteInEnumName subst name =
   -- If the name is already a fully qualified enum (Module::Type::Enum), don't substitute
   -- This prevents incorrect substitution when module name conflicts with function names
   let parts = splitEnumName name
+      cMap = constructorMap subst
       -- A fully qualified enum has at least 3 parts and contains ::
   in if length parts >= 3 && "::" `isInfixOf` name
   then name
   else case parts of
-    [single] -> 
+    [single] ->
       -- No :: found, check if the whole name needs substitution
-      case M.lookup single subst of
+      case M.lookup single cMap of
         Just replacement -> replacement
         Nothing -> single
     [typeName, enumName] ->
       -- Two parts: could be Type::Enum
       -- Check if typeName is in substitution map (from selective import)
-      case M.lookup typeName subst of
+      case M.lookup typeName cMap of
         Just replacement ->
           -- replacement is like "B::B" for "from B import B"
           -- Append the enum name
@@ -54,7 +70,7 @@ substituteInEnumName subst name =
     parts@(prefix:typeName:rest) ->
       -- Three or more parts: Module::Type::Enum or similar
       -- Check if prefix is an alias that needs substitution
-      case M.lookup prefix subst of
+      case M.lookup prefix cMap of
         Just replacement ->
           -- replacement is like "B::B" for "import B as some"
           -- We need to check if prefix::typeName together form the qualified type
@@ -72,7 +88,7 @@ substituteInEnumName subst name =
         Nothing -> 
           -- Check if prefix::typeName together might be in the substitution map
           let prefixWithType = prefix ++ "::" ++ typeName
-          in case M.lookup prefixWithType subst of
+          in case M.lookup prefixWithType cMap of
             Just replacement ->
               -- Found a match for the combined prefix::type
               if null rest
@@ -95,17 +111,18 @@ substituteInEnumName subst name =
 substituteRefs :: SubstMap -> Term -> Term
 substituteRefs subst = go S.empty
   where
+    fMap = functionMap subst
     go bound term = case term of
-      Ref k i -> 
-        case M.lookup k subst of
+      Ref k i ->
+        case M.lookup k fMap of
           Just newName -> Ref newName i
           Nothing -> Ref k i
-      
-      -- Handle binding constructs  
-      Var k i -> 
-        if k `S.member` bound 
+
+      -- Handle binding constructs
+      Var k i ->
+        if k `S.member` bound
         then Var k i  -- It's a bound variable, don't substitute
-        else case M.lookup k subst of
+        else case M.lookup k fMap of
           Just newName -> Var newName i  -- It's a free variable, substitute it
           Nothing -> Var k i
       
@@ -253,7 +270,7 @@ importAllWithExplicit currentFile base parserState = do
       let -- Build substitution map for local definitions
           localSubstMap = buildLocalSubstMap currentFile base
           -- Combine explicit and local substitution maps (explicit takes precedence)
-          combinedSubstMap = M.union explicitSubstMap localSubstMap
+          combinedSubstMap = unionSubstMap explicitSubstMap localSubstMap
           -- Apply combined substitutions to both books
           substitutedBase = substituteRefsInBook combinedSubstMap base
           substitutedExplicit = substituteRefsInBook combinedSubstMap explicitBook
@@ -293,7 +310,7 @@ processExplicitImports parserState = do
       let successes          = [result | ImportSuccess book substMap <- results, result <- [(book, substMap)]]
           (books, substMaps) = unzip successes
           combinedBook       = foldr mergeBooks (Book M.empty []) books
-          combinedSubstMap   = M.unions substMaps
+          combinedSubstMap   = foldr unionSubstMap emptySubstMap substMaps
       pure (Right (combinedBook, combinedSubstMap))
 
 -- | Cascading resolution: try local first, then external
@@ -317,7 +334,7 @@ resolveLocalImport (ModuleImport modulePath maybeAlias) = do
       result <- processModuleImport modulePath
       case result of
         Left err                             -> pure (ImportFailed err)
-        Right (book, _substMap, _actualPath) -> pure (ImportSuccess book M.empty)
+        Right (book, _substMap, _actualPath) -> pure (ImportSuccess book emptySubstMap)
 
     Just alias -> do
       -- Aliased module import: import the module and create alias mappings
@@ -336,9 +353,13 @@ resolveLocalImport (ModuleImport modulePath maybeAlias) = do
               -- If so, create a direct alias (e.g., "external_add" -> "Nat/add")
               -- Extract the main function name from the original import path
               -- "Lorenzobattistela/bendLib/Nat/add" -> "Nat/add"
-              extractMainFunctionName path = 
+              -- "fixme/add_for_import" -> "fixme/add_for_import" (local import)
+              extractMainFunctionName path =
                 let parts = splitOn "/" path
-                in if length parts >= 2 then intercalate "/" (drop 2 parts) else ""
+                in case length parts of
+                     1 -> path  -- Single part: "add" -> "add"
+                     2 -> path  -- Two parts: "fixme/add_for_import" -> "fixme/add_for_import"
+                     _ -> intercalate "/" (drop 2 parts)  -- External: "user/lib/Nat/add" -> "Nat/add"
 
               mainFunctionName = extractMainFunctionName modulePath
               mainFunctionFQN = modulePrefix ++ "::" ++ mainFunctionName  
@@ -346,7 +367,7 @@ resolveLocalImport (ModuleImport modulePath maybeAlias) = do
                                    then [(alias, mainFunctionFQN)]
                                    else []
                                   
-              substMap = M.fromList (aliasEntries ++ directAliasEntries)
+              substMap = SubstMap (M.fromList (aliasEntries ++ directAliasEntries)) M.empty
               
           pure (ImportSuccess book substMap)
           where
@@ -414,7 +435,7 @@ processModuleImport modulePath = do
           let localSubstMap = buildLocalSubstMap path book
           -- Apply substitutions to resolve internal references
           let substitutedBook = substituteRefsInBook localSubstMap book
-          pure $ Right (substitutedBook, M.empty, path)
+          pure $ Right (substitutedBook, emptySubstMap, path)
     Nothing -> pure $ Left $ "Cannot find module: " ++ modulePath
 
 -- | Process a selective import: from Nat/add import name1 [as alias1], name2 [as alias2], ...
@@ -441,7 +462,7 @@ processSelectiveImport modulePath nameAliases = do
               substEntries = [(alias, modulePrefix ++ "::" ++ name) 
                              | (name, maybeAlias) <- nameAliases
                              , let alias = fromMaybe name maybeAlias]
-              substMap = M.fromList substEntries
+              substMap = SubstMap (M.fromList substEntries) M.empty
           pure $ Right (filteredBook, substMap)
     Nothing -> pure $ Left $ "Cannot find module for selective import: " ++ modulePath
 
@@ -467,7 +488,7 @@ importLoop st pending =
 resolveRef :: ImportState -> Name -> IO (Either String ImportState)
 resolveRef st refName = do
   -- First check if it's already in the substitution map
-  if refName `M.member` stSubstMap st
+  if refName `M.member` functionMap (stSubstMap st)
     then pure (Right st)
     else do
       -- Check if this is an alias reference (alias::name)
@@ -476,7 +497,7 @@ resolveRef st refName = do
           -- Resolve alias reference
           let modulePath = stAliases st M.! aliasName
               qualifiedRef = modulePath ++ "::" ++ actualName
-              newSubstMap = M.insert refName qualifiedRef (stSubstMap st)
+              newSubstMap = insertFunction refName qualifiedRef (stSubstMap st)
               newLoaded = S.insert refName (stLoaded st)
           pure $ Right st { stSubstMap = newSubstMap, stLoaded = newLoaded }
         _ -> do
@@ -494,7 +515,7 @@ resolveRef st refName = do
               
               -- Check if this FQN is accessible:
               -- 1. If it's already in the substitution map, it was explicitly imported
-              if refName `M.member` stSubstMap st
+              if refName `M.member` functionMap (stSubstMap st)
                 then do
                   -- Already resolved, use existing mapping
                   pure $ Right st
@@ -503,7 +524,7 @@ resolveRef st refName = do
               else if refName == modulePrefix
                 then do
                   -- Auto-import is allowed when function name matches module name
-                  let newSubstMap = M.insert refName fqn (stSubstMap st)
+                  let newSubstMap = insertFunction refName fqn (stSubstMap st)
                       newLoaded = S.insert refName (stLoaded st)
                   pure $ Right st { stSubstMap = newSubstMap, stLoaded = newLoaded }
                 else do
@@ -546,26 +567,27 @@ buildLocalSubstMap currentFile (Book defs _) =
   let filePrefix = takeBaseName' currentFile ++ "::"
       localDefs = M.filterWithKey (\k _ -> filePrefix `isPrefixOf` k) defs
 
-      -- For each local definition, extract the unqualified name and map it to the FQN
+      -- Separate function mappings from constructor mappings
       extractMappings fqn defn =
         let withoutFilePrefix = drop (length filePrefix) fqn
             parts = splitOnDoubleColon withoutFilePrefix
-            basicMappings = case parts of
-                              -- Regular function: ["add"] -> "add" -> "examples/main::add"
-                              [name] -> [(name, fqn)]
-                              -- Enum: ["WTreeTag", "WLeaf"] -> both "WTreeTag::WLeaf" and "WLeaf" map to full FQN
-                              [typeName, enumName] -> 
-                                [(withoutFilePrefix, fqn), (enumName, fqn)]
-                              -- Fallback
-                              _ -> [(withoutFilePrefix, fqn)]
-            -- Extract enum names from type definitions
+            (functionMappings, constructorMappings) = case parts of
+              -- Regular function: ["add"] -> "add" -> "examples/main::add"
+              [name] -> ([(name, fqn)], [])
+              -- Enum constructor: ["WTreeTag", "WLeaf"] ->
+              -- Function map gets nothing, constructor map gets both qualified and unqualified
+              [typeName, enumName] ->
+                ([], [(withoutFilePrefix, fqn), (enumName, fqn)])
+              -- Fallback: assume it's a function
+              _ -> ([(withoutFilePrefix, fqn)], [])
+            -- Extract additional enum names from type definitions
             enumMappings = extractEnumsFromDefn defn
-        in basicMappings ++ enumMappings
-        
+        in (functionMappings, constructorMappings ++ enumMappings)
+
       -- Extract enum names from a definition's term
       extractEnumsFromDefn :: Defn -> [(String, String)]
       extractEnumsFromDefn (_, term, _) = extractEnumsFromTerm term
-      
+
       -- Extract enum names from a term (look for Enu constructors)
       extractEnumsFromTerm :: Term -> [(String, String)]
       extractEnumsFromTerm term = case term of
@@ -577,31 +599,39 @@ buildLocalSubstMap currentFile (Book defs _) =
         Sig a b -> extractEnumsFromTerm a ++ extractEnumsFromTerm b
         All a b -> extractEnumsFromTerm a ++ extractEnumsFromTerm b
         _ -> []
-        
+
       -- Extract unqualified name from a fully qualified enum name
-      -- "examples/main::WTreeTag::WLeaf" -> "WLeaf" 
+      -- "examples/main::WTreeTag::WLeaf" -> "WLeaf"
       takeUnqualified :: String -> String
-      takeUnqualified fqn = 
+      takeUnqualified fqn =
         case reverse (splitOnDoubleColon fqn) of
           (lastPart:_) -> lastPart
           [] -> fqn
-      
+
       -- Split on "::" separator
       splitOnDoubleColon :: String -> [String]
-      splitOnDoubleColon s = 
+      splitOnDoubleColon s =
         case findDoubleColon s of
           Nothing -> [s]
           Just (before, after) -> before : splitOnDoubleColon after
-      
+
       findDoubleColon :: String -> Maybe (String, String)
       findDoubleColon s = findDoubleColon' s ""
         where
           findDoubleColon' [] _ = Nothing
           findDoubleColon' (':':':':rest) acc = Just (reverse acc, rest)
           findDoubleColon' (c:rest) acc = findDoubleColon' rest (c:acc)
-      mappings = concatMap (\(fqn, defn) -> extractMappings fqn defn) (M.toList localDefs)
-      substMap = M.fromList mappings
-  in substMap
+
+      -- Collect all mappings and separate them
+      allMappings = map (\(fqn, defn) -> extractMappings fqn defn) (M.toList localDefs)
+      (functionMappings, constructorMappings) = foldl
+        (\(fs, cs) (f, c) -> (fs ++ f, cs ++ c))
+        ([], [])
+        allMappings
+
+      functionMap = M.fromList functionMappings
+      constructorMap = M.fromList constructorMappings
+  in SubstMap functionMap constructorMap
 
 loadRef :: ImportState -> Name -> IO (Either String ImportState)
 loadRef st refName = do
@@ -635,7 +665,7 @@ loadRef st refName = do
                   Book importedDefs _ = substitutedImported
                   shouldAddMapping = refName == moduleName && importQualified `M.member` importedDefs
                   newSubstMap = if shouldAddMapping
-                              then M.insert refName importQualified (stSubstMap st)
+                              then insertFunction refName importQualified (stSubstMap st)
                               else stSubstMap st
               pure $ Right st { stVisited = visited', stLoaded = loaded', stBook = merged, stSubstMap = newSubstMap }
         Nothing -> do
