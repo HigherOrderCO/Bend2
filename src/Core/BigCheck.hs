@@ -64,7 +64,7 @@ inferIndirectGo d span book ctx var@(Var k i) term =
     Var x j -> do
       return (Var "_unconstrained" 0)
 
-    Chk x t | equal d book x var -> do
+    Chk x t | eql False d book x var -> do
       return t
     Chk x t -> do
       t1 <- inferIndirectGo d span book ctx var x
@@ -92,7 +92,7 @@ inferIndirectGo d span book ctx var@(Var k i) term =
       t2 <- inferIndirectGo d span book ctx var s
       return $ NatM t1 t2
 
-    App f x | equal d book x var -> do
+    App f x | eql False d book x var -> do
       case infer d (getSpan span f) book ctx f Nothing of
         Done fT -> do
           case cut fT of
@@ -101,7 +101,7 @@ inferIndirectGo d span book ctx var@(Var k i) term =
         _ -> case cut f of
           Lam _ Nothing b -> inferIndirectGo d span book ctx var (b x)
           _ -> inferIndirectGo d span book ctx var f
-    App f x | not $ equal d book f var -> do
+    App f x | not $ eql False d book f var -> do
       case cut f of
         SigM g -> do
           fT <- inferIndirect d span book ctx f (App f x)
@@ -126,17 +126,17 @@ inferIndirectGo d span book ctx var@(Var k i) term =
       t2 <- inferIndirectGo d span book ctx var x
       unifyOrFail t1 t2
 
-    Suc p | equal d book p var -> do
+    Suc p | eql False d book p var -> do
       return $ Nat
     Suc p  -> do
       inferIndirectGo d span book ctx var p
 
-    Con h t | equal d book h var -> do
+    Con h t | eql False d book h var -> do
       tT <- infer d (getSpan span t) book ctx t Nothing
       case cut tT of
         Lst hT -> return $ (Lst hT)
         _      -> return (Var "_unconstrained" 0)
-    Con h t | equal d book t var -> do
+    Con h t | eql False d book t var -> do
       hT <- infer d (getSpan span h) book ctx h Nothing
       return $ (Lst hT)
     Con h t -> do
@@ -155,7 +155,7 @@ inferIndirectGo d span book ctx var@(Var k i) term =
 
     Let k t v f -> do
       case t of
-        Just t | equal d book var t -> do
+        Just t | eql False d book var t -> do
           return Set
         Just t -> do
           t1 <- inferIndirectGo d span book ctx var t
@@ -216,7 +216,7 @@ inferIndirectGo d span book ctx var@(Var k i) term =
     Zer -> do
       return (Var "_unconstrained" 0)
 
-    Lst t | equal d book var t -> do
+    Lst t | eql False d book var t -> do
       return Set
     Lst t  -> do
       inferIndirectGo d span book ctx var t
@@ -256,29 +256,29 @@ inferIndirectGo d span book ctx var@(Var k i) term =
     Val v -> do
       return (Var "_unconstrained" 0)
 
-    Op2 op a b | equal d book var a || equal d book var b -> do
+    Op2 op a b | eql False d book var a || eql False d book var b -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
     Op2 op a b -> do
       t1 <- inferIndirectGo d span book ctx var a
       t2 <- inferIndirectGo d span book ctx var b
       unifyOrFail t1 t2
 
-    Op1 op a | equal d book var a -> do
+    Op1 op a | eql False d book var a -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
     Op1 op a -> do
       inferIndirectGo d span book ctx var a
 
-    Sig a b | equal d book var a && not (equal d book var b) -> do
+    Sig a b | eql False d book var a && not (eql False d book var b) -> do
       t2 <- inferIndirectGo d span book ctx var b
       unifyOrFail Set t2
-    Sig a b | not (equal d book var a) && not (equal d book var b) -> do
+    Sig a b | not (eql False d book var a) && not (eql False d book var b) -> do
       t1 <- inferIndirectGo d span book ctx var a
       t2 <- inferIndirectGo d span book ctx var b
       unifyOrFail t1 t2
     Sig a b -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
 
-    Tup a b | not (equal d book var a || equal d book var b) -> do
+    Tup a b | not (eql False d book var a || eql False d book var b) -> do
       t1 <- inferIndirectGo d span book ctx var a
       t2 <- inferIndirectGo d span book ctx var b
       unifyOrFail t1 t2
@@ -289,17 +289,17 @@ inferIndirectGo d span book ctx var@(Var k i) term =
       t1 <- inferIndirectGo d span book ctx var f
       return $ SigM t1
 
-    All a b | equal d book var a && not (equal d book var b) -> do
+    All a b | eql False d book var a && not (eql False d book var b) -> do
       t2 <- inferIndirectGo d span book ctx var b
       unifyOrFail Set t2
-    All a b | not (equal d book var b) -> do
+    All a b | not (eql False d book var b) -> do
       t1 <- inferIndirectGo d span book ctx var a
       t2 <- inferIndirectGo d span book ctx var b
       unifyOrFail t1 t2
     All a b -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
 
-    Eql t a b | equal d book var a -> do
+    Eql t a b | eql False d book var a -> do
       t1 <- inferIndirectGo d span book ctx var a
       t2 <- inferIndirectGo d span book ctx var b
       t3 <- unifyOrFail t1 t2
@@ -331,21 +331,21 @@ inferIndirectGo d span book ctx var@(Var k i) term =
     Era -> do
       return (Var "_unconstrained" 0)
 
-    Sup l a b | equal d book var l -> do
+    Sup l a b | eql False d book var l -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
     Sup l a b -> do
       t1 <- inferIndirectGo d span book ctx var a
       t2 <- inferIndirectGo d span book ctx var b
       unifyOrFail t1 t2
 
-    SupM l f | equal d book var l -> do
+    SupM l f | eql False d book var l -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
     SupM l f -> do
       t1 <- inferIndirectGo d span book ctx var l
       t2 <- inferIndirectGo d span book ctx var f
       unifyOrFail t1 t2
 
-    Log s x | equal d book var s -> do
+    Log s x | eql False d book var s -> do
       t1 <- inferIndirectGo d span book ctx var x
       unifyOrFail (Lst (Num CHR_T)) t1
     Log s x -> do
@@ -359,7 +359,7 @@ inferIndirectGo d span book ctx var@(Var k i) term =
     Pat ps ms cs -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
 
-    Frk l a b | equal d book var l -> do
+    Frk l a b | eql False d book var l -> do
       t1 <- inferIndirectGo d span book ctx var a
       t2 <- inferIndirectGo d span book ctx var b
       t3 <- unifyOrFail t1 t2
@@ -379,7 +379,7 @@ inferIndirectGo d span book ctx var@(Var k i) term =
 inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> SigM g) x) = 
   -- trace ("- infer go: " ++ show d ++ " " ++ show var ++ " IN " ++ show term ++ "\n- ctx:\n" ++ show ctx) $
   do
-  if equal d book var x
+  if eql False d book var x
   then do
       aT <- infer d span book ctx a Nothing
       let bT = infer d span book ctx b Nothing
@@ -396,10 +396,10 @@ inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> Si
                   Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
             _ -> do
               res <- do
-                -- trace ("- must infer " ++ show b ++ " IN " ++ show (App (appArgsTo 1 g b) a)) $ 
-                -- inferIndirect d span book ctx b (App (appArgsTo 1 g b) a)
+                -- trace ("- must infer " ++ show b ++ " IN " ++ show (App (appInnerArg 1 g b) a)) $ 
+                -- inferIndirect d span book ctx b (App (appInnerArg 1 g b) a)
                 let new_var = Var "$b" d
-                let new_term = appArgsTo 1 g new_var
+                let new_term = appInnerArg 1 g new_var
                 -- trace ("- must infer " ++ show b ++ " IN " ++ show new_term) $ 
                  
                 bTFunc <-
@@ -416,23 +416,23 @@ inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> Si
               return res
   else Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
   where 
-    appArgsTo 0 func arg = App func arg
-    appArgsTo l func arg = case cut func of
-      Lam k mt b  -> Lam k mt (\x -> appArgsTo (l-1) (b x) arg) 
+    appInnerArg 0 func arg = App func arg
+    appInnerArg l func arg = case cut func of
+      Lam k mt b  -> Lam k mt (\x -> appInnerArg (l-1) (b x) arg) 
       EmpM        -> EmpM
-      EqlM f      -> EqlM (appArgsTo (l-1) f arg)
-      UniM f      -> UniM (appArgsTo (l-1) f arg) 
-      BitM f t    -> BitM (appArgsTo (l-1) f arg) (appArgsTo (l-1) t arg)
-      LstM h t    -> LstM (appArgsTo (l-1) h arg) (appArgsTo (l-1) t arg)
-      NatM z s    -> NatM (appArgsTo (l-1) z arg) (appArgsTo (l) s arg)
-      SigM g      -> SigM (appArgsTo (l-1) g arg)
-      EnuM cs def -> EnuM (map (\(s,t) -> (s, appArgsTo (l-1) t arg)) cs) (appArgsTo (l-1) def arg)
-      _ -> error "unreachaboe appArgsTo"
+      EqlM f      -> EqlM (appInnerArg (l-1) f arg)
+      UniM f      -> UniM (appInnerArg (l-1) f arg) 
+      BitM f t    -> BitM (appInnerArg (l-1) f arg) (appInnerArg (l-1) t arg)
+      LstM h t    -> LstM (appInnerArg (l-1) h arg) (appInnerArg (l-1) t arg)
+      NatM z s    -> NatM (appInnerArg (l-1) z arg) (appInnerArg (l) s arg)
+      SigM g      -> SigM (appInnerArg (l-1) g arg)
+      EnuM cs def -> EnuM (map (\(s,t) -> (s, appInnerArg (l-1) t arg)) cs) (appInnerArg (l-1) def arg)
+      _ -> error "unreachaboe appInnerArg"
 
 inferIndirectGo d span book ctx target@(cut -> SigM g) term@(cut -> App (cut -> SigM g') x@(cut -> Var k i)) = 
   -- trace ("- infer go: " ++ show d ++ " " ++ show target ++ " IN " ++ show term) $
   do
-  if equal d book g g'
+  if eql False d book g g'
   then do
     xT <- infer d span book ctx x Nothing
     case cut xT of
@@ -633,7 +633,7 @@ unifyTerms d book t1 t2 = case (t1, t2) of
     return $ Frk l' a' b'
 
   -- If they're equal, return either
-  (t1, t2) | equal d book t1 t2 -> Just t1
+  (t1, t2) | eql False d book t1 t2 -> Just t1
 
   -- Otherwise, conflict
   _ -> Nothing
