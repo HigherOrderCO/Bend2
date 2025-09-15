@@ -106,7 +106,7 @@ processFile file = do
   
   -- debug removed
   -- debug removed
-  putStrLn $ show $ M.keys defs
+  -- putStrLn $ show $ M.keys defs
   putStrLn $ ""
   putStrLn $ show $ getDefn bookAdj "Term/gen/intr" 
   bookChk <- checkBook bookAdj

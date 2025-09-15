@@ -46,7 +46,9 @@ eql True  d book a b =
         False
   where
     identical = eql False d book a b
-    similar   = trace ("FORCING: " ++ show a ++ " AND " ++ show b) $ cmp True  d book (force book a) (force book b)
+    similar   = 
+      -- trace ("FORCING: " ++ show a ++ " AND " ++ show b) $ 
+      cmp True  d book (force book a) (force book b)
 
 cmp :: Bool -> Int -> Book -> Term -> Term -> Bool
 cmp red d book a b =
@@ -55,8 +57,12 @@ cmp red d book a b =
             (Fix ka fa      , b              ) -> eql red d book (fa b) b
             (a              , Fix kb fb      ) -> eql red d book a (fb (Fix kb fb))
             (Ref ka ia      , Ref kb ib      ) -> ka == kb
-            (Ref ka ia      , b              ) -> case getDefn book ka of { Just (_, term, _) -> trace ("DEREFING A: " ++ show ka) $ eql red d book term b ; Nothing -> False }
-            (a              , Ref kb ib      ) -> case getDefn book kb of { Just (_, term, _) -> trace ("DEREFING B: " ++ show kb) $ eql red d book a term ; Nothing -> False }
+            (Ref ka ia      , b              ) -> case getDefn book ka of { Just (_, term, _) ->
+              -- trace ("DEREFING A: " ++ show ka) $ 
+              eql red d book term b ; Nothing -> False }
+            (a              , Ref kb ib      ) -> case getDefn book kb of { Just (_, term, _) -> 
+              -- trace ("DEREFING B: " ++ show kb) $ 
+              eql red d book a term ; Nothing -> False }
             (Var ka ia      , Var kb ib      ) -> ia == ib
             (Sub ta         , Sub tb         ) -> eql red d book ta tb
             (Let ka ta va fa, Let kb tb vb fb) -> eql red d book va vb && eql red (d+1) book (fa (Var ka d)) (fb (Var kb d)) && fromMaybe True (liftA2 (eql red d book) ta tb)
@@ -191,7 +197,7 @@ cmp red d book a b =
             (_              , _              ) -> False
   in
     if
-    trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
+    -- trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)
       res
     then
       -- trace ("- cmp: " ++ show a ++ " == " ++ show b ++ " -> " ++ show res)

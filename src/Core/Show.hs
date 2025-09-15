@@ -430,7 +430,7 @@ instance Show Ctx where
       clean _ [] = []
       clean seen ((n,l):xs)
         | n `S.member` seen = clean seen xs
-        | take 1 n == "_"   = clean seen xs
+        -- | take 1 n == "_"   = clean seen xs
         | otherwise         = (n,l) : clean (S.insert n seen) xs
 
 errorWithSpan :: Span -> String -> a
