@@ -21,8 +21,8 @@ import qualified Data.Map.Strict as M
 
 -- Substitution types and functions
 data SubstMap = SubstMap
-  { functionMap     :: M.Map Name Name  -- For resolving Ref terms (function calls)
-  , constructorMap  :: M.Map Name Name  -- For resolving Sym terms (enum constructors)
+  { functionMap :: M.Map Name Name  -- For resolving Ref terms (function calls)
+  , enumMap     :: M.Map Name Name  -- For resolving Sym terms (enum constructors)
   } deriving (Show, Eq)
 
 -- Helper functions for SubstMap operations
@@ -30,11 +30,11 @@ emptySubstMap :: SubstMap
 emptySubstMap = SubstMap M.empty M.empty
 
 unionSubstMap :: SubstMap -> SubstMap -> SubstMap
-unionSubstMap (SubstMap f1 c1) (SubstMap f2 c2) =
-  SubstMap (M.union f1 f2) (M.union c1 c2)
+unionSubstMap (SubstMap f1 e1) (SubstMap f2 e2) =
+  SubstMap (M.union f1 f2) (M.union e1 e2)
 
 insertFunction :: Name -> Name -> SubstMap -> SubstMap
-insertFunction k v (SubstMap fMap cMap) = SubstMap (M.insert k v fMap) cMap
+insertFunction k v (SubstMap fMap eMap) = SubstMap (M.insert k v fMap) eMap
 
 
 -- | Substitute aliases in enum names
@@ -46,20 +46,20 @@ substituteInEnumName subst name =
   -- If the name is already a fully qualified enum (Module::Type::Enum), don't substitute
   -- This prevents incorrect substitution when module name conflicts with function names
   let parts = splitEnumName name
-      cMap = constructorMap subst
+      eMap = enumMap subst
       -- A fully qualified enum has at least 3 parts and contains ::
   in if length parts >= 3 && "::" `isInfixOf` name
   then name
   else case parts of
     [single] ->
       -- No :: found, check if the whole name needs substitution
-      case M.lookup single cMap of
+      case M.lookup single eMap of
         Just replacement -> replacement
         Nothing -> single
     [typeName, enumName] ->
       -- Two parts: could be Type::Enum
       -- Check if typeName is in substitution map (from selective import)
-      case M.lookup typeName cMap of
+      case M.lookup typeName eMap of
         Just replacement ->
           -- replacement is like "B::B" for "from B import B"
           -- Append the enum name
@@ -70,7 +70,7 @@ substituteInEnumName subst name =
     parts@(prefix:typeName:rest) ->
       -- Three or more parts: Module::Type::Enum or similar
       -- Check if prefix is an alias that needs substitution
-      case M.lookup prefix cMap of
+      case M.lookup prefix eMap of
         Just replacement ->
           -- replacement is like "B::B" for "import B as some"
           -- We need to check if prefix::typeName together form the qualified type
@@ -88,7 +88,7 @@ substituteInEnumName subst name =
         Nothing -> 
           -- Check if prefix::typeName together might be in the substitution map
           let prefixWithType = prefix ++ "::" ++ typeName
-          in case M.lookup prefixWithType cMap of
+          in case M.lookup prefixWithType eMap of
             Just replacement ->
               -- Found a match for the combined prefix::type
               if null rest
@@ -567,22 +567,22 @@ buildLocalSubstMap currentFile (Book defs _) =
   let filePrefix = takeBaseName' currentFile ++ "::"
       localDefs = M.filterWithKey (\k _ -> filePrefix `isPrefixOf` k) defs
 
-      -- Separate function mappings from constructor mappings
+      -- Separate function mappings from enum mappings
       extractMappings fqn defn =
         let withoutFilePrefix = drop (length filePrefix) fqn
             parts = splitOnDoubleColon withoutFilePrefix
-            (functionMappings, constructorMappings) = case parts of
+            (functionMappings, enumMappings) = case parts of
               -- Regular function: ["add"] -> "add" -> "examples/main::add"
               [name] -> ([(name, fqn)], [])
               -- Enum constructor: ["WTreeTag", "WLeaf"] ->
-              -- Function map gets nothing, constructor map gets both qualified and unqualified
+              -- Function map gets nothing, enum map gets both qualified and unqualified
               [typeName, enumName] ->
                 ([], [(withoutFilePrefix, fqn), (enumName, fqn)])
               -- Fallback: assume it's a function
               _ -> ([(withoutFilePrefix, fqn)], [])
             -- Extract additional enum names from type definitions
-            enumMappings = extractEnumsFromDefn defn
-        in (functionMappings, constructorMappings ++ enumMappings)
+            additionalEnumMappings = extractEnumsFromDefn defn
+        in (functionMappings, enumMappings ++ additionalEnumMappings)
 
       -- Extract enum names from a definition's term
       extractEnumsFromDefn :: Defn -> [(String, String)]
@@ -624,14 +624,14 @@ buildLocalSubstMap currentFile (Book defs _) =
 
       -- Collect all mappings and separate them
       allMappings = map (\(fqn, defn) -> extractMappings fqn defn) (M.toList localDefs)
-      (functionMappings, constructorMappings) = foldl
-        (\(fs, cs) (f, c) -> (fs ++ f, cs ++ c))
+      (functionMappings, enumMappings) = foldl
+        (\(fs, es) (f, e) -> (fs ++ f, es ++ e))
         ([], [])
         allMappings
 
       functionMap = M.fromList functionMappings
-      constructorMap = M.fromList constructorMappings
-  in SubstMap functionMap constructorMap
+      enumMap = M.fromList enumMappings
+  in SubstMap functionMap enumMap
 
 loadRef :: ImportState -> Name -> IO (Either String ImportState)
 loadRef st refName = do
