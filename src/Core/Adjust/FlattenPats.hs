@@ -138,11 +138,20 @@ flattenPat d span book pat =
         moves    = ms
         -- moves   = ms ++ map (\ (s,i) -> (patOf (d+i) s, s)) (zip ss [0..])
         picks   = Pat (fs   ++ ss) ms ps
-        drops   = Pat (var d : ss) ms ds
+        drops   = case (ct, ds) of
+          -- Check for incomplete patterns on native types
+          (Con _ _, []) -> errorWithSpan span "Incomplete pattern match: missing case for []"
+          (Nil, [])     -> errorWithSpan span "Incomplete pattern match: missing case for _<>_"
+          (Bt0, [])     -> errorWithSpan span "Incomplete pattern match: missing case for True"
+          (Bt1, [])     -> errorWithSpan span "Incomplete pattern match: missing case for False"
+          (Suc _, [])   -> errorWithSpan span "Incomplete pattern match: missing case for 0n"
+          (Zer, [])     -> errorWithSpan span "Incomplete pattern match: missing case for 1n+_"
+          -- For other cases (Sym, Tup, etc.) or non-empty ds, proceed normally
+          _             -> Pat (var d : ss) ms ds
     flattenPatGo d book pat@(Pat [] ms (([],rhs):cs)) =
       flattenPats d span book rhs
-    flattenPatGo d book pat@(Pat (s:_) _ []) =
-      Loc span (App EmpM s)  -- Empty pattern match becomes EmpM with original location
+    flattenPatGo d book pat@(Pat (_:_) _ []) =
+      pat
     flattenPatGo d book (Loc l t) =
       Loc l (flattenPat d span book t)
     flattenPatGo d book pat =

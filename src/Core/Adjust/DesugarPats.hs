@@ -241,7 +241,10 @@ match d span x ms (([(cut -> Var k i)], body) : _) =
 -- -----------
 -- λ{}
 match d span x ms [] =
-  apps d (map snd ms) (App EmpM x)
+  let empMatch = case span of
+        Span (0,0) (0,0) _ _ -> EmpM  -- Keep noSpan as raw EmpM
+        _                    -> Loc span EmpM  -- Preserve location for error reporting
+  in apps d (map snd ms) (App empMatch x)
 
 -- Invalid pattern
 -- match d span s ms cs = error $ "match - invalid pattern: " ++ show (d, s, ms, cs) ++ "\n" ++ show span

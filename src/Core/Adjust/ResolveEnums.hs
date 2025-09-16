@@ -32,17 +32,25 @@ extractEnums (Book defs _) =
   M.foldrWithKey extractFromDefn M.empty defs
   where
     extractFromDefn :: Name -> Defn -> EnumMap -> EnumMap
-    extractFromDefn typeName (_, term, _) emap = 
+    extractFromDefn typeName (_, term, _) emap =
       case term of
         -- Look for Enum type definitions
-        Enu enums -> 
+        Enu enums ->
           foldr (addEnum typeName) emap enums
         -- Type definitions are often Sig types with Enu as the first component
         Sig (Enu enums) _ ->
           foldr (addEnum typeName) emap enums
         -- Also check in Loc wrappers
-        Loc _ innerTerm -> 
+        Loc _ innerTerm ->
           extractFromDefn typeName (True, innerTerm, Set) emap
+        -- Check in All (forall) types for generic types
+        All _ body ->
+          extractFromDefn typeName (True, body, Set) emap
+        -- Check in Lam for parameterized types like Result<F,D>
+        Lam _ _ body ->
+          -- The body is a function, we need to apply it to extract the actual type
+          -- For now, let's just explore the body recursively
+          extractFromDefn typeName (True, body (Var "dummy" 0), Set) emap
         _ -> emap
     
     addEnum :: Name -> String -> EnumMap -> EnumMap
@@ -74,9 +82,9 @@ resolveEnum span emap enumName =
     case M.lookup enumName emap of
       Nothing -> Done enumName  -- Not a known enum, leave as-is
       Just [fqn] -> Done fqn    -- Unique, auto-prefix
-      Just fqns -> 
+      Just fqns ->
         -- Ambiguous Enum
-        Fail $ AmbiguousEnum span (Ctx []) enumName fqns 
+        Fail $ AmbiguousEnum span (Ctx []) enumName fqns
                  (Just $ "Please use one of: " ++ intercalate ", " (map ("&" ++) fqns))
 
 -- | Resolve enums in a term

@@ -38,7 +38,7 @@ insertFunction k v (SubstMap fMap eMap) = SubstMap (M.insert k v fMap) eMap
 
 
 -- | Substitute aliases in enum names
--- For example: "some::B::X" with {"some" -> "B::B"} becomes "B::B::X"  
+-- For example: "some::B::X" with {"some" -> "B::B"} becomes "B::B::X"
 -- Also handles: "B::X" with {"B" -> "B::B"} becomes "B::B::X"
 -- The substitution maps module aliases and imported names to fully qualified names
 substituteInEnumName :: SubstMap -> String -> String
@@ -49,59 +49,59 @@ substituteInEnumName subst name =
       eMap = enumMap subst
       -- A fully qualified enum has at least 3 parts and contains ::
   in if length parts >= 3 && "::" `isInfixOf` name
-  then name
-  else case parts of
-    [single] ->
-      -- No :: found, check if the whole name needs substitution
-      case M.lookup single eMap of
-        Just replacement -> replacement
-        Nothing -> single
-    [typeName, enumName] ->
-      -- Two parts: could be Type::Enum
-      -- Check if typeName is in substitution map (from selective import)
-      case M.lookup typeName eMap of
-        Just replacement ->
-          -- replacement is like "B::B" for "from B import B"
-          -- Append the enum name
-          replacement ++ "::" ++ enumName
-        Nothing -> 
-          -- No substitution needed, keep original
-          name
-    parts@(prefix:typeName:rest) ->
-      -- Three or more parts: Module::Type::Enum or similar
-      -- Check if prefix is an alias that needs substitution
-      case M.lookup prefix eMap of
-        Just replacement ->
-          -- replacement is like "B::B" for "import B as some"
-          -- We need to check if prefix::typeName together form the qualified type
-          -- If replacement already contains the type name, use it directly
-          if "::" `isInfixOf` replacement && not ("::" `isSuffixOf` replacement)
-          then
-            -- replacement is already a qualified name like "B::B"
-            -- Just append the enum name
-            if null rest
-            then replacement  -- No enum, just the type
-            else replacement ++ "::" ++ intercalate "::" rest  -- Add enum
-          else
-            -- replacement is just a module name, build the full path
-            intercalate "::" (replacement : typeName : rest)
-        Nothing -> 
-          -- Check if prefix::typeName together might be in the substitution map
-          let prefixWithType = prefix ++ "::" ++ typeName
-          in case M.lookup prefixWithType eMap of
+      then name
+      else case parts of
+        [single] ->
+          -- No :: found, check if the whole name needs substitution
+          case M.lookup single eMap of
+            Just replacement -> replacement
+            Nothing -> single
+        [typeName, enumName] ->
+          -- Two parts: could be Type::Enum
+          -- Check if typeName is in substitution map (from selective import)
+          case M.lookup typeName eMap of
             Just replacement ->
-              -- Found a match for the combined prefix::type
-              if null rest
-              then replacement
-              else replacement ++ "::" ++ intercalate "::" rest
+              -- replacement is like "B::B" for "from B import B"
+              -- Append the enum name
+              replacement ++ "::" ++ enumName
             Nothing ->
               -- No substitution needed, keep original
               name
-    _ -> name
+        parts@(prefix:typeName:rest) ->
+          -- Three or more parts: Module::Type::Enum or similar
+          -- Check if prefix is an alias that needs substitution
+          case M.lookup prefix eMap of
+            Just replacement ->
+              -- replacement is like "B::B" for "import B as some"
+              -- We need to check if prefix::typeName together form the qualified type
+              -- If replacement already contains the type name, use it directly
+              if "::" `isInfixOf` replacement && not ("::" `isSuffixOf` replacement)
+              then
+                -- replacement is already a qualified name like "B::B"
+                -- Just append the enum name
+                if null rest
+                then replacement  -- No enum, just the type
+                else replacement ++ "::" ++ intercalate "::" rest  -- Add enum
+              else
+                -- replacement is just a module name, build the full path
+                intercalate "::" (replacement : typeName : rest)
+            Nothing ->
+              -- Check if prefix::typeName together might be in the substitution map
+              let prefixWithType = prefix ++ "::" ++ typeName
+              in case M.lookup prefixWithType eMap of
+                Just replacement ->
+                  -- Found a match for the combined prefix::type
+                  if null rest
+                  then replacement
+                  else replacement ++ "::" ++ intercalate "::" rest
+                Nothing ->
+                  -- No substitution needed, keep original
+                  name
+        _ -> name
   where
     -- Split on "::" to get components
     splitEnumName :: String -> [String]
-    splitEnumName s = 
+    splitEnumName s =
       case break (== ':') s of
         (part, ':':':':rest) -> part : splitEnumName rest
         (part, "") -> [part]
@@ -630,7 +630,17 @@ buildLocalSubstMap currentFile (Book defs _) =
         allMappings
 
       functionMap = M.fromList functionMappings
-      enumMap = M.fromList enumMappings
+
+      -- Build enum map, but exclude ambiguous enum names
+      -- Group by enum name to detect duplicates
+      enumGroups = foldl (\acc (name, fqn) ->
+                           M.insertWith (++) name [fqn] acc)
+                         M.empty
+                         enumMappings
+      -- Only keep unambiguous enums (those with exactly one FQN)
+      unambiguousEnums = [(name, head fqns) | (name, fqns) <- M.toList enumGroups, length fqns == 1]
+      enumMap = M.fromList unambiguousEnums
+
   in SubstMap functionMap enumMap
 
 loadRef :: ImportState -> Name -> IO (Either String ImportState)
