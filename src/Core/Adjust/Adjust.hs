@@ -73,46 +73,40 @@ import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ReduceEtas
 import Core.Adjust.SplitMatch
+import Core.Adjust.ResolveEnums
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
 import Core.Show
 import Core.Type
 import Core.WHNF
-import Core.BigCheck
 
 -- | Adjusts a single term, simplifying pattern matching and other constructs.
 -- It uses a book of already-adjusted definitions for context during flattening.
 -- Note: This does NOT check for free variables, as it may be called during
 -- book adjustment where recursive references aren't available yet.
---
-printErr :: Result Term -> String
-printErr res = case res of
-        Done e -> ""
-        Fail e -> "\x1b[31m✗ " ++ "type error" ++ "\x1b[0m" ++ "\n" ++ show e
-
-adjust :: Book -> Term -> (Maybe Term) -> Term
-adjust book term typ =
-  trace ("nfrk: " ++ show nfrk) $
-  trace ("chec: " ++ show chec) $
-  trace ("splt: " ++ show splt) $
-  trace ("done: " ++ show done) $
+-- When called from adjustBook, enums have already been resolved at the book level.
+-- When called standalone (e.g., from parseTerm), enums are resolved here.
+adjust :: Book -> Term -> Term
+adjust book term =
+  -- trace ("done: " ++ show done) $
   done
   where
-    flat = flattenPats 0 noSpan book term
+    -- First resolve enums to their FQNs (needed for standalone use)
+    resolved = case resolveEnumsInTerm (extractEnums book) term of
+      Done t -> t
+      Fail e -> error $ show e
+    flat = flattenPats 0 noSpan book resolved
     npat = desugarPats 0 noSpan flat
     nfrk = desugarFrks book 0 npat
     hoas = bind nfrk
-    chec = maybe hoas (\t -> case check 0 noSpan book (Ctx []) hoas t of Done x -> x; res -> error $ printErr res) typ
-    splt = split 0 0 chec
-    done = reduceEtas 0 splt
-    -- done = reduceEtas 0 hoas
+    done = reduceEtas 0 hoas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
-adjustWithPats :: Book -> Term -> (Maybe Term) -> Term
-adjustWithPats book term typ =
+adjustWithPats :: Book -> Term -> Term
+adjustWithPats book term =
   ret
-  where 
+  where
     ret = bind (desugarFrks book 0 (flattenPats 0 noSpan book term))
 
 -- The state for the adjustment process. It holds:
@@ -128,13 +122,21 @@ type AdjustState = (Book, S.Set Name)
 -- After adjusting all definitions, it checks for free variables.
 adjustBook :: Book -> Book
 adjustBook book@(Book defs names) =
-  let adjustedBook = fst $ execState (mapM_ (adjustDef book S.empty adjust) (M.keys defs)) (Book M.empty names, S.empty)
+  -- First resolve all enums in the entire book
+  let resolvedBook = case resolveEnumsInBook book of
+        Done b -> b
+        Fail e -> error $ show e
+      adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjust) (M.keys defs)) (Book M.empty names, S.empty)
   in adjustedBook -- checkFreeVarsInBook disabled: not in main branch
 
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
 adjustBookWithPats :: Book -> Book
 adjustBookWithPats book@(Book defs names) =
-  let adjustedBook = fst $ execState (mapM_ (adjustDef book S.empty adjustWithPats) (M.keys defs)) (Book M.empty names, S.empty)
+  -- First resolve all enums in the entire book
+  let resolvedBook = case resolveEnumsInBook book of
+        Done b -> b
+        Fail e -> error $ show e
+      adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustWithPats) (M.keys defs)) (Book M.empty names, S.empty)
   in adjustedBook -- checkFreeVarsInBook disabled: not in main branch
 
 -- | Checks all definitions in a book for free variables.
@@ -154,7 +156,7 @@ checkFreeVarsInBook book@(Book defs names) =
 
 -- | The recursive worker function that adjusts a single definition.
 -- It takes a set of names currently in the recursion stack to detect cycles.
-adjustDef :: Book -> S.Set Name -> (Book -> Term -> (Maybe Term) -> Term) -> Name -> State AdjustState ()
+adjustDef :: Book -> S.Set Name -> (Book -> Term -> Term) -> Name -> State AdjustState ()
 adjustDef book visiting adjustFn name = do
   (_, adjustedSet) <- get
 
@@ -188,8 +190,8 @@ adjustDef book visiting adjustFn name = do
               _ -> Nothing
         let bookWithADTLabels = Book (maybe defs (\typ -> M.insert "$enum" (False,Sig typ Set, Set) defs) termModelsADT) n
 
-        let adjType = adjustFn partialAdjBook typ  (Just Set)
-        let adjTerm = adjustFn bookWithADTLabels term (Just adjType) -- adjType is now bound
+        let adjType = adjustFn partialAdjBook typ
+        let adjTerm = adjustFn bookWithADTLabels term -- adjType is now bound
 
         -- 4. Update the state with the newly adjusted definition.
         -- The name is added to the `adjustedSet` to mark it as complete.

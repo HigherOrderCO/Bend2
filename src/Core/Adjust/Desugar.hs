@@ -17,6 +17,7 @@ import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ReduceEtas
+import Core.Adjust.ResolveEnums
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -33,6 +34,7 @@ import Core.BigCheck
 desugar :: Book -> Term -> Term
 desugar book term =
   -- trace ("term: " ++ show term) $
+  -- trace ("reso: " ++ show resolved) $
   -- trace ("flat: " ++ show flat) $
   -- trace ("npat: " ++ show npat) $
   -- trace ("nfrk: " ++ show nfrk) $
@@ -41,7 +43,11 @@ desugar book term =
   -- hoas 
   etas
   where
-    flat = flattenPats 0 noSpan book term
+    -- First resolve enums to their FQNs (needed for standalone use)
+    resolved = case resolveEnumsInTerm (extractEnums book) term of
+      Done t -> t
+      Fail e -> error $ show e
+    flat = flattenPats 0 noSpan book resolved
     npat = desugarPats 0 noSpan flat
     nfrk = desugarFrks book 0 npat
     hoas = bind nfrk
@@ -67,8 +73,14 @@ type DesugarState = (Book, S.Set Name)
 -- After desugaring all definitions, it checks for free variables.
 desugarBook :: Book -> Book
 desugarBook book@(Book defs names) =
-  let desugaredBook = fst $ execState (mapM_ (desugarDef book S.empty desugar) (M.keys defs)) (Book M.empty names, S.empty)
+  -- First resolve all enums in the entire book
+  let resolvedBook = case resolveEnumsInBook book of
+        Done b -> b
+        Fail e -> error $ show e
+      desugaredBook = fst $ execState (mapM_ (desugarDef resolvedBook S.empty desugar) (M.keys defs)) (Book M.empty names, S.empty)
   in desugaredBook -- checkFreeVarsInBook disabled: not in main branch
+  -- let desugaredBook = fst $ execState (mapM_ (desugarDef book S.empty desugar) (M.keys defs)) (Book M.empty names, S.empty)
+  -- in desugaredBook -- checkFreeVarsInBook disabled: not in main branch
 
 -- | Desugars the entire book, simplifying patterns but without removing Pat terms.
 desugarBookWithPats :: Book -> Book

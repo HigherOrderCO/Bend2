@@ -7,9 +7,10 @@ module Core.Parse.Book
   ) where
 
 import Control.Monad (when)
-import Control.Monad.State.Strict (State, get, put, evalState)
-import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Control.Monad.State.Strict (State, get, put, evalState, runState)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isAlphaNum)
 import Data.List (intercalate)
+import Data.List.Split (splitOn)
 import Data.Void
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -37,9 +38,10 @@ parseDef :: Parser (Name, Defn)
 parseDef = do
   _ <- symbol "def"
   f <- name
+  qualifiedName <- qualifyName f
   choice
-    [ parseDefFunction f
-    , parseDefSimple f ]
+    [ parseDefFunction qualifiedName
+    , parseDefSimple qualifiedName ]
 
 -- | Syntax: def name : Type = term
 parseDefSimple :: Name -> Parser (Name, Defn)
@@ -81,23 +83,47 @@ parseModulePath = do
   skip -- consume whitespace after path
   return $ intercalate "/" (firstPart : restParts)
 
--- | Add an import mapping to the parser state
-addImportMapping :: String -> String -> Parser ()
-addImportMapping alias path = do
+addImport :: Import -> Parser ()
+addImport imp = do
   st <- get
-  let aliasKey = alias ++ "/"
-      pathValue = path ++ "/"
-      newImports = M.insert aliasKey pathValue (imports st)
-  put st { imports = newImports }
+  put st { parsedImports = imp : parsedImports st }
 
--- | Syntax: import Path/To/Lib as Lib
+-- | Syntax: import module [as alias] | from module import name1, name2
 parseImport :: Parser ()
-parseImport = do
-  _ <- symbol "import"
+parseImport = choice
+  [ try parseFromImport         -- from module import name1, name2
+  , parseModuleImport           -- import module [as alias]
+  ]
+
+-- | Parse: from module_path import name1, name2, ...
+parseFromImport :: Parser ()
+parseFromImport = do
+  _ <- symbol "from"
   path <- parseModulePath
-  _ <- symbol "as"
-  alias <- name
-  addImportMapping alias path
+  _ <- symbol "import"
+  -- Parse either: name1 [as alias1], name2 [as alias2], ...  or  (name1 [as alias1], name2 [as alias2], ...)
+  nameAliases <- choice
+    [ parens (sepBy1 parseNameWithAlias (symbol ","))
+    , sepBy1 parseNameWithAlias (symbol ",")
+    ]
+  addImport (SelectiveImport path nameAliases)
+
+-- | Parse: name [as alias]
+parseNameWithAlias :: Parser (String, Maybe String)
+parseNameWithAlias = do
+  n <- name
+  maybeAlias <- optional (symbol "as" *> name)
+  return (n, maybeAlias)
+
+-- | Parse: import module_path [as alias]
+parseModuleImport :: Parser ()
+parseModuleImport = do
+  _ <- symbol "import"  
+  path <- parseModulePath
+  -- Optional alias
+  maybeAlias <- optional (symbol "as" *> name)
+  addImport (ModuleImport path maybeAlias)
+
 
 -- | Syntax: import statements followed by definitions
 parseBook :: Parser Book
@@ -114,12 +140,13 @@ parseType :: Parser (Name, Defn)
 parseType = label "datatype declaration" $ do
   _       <- symbol "type"
   tName   <- name
+  qualifiedTypeName <- qualifyName tName
   params  <- option [] $ angles (sepEndBy (parseArg True) (symbol ","))
   indices <- option [] $ parens (sepEndBy (parseArg False) (symbol ","))
   args    <- return $ params ++ indices
   retTy   <- option Set (symbol "->" *> parseTerm)
   _       <- symbol ":"
-  cases   <- many parseTypeCase
+  cases   <- many (parseTypeCase qualifiedTypeName)
   when (null cases) $ fail "datatype must have at least one constructor case"
   let tags = map fst cases
       mkFields :: [(Name, Term)] -> Term
@@ -133,22 +160,24 @@ parseType = label "datatype declaration" $ do
       nest (n, ty) (tyAcc, bdAcc) = (All ty  (Lam n (Just ty) (\_ -> tyAcc)) , Lam n (Just ty) (\_ -> bdAcc))
       (fullTy, fullBody) = foldr nest (retTy, body0) args
       term = fullBody
-  return (tName, (True, term, fullTy))
+  return (qualifiedTypeName, (True, term, fullTy))
 
 -- | Syntax: case @Tag: field1: Type1 field2: Type2
-parseTypeCase :: Parser (String, [(Name, Term)])
-parseTypeCase = label "datatype constructor" $ do
+parseTypeCase :: String -> Parser (String, [(Name, Term)])
+parseTypeCase typeName = label "datatype enum" $ do
   _    <- symbol "case"
   _    <- symbol "@"
   tag  <- some (satisfy isNameChar)
   _    <- symbol ":"
   flds <- many parseField
-  return (tag, flds)
+  -- Return the fully qualified enum name
+  let qualifiedTag = typeName ++ "::" ++ tag
+  return (qualifiedTag, flds)
   where
     -- Parse a field declaration  name : Type
     parseField :: Parser (Name, Term)
     parseField = do
-      -- Stop if next token is 'case' (start of next constructor) or 'def'/'data'
+      -- Stop if next token is 'case' (start of next enum) or 'def'/'data'
       notFollowedBy (symbol "case")
       n <- try $ do
         n <- name
@@ -172,8 +201,9 @@ parseTry = do
   (sp, (f, x, t)) <- withSpan $ do
     _ <- symbol "try"
     f <- name
-    (x, t) <- choice [parseTryFunction f, parseTrySimple f]
-    return (f, x, t)
+    qualifiedName <- qualifyName f
+    (x, t) <- choice [parseTryFunction qualifiedName, parseTrySimple qualifiedName]
+    return (qualifiedName, x, t)
   return (f, (False, Loc sp x, t))
 
 parseTrySimple :: Name -> Parser (Term, Type)
@@ -218,13 +248,12 @@ parseAssert = do
 
 -- | Main entry points
 
--- | Parse a book from a string, returning an error message on failure
-doParseBook :: FilePath -> String -> Either String Book
+-- | Parse a book from a string, returning both the book and the import information
+doParseBook :: FilePath -> String -> Either String (Book, ParserState)
 doParseBook file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0) of
-    Left err  -> Left (formatError input err)
-    Right res -> Right res
-      -- in Right (trace (show book) book)
+  case runState (runParserT p file input) (ParserState True input [] M.empty [] 0 file) of
+    (Left err, _)    -> Left (formatError input err)
+    (Right res, st)  -> Right (res, st)
   where
     p = do
       skip
@@ -238,4 +267,4 @@ doReadBook :: String -> Book
 doReadBook input =
   case doParseBook "<input>" input of
     Left err  -> error err
-    Right res -> res
+    Right (book, _) -> book

@@ -13,6 +13,7 @@ module Core.Parse.Term
 import Control.Monad (when, replicateM, void, guard)
 import Control.Monad.State.Strict (State, get, put, evalState)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.List (intercalate)
 import Data.Void
 import Data.Word (Word64)
 import Text.Megaparsec
@@ -160,7 +161,12 @@ parseTermBefore op = do
 parseVar :: Parser Term
 parseVar = label "variable" $ do
   n <- name
-  case n of
+  -- Check for qualified reference (module::name)
+  qualified <- option n $ try $ do
+    _ <- symbol "::"
+    qualifiedName <- name
+    return $ n ++ "::" ++ qualifiedName
+  case qualified of
     "Set"         -> return Set
     "Empty"       -> return Emp
     "Unit"        -> return Uni
@@ -176,7 +182,7 @@ parseVar = label "variable" $ do
     "CHAR_TO_U64" -> return (Pri CHAR_TO_U64)
     "HVM_INC"     -> return (Pri HVM_INC)
     "HVM_DEC"     -> return (Pri HVM_DEC)
-    _             -> return $ Var n 0
+    _             -> return $ Var qualified 0
 
 -- | Syntax: ()
 parseOne :: Parser Term
@@ -301,6 +307,10 @@ parseSym = label "enum symbol / constructor" $ try $ do
     , parseOldSymbol    -- @tag -> (&tag,())
     ]
   where
+    -- Parse constructor name with optional FQN (e.g., Module::Type::Ctor)
+    parseConstructorName = do
+      parts <- sepBy1 (some (satisfy isNameChar)) (string "::")
+      return $ intercalate "::" parts
     -- Parse @tag{...} constructor syntax with precise location propagation
     -- We capture two spans:
     -- - spTag: the span of "@tag" (for the &tag symbol)
@@ -309,8 +319,8 @@ parseSym = label "enum symbol / constructor" $ try $ do
       (spCtor, (spTag, tag, fields)) <- withSpan $ do
         (spTag, tag) <- withSpan $ do
           _ <- symbol "@"
-          n <- some (satisfy isNameChar)
-          pure n
+          -- Parse constructor name, potentially with :: for FQN
+          parseConstructorName
         _ <- symbol "{"
         fs <- sepEndBy parseTerm (symbol ",")
         _ <- symbol "}"
@@ -330,7 +340,8 @@ parseSym = label "enum symbol / constructor" $ try $ do
       (spTag, tag) <- withSpan $ do
         _ <- symbol "@"
         notFollowedBy (char '{')  -- make sure we are not @{...} or @tag{...}
-        lexeme $ some (satisfy isNameChar)
+        -- Parse constructor name, potentially with :: for FQN
+        lexeme $ parseConstructorName
       -- Desugar @Foo to (&Foo,()) and attach the span to both the symbol and the unit
       let sym = Loc spTag (Sym tag)
       let one = Loc spTag One
@@ -1153,9 +1164,9 @@ parseSupMCases scrut = do
 -- | Parse a term from a string, returning an error message on failure
 doParseTerm :: FilePath -> String -> Either String Term
 doParseTerm file input =
-  case evalState (runParserT p file input) (ParserState True input [] M.empty 0) of
+  case evalState (runParserT p file input) (ParserState True input [] M.empty [] 0 file) of
     Left err  -> Left (formatError input err)
-    Right res -> Right (adjust (Book M.empty []) res Nothing)
+    Right res -> Right (adjust (Book M.empty []) res)
   where
     p = do
       skip

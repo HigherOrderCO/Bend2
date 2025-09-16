@@ -5,6 +5,7 @@ module Core.Parse.Parse
   ( -- * Types
     Parser
   , ParserState(..)
+  , Import(..)
 
   -- * Basic parsers
   , skip
@@ -38,11 +39,15 @@ module Core.Parse.Parse
   
   -- * Error recovery
   , expectBody
+  
+  -- * FQN generation
+  , qualifyName
   ) where
 
 import Control.Monad (when, replicateM, void, guard)
 import Control.Monad.State.Strict (State, get, put, evalState)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isSpace)
+import Data.List (isSuffixOf)
 import Data.Void
 import Debug.Trace
 import Highlight (highlightError)
@@ -59,12 +64,20 @@ import Core.Type
 import qualified Core.Parse.WithSpan as WithSpan
 
 -- Parser state
+-- | Represents different kinds of imports parsed from syntax
+data Import 
+  = ModuleImport String (Maybe String)           -- ^ import module [as alias] 
+  | SelectiveImport String [(String, Maybe String)]  -- ^ from module import name1 [as alias1], name2 [as alias2], ...
+  deriving (Show, Eq)
+
 data ParserState = ParserState
   { tight         :: Bool                  -- ^ tracks whether previous token ended with no trailing space
   , source        :: String                -- ^ original file source, for error reporting
   , blocked       :: [String]              -- ^ list of blocked operators
-  , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/"
+  , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/" (legacy, for compatibility)
+  , parsedImports :: [Import]              -- ^ imports parsed from syntax, to be resolved later
   , assertCounter :: Int                   -- ^ counter for generating unique assert names (E0, E1, E2...)
+  , fileName      :: FilePath              -- ^ current file being parsed, for FQN generation
   }
 
 type Parser = ParsecT Void String (Control.Monad.State.Strict.State ParserState)
@@ -209,3 +222,22 @@ formatError input bundle = do
         then "\nAt end of file.\n"
         else "\nAt line " ++ show lin ++ ", column " ++ show col ++ ":\n" ++ src
   "\nPARSE_ERROR\n" ++ msg ++ cod
+
+-- | Generate a fully qualified name by prefixing with current file
+qualifyName :: String -> Parser String
+qualifyName defName = do
+  st <- get
+  let filePrefix = toModulePath (fileName st)
+  return $ filePrefix ++ "::" ++ defName
+  where
+    -- Convert file path to module path (preserve directory structure, remove .bend extension and /_ suffix)
+    toModulePath :: FilePath -> String
+    toModulePath path = 
+      let withoutBend = if ".bend" `isSuffixOf` path
+                        then take (length path - 5) path  -- Remove .bend extension
+                        else path
+          -- Also remove /_ suffix if present (for files like Term/_.bend)
+          withoutUnderscore = if "/_" `isSuffixOf` withoutBend
+                              then take (length withoutBend - 2) withoutBend  -- Remove /_
+                              else withoutBend
+      in withoutUnderscore

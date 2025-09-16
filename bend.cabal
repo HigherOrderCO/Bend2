@@ -39,6 +39,7 @@ library
                       Core.Adjust.Desugar,
                       Core.Adjust.Elaborate,
                       Core.Adjust.Annotate,
+                      Core.Adjust.ResolveEnums,
                       Core.FreeVars,
                       Core.Import,
                       Core.Parse.Parse,
@@ -51,7 +52,9 @@ library
                       Core.WHNF,
                       Core.BigWHNF,
                       Target.HVM,
-                      Target.JavaScript
+                      Target.Haskell,
+                      Target.JavaScript,
+                      Package.Index
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
                       containers == 0.7,
@@ -68,7 +71,13 @@ library
                       file-embed,
                       HVM,
                       process,
-                      vector
+                      vector,
+                      cryptonite,
+                      memory,
+                      temporary,
+                      unix,
+                      zip-archive,
+                      split
     hs-source-dirs:   src
     default-language: GHC2024
 

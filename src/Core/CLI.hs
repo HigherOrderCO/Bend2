@@ -2,8 +2,10 @@ module Core.CLI
   ( parseFile
   , runMain
   , processFile
+  , processFileToCore
   , processFileToJS
   , processFileToHVM
+  , processFileToHS
   , listDependencies
   , getGenDeps
   ) where
@@ -26,15 +28,16 @@ import Core.Adjust.Elaborate (elaborateBook)
 import Core.Bind
 import Core.Check
 import Core.Deps
-import Core.Import (autoImport)
+import Core.Import (autoImport, autoImportWithExplicit)
 import Core.Parse.Book (doParseBook)
+import Core.Parse.Parse (ParserState(..))
 import Core.Type
-import Core.Show
+import Core.Show (showTerm)
 import Core.WHNF
--- debug import removed
 
 import qualified Target.JavaScript as JS
 import qualified Target.HVM as HVM
+import qualified Target.Haskell as HS
 
 -- Type-check all definitions in a book
 checkBook :: Book -> IO Book
@@ -69,21 +72,24 @@ parseFile file = do
     Left err -> do
       hPutStrLn stderr $ err
       exitFailure
-    Right book -> do
-      -- Auto-import unbound references
-      autoImportedBook <- autoImport (takeDirectory file) book
+    Right (book, parserState) -> do
+      -- Auto-import unbound references with explicit import information
+      autoImportedBook <- autoImportWithExplicit file book parserState
       return autoImportedBook
   where
     takeDirectory path = reverse . dropWhile (/= '/') . reverse $ path
 
 -- | Run the main function from a book
-runMain :: Book -> IO ()
-runMain book = do
-  case getDefn book "main" of
+runMain :: FilePath -> Book -> IO ()
+runMain filePath book = do
+  -- Extract module name from file path (same logic as takeBaseName')
+  let moduleName = takeBaseName' filePath
+      mainFQN = moduleName ++ "::main"
+  case getDefn book mainFQN of
     Nothing -> do
       return ()
     Just _ -> do
-      let mainCall = Ref "main" 1
+      let mainCall = Ref mainFQN 1
       case infer 0 noSpan book (Ctx []) mainCall of
         Fail e -> do
           hPutStrLn stderr $ show e
@@ -91,6 +97,21 @@ runMain book = do
         Done typ -> do
           putStrLn ""
           print $ normal book mainCall
+  where
+    -- Helper function to extract module name from filepath (mirrors Import.hs logic)
+    takeBaseName' :: FilePath -> String
+    takeBaseName' path = 
+      let withoutBend = if ".bend" `isSuffixOf'` path
+                        then take (length path - 5) path  -- Remove .bend extension
+                        else path
+          -- Also remove /_ suffix if present (for files like Term/_.bend)
+          withoutUnderscore = if "/_" `isSuffixOf'` withoutBend
+                              then take (length withoutBend - 2) withoutBend  -- Remove /_
+                              else withoutBend
+      in withoutUnderscore
+      where
+        isSuffixOf' :: Eq a => [a] -> [a] -> Bool
+        isSuffixOf' suffix str = suffix == drop (length str - length suffix) str
 
 -- | Process a Bend file: parse, check, and run
 processFile :: FilePath -> IO ()
@@ -98,21 +119,31 @@ processFile file = do
   book <- parseFile file
   -- let bookAdj@(Book defs _) = adjustBook book
   let desBook@(Book defs _)         = desugarBook book
+  putStrLn $ "\n---- Big Check: ----\n"
   (chkBook@(Book defs _), success) <- annotateBook desBook
 
   let bookAdj@(Book defs _) = chkBook
   -- let bookAdj@(Book defs _) = elaborateBook chkBook
   -- let bookAdj@(Book defs _) = desBook
   
-  -- debug removed
-  -- debug removed
   -- putStrLn $ show $ M.keys defs
-  -- putStrLn $ ""
+  putStrLn $ "\n---- Core Check: ----\n"
   -- putStrLn $ show $ getDefn bookAdj "Term/gen/intr" 
-  -- bookChk <- checkBook bookAdj
-  -- runMain bookChk
   unless success exitFailure
-  runMain bookAdj
+  bookChk <- checkBook bookAdj
+  let bookChk = bookAdj
+  runMain file bookChk
+
+-- | Process a Bend file and return it's Core form
+processFileToCore :: FilePath -> IO ()
+processFileToCore file = do
+  book <- parseFile file
+  let bookAdj = adjustBook book
+  bookChk <- checkBook bookAdj
+  putStrLn $ showBookWithFQN bookChk
+  where
+    showBookWithFQN (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
+    showDefn k (_, x, t) = k ++ " : " ++ showTerm True False t ++ " = " ++ showTerm True False x
 
 -- | Try to format JavaScript code using prettier if available
 formatJavaScript :: String -> IO String
@@ -145,9 +176,19 @@ processFileToHVM :: FilePath -> IO ()
 processFileToHVM file = do
   book <- parseFile file
   let bookAdj = adjustBookWithPats book
-  putStrLn $ show bookAdj
+  -- putStrLn $ show bookAdj
   let hvmCode = HVM.compile bookAdj
   putStrLn hvmCode
+
+-- | Process a Bend file and compile to Haskell
+processFileToHS :: FilePath -> IO ()
+processFileToHS file = do
+  book <- parseFile file
+  let bookAdj = adjustBook book
+  -- bookChk <- checkBook bookAdj
+  -- putStrLn $ show bookChk
+  let hsCode = HS.compile bookAdj
+  putStrLn hsCode
 
 -- | List all dependencies of a Bend file (including transitive dependencies)
 listDependencies :: FilePath -> IO ()

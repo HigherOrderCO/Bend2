@@ -641,6 +641,7 @@ unifyTerms d book t1 t2 = case (t1, t2) of
 -- Infer the type of a term
 infer :: Int -> Span -> Book -> Ctx -> Term -> Maybe Term -> Result Term
 infer d span book ctx term environment = 
+  -- trace ("-infer: " ++ show term) $
   case inferStructural d span book ctx term of
     Done t -> return t
     _      -> case cut term of
@@ -657,7 +658,7 @@ infer d span book ctx term environment =
 
 inferStructural :: Int -> Span -> Book -> Ctx -> Term -> Result Term
 inferStructural d span book@(Book defs names) ctx term =
-  -- trace ("- infer: " ++ show d ++ " " ++ show term) $
+  -- trace ("- inferStructural: " ++ show d ++ " " ++ show term) $
   case term of
 
     -- x : T in ctx
