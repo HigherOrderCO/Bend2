@@ -550,7 +550,9 @@ instance Show Book where
     where showDefn k (_, x, t) = k ++ " : " ++ show t ++ " = " ++ showTerm False True x
 
 instance Show Span where
-  show span = "\n\x1b[1mLocation:\x1b[0m \x1b[2m(line " ++ show (fst $ spanBeg span) ++ ", column " ++ show (snd $ spanBeg span) ++ ")\x1b[0m\n" ++ highlightError (spanBeg span) (spanEnd span) (spanSrc span)
+  show span
+    | spanBeg span == (0,0) && spanEnd span == (0,0) && spanSrc span == "" = ""
+    | otherwise = "\n\x1b[1mLocation:\x1b[0m \x1b[2m(line " ++ show (fst $ spanBeg span) ++ ", column " ++ show (snd $ spanBeg span) ++ ")\x1b[0m\n" ++ highlightError (spanBeg span) (spanEnd span) (spanSrc span)
 
 showHint :: Maybe String -> String
 showHint Nothing = ""
@@ -567,6 +569,7 @@ instance Show Error where
     UnknownTermination term  -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
     ImportError span msg     -> "\x1b[1mImportError:\x1b[0m " ++ msg ++ show span
     AmbiguousEnum span ctx ctor fqns hint -> "\x1b[1mAmbiguousEnum:\x1b[0m &" ++ ctor ++ "\nCould be:\n" ++ unlines ["  - &" ++ fqn | fqn <- fqns] ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    CompilationError msg -> "\x1b[1mCompilationError:\x1b[0m " ++ msg
 
 -- Exception wrapper for Error
 newtype BendException = BendException Error
