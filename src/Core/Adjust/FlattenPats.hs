@@ -29,6 +29,7 @@
 
 module Core.Adjust.FlattenPats where
 
+import Control.Exception (throw)
 import Data.List (nub, find)
 import System.Exit
 import System.IO
@@ -140,12 +141,12 @@ flattenPat d span book pat =
         picks   = Pat (fs   ++ ss) ms ps
         drops   = case (ct, ds) of
           -- Check for incomplete patterns on native types
-          (Con _ _, []) -> errorWithSpan span "Incomplete pattern match: missing case for []"
-          (Nil, [])     -> errorWithSpan span "Incomplete pattern match: missing case for _<>_"
-          (Bt0, [])     -> errorWithSpan span "Incomplete pattern match: missing case for True"
-          (Bt1, [])     -> errorWithSpan span "Incomplete pattern match: missing case for False"
-          (Suc _, [])   -> errorWithSpan span "Incomplete pattern match: missing case for 0n"
-          (Zer, [])     -> errorWithSpan span "Incomplete pattern match: missing case for 1n+_"
+          (Con _ _, []) -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for []"))
+          (Nil, [])     -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for _<>_"))
+          (Bt0, [])     -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for True"))
+          (Bt1, [])     -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for False"))
+          (Suc _, [])   -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for 0n"))
+          (Zer, [])     -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for 1n+_"))
           -- For other cases (Sym, Tup, etc.) or non-empty ds, proceed normally
           _             -> Pat (var d : ss) ms ds
     flattenPatGo d book pat@(Pat [] ms (([],rhs):cs)) =
@@ -163,7 +164,7 @@ flattenPat d span book pat =
 -- match y { with k=x case @A: F(k) ; case @B: F(k) }
 joinVarCol :: Int -> Span -> Book -> Term -> [Case] -> [Case]
 joinVarCol d span book k ((((cut->Var j _):ps),rhs):cs) = (ps, bindVarByName j k rhs) : joinVarCol d span book k cs
-joinVarCol d span book k ((((cut->ctr    ):ps),rhs):cs) = errorWithSpan span "Redundant pattern."
+joinVarCol d span book k ((((cut->ctr    ):ps),rhs):cs) = throw (BendException $ Unsupported span (Ctx []) (Just "Redundant pattern"))
 joinVarCol d span book k cs                             = cs
 
 -- Peels a constructor layer from a column
@@ -212,7 +213,7 @@ peelCtrCol d span book (cut->k) ((((cut->p):ps),rhs):cs) =
     (Sup l _ _, Var k _)   -> (((Var (k++"a") 0:Var (k++"b") 0:ps), bindVarByName k (Sup l (Var (k++"a") 0) (Var (k++"b") 0)) rhs) : picks , ((p:ps),rhs) : drops)
     (Rfl      , Rfl    )   -> ((ps, rhs) : picks , drops)
     (Rfl      , Var k _)   -> ((ps, bindVarByName k Rfl rhs) : picks , ((p:ps),rhs) : drops)
-    (Var _ _  , p      )   -> errorWithSpan span "Unsupported pattern-match shape.\nSupport for it will be added in a future update."
+    (Var _ _  , p      )   -> throw (BendException $ Unsupported span (Ctx []) (Just "Unsupported pattern-match shape. Support for it will be added in a future update."))
     (k        , App f x)   -> callPatternSugar d span book k f x p ps rhs cs
     x                      -> (picks , ((p:ps),rhs) : drops)
   where (picks, drops) = peelCtrCol d span book k cs
@@ -229,7 +230,7 @@ callPatternSugar d span book k f x p ps rhs cs =
         ref     = case fn of
           Ref k i   -> Ref k i
           Var k _   -> Ref k 1
-          otherwise -> errorWithSpan span ("Invalid call pattern: " ++ show (App f x))
+          otherwise -> throw (BendException $ Unsupported span (Ctx []) (Just $ "Invalid call pattern: " ++ show (App f x)))
 
 -- Simplify
 -- ========

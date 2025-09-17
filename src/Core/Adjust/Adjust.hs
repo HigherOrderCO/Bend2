@@ -67,6 +67,7 @@ import qualified Data.Set as S
 
 import Debug.Trace
 
+import Control.Exception (throw)
 import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
@@ -120,7 +121,7 @@ adjustBook book@(Book defs names) = do
   resolvedBook <- resolveEnumsInBook book
   let adjustFn b t = case adjust b t of
         Done t' -> t'
-        Fail e  -> error $ show e  -- Convert to error for now
+        Fail e  -> throw (BendException e)
   let adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
   Done adjustedBook -- checkFreeVarsInBook disabled: not in main branch
 
@@ -131,7 +132,7 @@ adjustBookWithPats book@(Book defs names) = do
   resolvedBook <- resolveEnumsInBook book
   let adjustFn b t = case adjustWithPats b t of
         Done t' -> t'
-        Fail e  -> error $ show e  -- Convert to error for now
+        Fail e  -> throw (BendException e)
   let adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
   Done adjustedBook -- checkFreeVarsInBook disabled: not in main branch
 
@@ -148,7 +149,7 @@ checkFreeVarsInBook book@(Book defs names) =
     [] -> book
     ((name, frees):_) -> 
       let freeName = S.elemAt 0 frees
-      in error $ "Unbound variable '" ++ freeName ++ "' in definition '" ++ name ++ "'."
+      in throw (BendException $ Undefined noSpan (Ctx []) freeName (Just $ "in definition '" ++ name ++ "'"))
 
 -- | The recursive worker function that adjusts a single definition.
 -- It takes a set of names currently in the recursion stack to detect cycles.
