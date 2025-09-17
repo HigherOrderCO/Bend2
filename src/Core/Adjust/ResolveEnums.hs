@@ -19,6 +19,7 @@ import Data.List (intercalate, isPrefixOf)
 import Data.List.Split (splitOn)
 import Data.Maybe (fromMaybe)
 import Control.Monad (foldM)
+import Control.Exception (throw)
 
 import Core.Type
 import Core.Show
@@ -114,14 +115,14 @@ resolveEnumsInTerm emap = go
       Sub t -> do
         t2 <- go t
         Done (Sub t2)
-      Fix k f -> Done $ Fix k (\v -> case go (f v) of Done t -> t; Fail e -> error (show e))
+      Fix k f -> Done $ Fix k (\v -> case go (f v) of Done t -> t; Fail e -> throw (BendException e))
       Let k t v f -> do
         t2 <- mapM go t
         v2 <- go v
-        Done $ Let k t2 v2 (\u -> case go (f u) of Done t -> t; Fail e -> error (show e))
+        Done $ Let k t2 v2 (\u -> case go (f u) of Done t -> t; Fail e -> throw (BendException e))
       Use k v f -> do
         v2 <- go v
-        Done $ Use k v2 (\u -> case go (f u) of Done t -> t; Fail e -> error (show e))
+        Done $ Use k v2 (\u -> case go (f u) of Done t -> t; Fail e -> throw (BendException e))
       Chk x t -> do
         x2 <- go x
         t2 <- go t
@@ -184,7 +185,7 @@ resolveEnumsInTerm emap = go
         Done (All a2 b2)
       Lam k t f -> do
         t2 <- mapM go t
-        Done $ Lam k t2 (\u -> case go (f u) of Done t -> t; Fail e -> error (show e))
+        Done $ Lam k t2 (\u -> case go (f u) of Done t -> t; Fail e -> throw (BendException e))
       App f x -> do
         f2 <- go f
         x2 <- go x
