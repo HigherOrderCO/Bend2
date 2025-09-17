@@ -5,9 +5,11 @@
 module Core.Show where
 
 import Core.Type
+import Control.Exception (Exception)
 import Data.List (intercalate, unsnoc, isInfixOf, isPrefixOf)
 import Data.List.Split (splitOn)
 import Data.Maybe (fromMaybe)
+import Data.Typeable (Typeable)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Highlight (highlightError)
@@ -565,6 +567,15 @@ instance Show Error where
     UnknownTermination term  -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
     ImportError span msg     -> "\x1b[1mImportError:\x1b[0m " ++ msg ++ show span
     AmbiguousEnum span ctx ctor fqns hint -> "\x1b[1mAmbiguousEnum:\x1b[0m &" ++ ctor ++ "\nCould be:\n" ++ unlines ["  - &" ++ fqn | fqn <- fqns] ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+
+-- Exception wrapper for Error
+newtype BendException = BendException Error
+  deriving (Typeable)
+
+instance Show BendException where
+  show (BendException e) = show e
+
+instance Exception BendException
 
 instance Show Ctx where
   show (Ctx ctx) = case lines of
