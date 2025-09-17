@@ -18,7 +18,7 @@ import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.Process (readProcessWithExitCode)
 import System.Exit (ExitCode(..))
-import Control.Exception (catch, IOException)
+import Control.Exception (catch, IOException, try)
 import System.IO (hPutStrLn, stderr)
 
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
@@ -29,7 +29,7 @@ import Core.Import (autoImport, autoImportWithExplicit)
 import Core.Parse.Book (doParseBook)
 import Core.Parse.Parse (ParserState(..))
 import Core.Type
-import Core.Show (showTerm)
+import Core.Show (showTerm, BendException(..))
 import Core.WHNF
 
 import qualified Target.JavaScript as JS
@@ -114,17 +114,37 @@ runMain filePath book = do
 processFile :: FilePath -> IO ()
 processFile file = do
   book <- parseFile file
-  let bookAdj = adjustBook book
-  bookChk <- checkBook bookAdj
-  runMain file bookChk
+  result <- try $ do
+    bookAdj <- case adjustBook book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    bookChk <- checkBook bookAdj
+    runMain file bookChk
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
 
 -- | Process a Bend file and return it's Core form
 processFileToCore :: FilePath -> IO ()
 processFileToCore file = do
   book <- parseFile file
-  let bookAdj = adjustBook book
-  bookChk <- checkBook bookAdj
-  putStrLn $ showBookWithFQN bookChk
+  result <- try $ do
+    bookAdj <- case adjustBook book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    bookChk <- checkBook bookAdj
+    putStrLn $ showBookWithFQN bookChk
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
   where
     showBookWithFQN (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
     showDefn k (_, x, t) = k ++ " : " ++ showTerm True False t ++ " = " ++ showTerm True False x
@@ -149,37 +169,71 @@ formatJavaScript jsCode = do
 processFileToJS :: FilePath -> IO ()
 processFileToJS file = do
   book <- parseFile file
-  let bookAdj = adjustBook book
-  bookChk <- checkBook bookAdj
-  let jsCode = JS.compile bookChk
-  formattedJS <- formatJavaScript jsCode
-  putStrLn formattedJS
+  result <- try $ do
+    bookAdj <- case adjustBook book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    bookChk <- checkBook bookAdj
+    let jsCode = JS.compile bookChk
+    formattedJS <- formatJavaScript jsCode
+    putStrLn formattedJS
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
 
 -- | Process a Bend file and compile to HVM
 processFileToHVM :: FilePath -> IO ()
 processFileToHVM file = do
   book <- parseFile file
-  let bookAdj = adjustBookWithPats book
-  -- putStrLn $ show bookAdj
-  let hvmCode = HVM.compile bookAdj
-  putStrLn hvmCode
+  result <- try $ do
+    bookAdj <- case adjustBookWithPats book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    -- putStrLn $ show bookAdj
+    let hvmCode = HVM.compile bookAdj
+    putStrLn hvmCode
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
 
 -- | Process a Bend file and compile to Haskell
 processFileToHS :: FilePath -> IO ()
 processFileToHS file = do
   book <- parseFile file
-  let bookAdj = adjustBook book
-  -- bookChk <- checkBook bookAdj
-  -- putStrLn $ show bookChk
-  let hsCode = HS.compile bookAdj
-  putStrLn hsCode
+  result <- try $ do
+    bookAdj <- case adjustBook book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    -- bookChk <- checkBook bookAdj
+    -- putStrLn $ show bookChk
+    let hsCode = HS.compile bookAdj
+    putStrLn hsCode
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
 
 -- | List all dependencies of a Bend file (including transitive dependencies)
 listDependencies :: FilePath -> IO ()
 listDependencies file = do
   -- Parse and auto-import the file
   book <- parseFile file
-  let bookAdj = adjustBook book
+  bookAdj <- case adjustBook book of
+    Done b -> return b
+    Fail e -> do
+      hPutStrLn stderr $ show e
+      exitFailure
   -- Collect all refs from the fully imported book
   let allRefs = collectAllRefs bookAdj
   -- Print all refs (these are all the dependencies)
@@ -189,7 +243,11 @@ listDependencies file = do
 getGenDeps :: FilePath -> IO ()
 getGenDeps file = do
   book <- parseFile file
-  let bookAdj@(Book defs names) = adjustBook book
+  bookAdj@(Book defs names) <- case adjustBook book of
+    Done b -> return b
+    Fail e -> do
+      hPutStrLn stderr $ show e
+      exitFailure
   
   -- Find all definitions that are `try` definitions (i.e., contain a Met)
   let tryDefs = M.filter (\(_, term, _) -> hasMet term) defs
