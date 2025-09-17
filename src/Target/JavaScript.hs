@@ -4,7 +4,9 @@
 
 module Target.JavaScript where
 
+import Control.Exception (throw)
 import Control.Monad (forM)
+import Core.Show
 import Core.Type
 import Data.Int (Int64)
 import Data.List (intercalate, isPrefixOf, isSuffixOf, isInfixOf)
@@ -58,7 +60,7 @@ type CTBook = M.Map String CT
 -- Convert CT back to Term for substitution
 ctToTerm :: CT -> Term
 ctToTerm (CVar k i) = Var k i
-ctToTerm _ = error "ctToTerm: only variables can be converted back"
+ctToTerm _ = throw (BendException $ CompilationError "ctToTerm: only variables can be converted back")
 
 -- Convert Term to CT (erase types, keep runtime values)
 termToCT :: Book -> Term -> Int -> CT
@@ -114,7 +116,7 @@ termToCT book term dep = case term of
   SupM l f     -> CSupM CEra (termToCT book l dep) (termToCT book f dep)
   Frk l a b    -> CFrk (termToCT book l dep) (termToCT book a dep) (termToCT book b dep)
   Rwt _ _      -> CEra  -- Erases at runtime
-  Pat _ _ _  -> error "unreachable"
+  Pat _ _ _  -> throw (BendException $ CompilationError "Sugared Pat constructors should not appear in JavaScript compilation")
 
 -- JavaScript State Monad
 type JSM = ST.State Int
@@ -240,7 +242,7 @@ compileConstructor var (CTup a b) dep = do
   bStmt <- ctToJS' False bName b dep
   setStmt <- set var $ "[" ++ aName ++ ", " ++ bName ++ "]"
   return $ concat [aStmt, bStmt, setStmt]
-compileConstructor _ _ _ = error "compileConstructor: not a constructor"
+compileConstructor _ _ _ = throw (BendException $ CompilationError "compileConstructor: not a constructor")
 
 -- Compile numeric value
 compileNumeric :: String -> NVal -> JSM String
@@ -421,7 +423,7 @@ compileSaturatedCall (CRef funName) appArgs var dep = do
     return (argName, argStmt)
   retStmt <- set var $ nameToJS funName ++ "$(" ++ intercalate ", " (map fst argNamesStmts) ++ ")"
   return $ concat (map snd argNamesStmts ++ [retStmt])
-compileSaturatedCall _ _ _ _ = error "Saturated call with non-reference"
+compileSaturatedCall _ _ _ _ = throw (BendException $ CompilationError "Saturated call with non-reference")
 
 -- Compile normal application
 compileNormalApp :: String -> CT -> [CT] -> Int -> JSM String
@@ -513,9 +515,9 @@ ctToJS book fnName fnArgs isTail var term dep = case term of
   CUse _      -> set var "(x => null)"
   CEql _      -> set var "(x => null)"
   CEra        -> set var "null"
-  CSup _ _ _  -> error "Superpositions not supported in JavaScript backend"
-  CSupM _ _ _ -> error "Superpositions not supported in JavaScript backend"
-  CFrk _ _ _  -> error "Superpositions not supported in JavaScript backend"
+  CSup _ _ _  -> throw (BendException $ CompilationError "Superpositions not supported in JavaScript backend")
+  CSupM _ _ _ -> throw (BendException $ CompilationError "Superposition matches not supported in JavaScript backend")
+  CFrk _ _ _  -> throw (BendException $ CompilationError "Fork constructs not supported in JavaScript backend")
   CPri p      -> compilePri p
   where
 

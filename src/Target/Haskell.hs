@@ -4,6 +4,8 @@
 
 module Target.Haskell where
 
+import Control.Exception (throw)
+import qualified Core.Show as Show
 import Core.Type
 import Core.WHNF
 import Data.Char (isUpper)
@@ -145,15 +147,15 @@ termToHT book i term = case term of
   Rfl         -> HOne
   EqlM f      -> HLam "_" (termToHT book i f)
   Rwt _ f     -> termToHT book i f
-  Met _ _ _   -> error "Metas not supported for Haskell compilation"
+  Met _ _ _   -> throw (Show.BendException $ CompilationError "Meta variables not supported for Haskell compilation")
   Era         -> HEra
-  Sup _ _ _   -> error "Superpositions not supported for Haskell compilation"
-  SupM _ _    -> error "Superposition matches not supported for Haskell compilation"
+  Sup _ _ _   -> throw (Show.BendException $ CompilationError "Superpositions not supported for Haskell compilation")
+  SupM _ _    -> throw (Show.BendException $ CompilationError "Superposition matches not supported for Haskell compilation")
   Log s x     -> HLog (termToHT book i s) (termToHT book i x)
   Loc _ t     -> termToHT book i t
   Pri p       -> HPri p
   Pat xs _ cs -> HMat (map (termToHT book i) xs) (map (\(ps, b) -> (map (termToHT book i) ps, termToHT book i b)) cs)
-  Frk _ _ _   -> error "Fork not supported for Haskell compilation"
+  Frk _ _ _   -> throw (Show.BendException $ CompilationError "Fork constructs not supported for Haskell compilation")
 
 -- Convert a Bend term to a Haskell type.
 typeToHT :: Book -> Type -> HT
@@ -262,7 +264,7 @@ showPat pat = case pat of
   HBt1     -> "True"
   HBt0     -> "False"
   HSym s   -> "\"" ++ s ++ "\""
-  _ -> error "Invalid pattern"
+  _ -> throw (Show.BendException $ CompilationError "Invalid pattern in Haskell compilation")
 
 -- Convert binary operators to Haskell
 showOp2 :: NOp2 -> String

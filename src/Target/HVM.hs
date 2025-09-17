@@ -4,11 +4,12 @@
 
 module Target.HVM where
 
+import Control.Exception (throw)
 import Control.Monad (forM)
 import Core.Show
 import Core.Type
 import Data.Either (partitionEithers)
-import Data.List (unsnoc, sortBy)
+import Data.List (unsnoc, sortBy, isSuffixOf)
 import Data.Maybe (fromJust)
 import Debug.Trace
 import qualified Data.Map as M
@@ -17,14 +18,19 @@ import qualified HVM.Type as HVM
 
 compile :: Book -> String
 compile book@(Book defs _) =
-  -- TODO: Error handling
-  if M.notMember "main" defs then
-    error "No main function found"
-  else
-    let ds      = map (compileDef book) (M.toList defs)
-        (ts,fs) = partitionEithers ds
-        main    = "@main = " ++ showHVM 1 (termToHVM book (Ref "main" 1)) ++ "\n\n"
-    in prelude ++ main ++ unlines ts ++ unlines fs
+  case findMainFunction defs of
+    Nothing -> throw (BendException $ CompilationError "Missing main function for HVM compilation")
+    Just mainName ->
+      let ds      = map (compileDef book) (M.toList defs)
+          (ts,fs) = partitionEithers ds
+          main    = "@main = " ++ showHVM 1 (termToHVM book (Ref mainName 1)) ++ "\n\n"
+      in prelude ++ main ++ unlines ts ++ unlines fs
+  where
+    findMainFunction defs =
+      case filter (isSuffixOf "::main") (M.keys defs) of
+        [mainName] -> Just mainName
+        []         -> Nothing
+        multiple   -> Just (head multiple) -- If multiple, just pick the first one
 
 prelude :: String
 prelude = unlines [
@@ -137,8 +143,8 @@ termToHVM book term = go term where
   go (Con h t)     = HVM.Ctr "#Cons" [termToHVM book h, termToHVM book t]
   go (LstM n c)    = HVM.Lam "x$" $ HVM.Mat (HVM.MAT 0) (HVM.Var "x$") [] [("#Nil", [], termToHVM book n), ("#Cons", ["x$h", "x$t"], HVM.App (HVM.App (termToHVM book c) (HVM.Var "x$h")) (HVM.Var "x$t"))]
   go (Enu s)       = HVM.Era
-  go (Sym s)       = error $ "TODO: termToHVM Sym. " ++ show term
-  go (EnuM c e)    = error $ "TODO: termToHVM EnuM. " ++ show term
+  go (Sym s)       = throw (BendException $ CompilationError $ "Symbol compilation not supported in HVM backend: " ++ show term)
+  go (EnuM c e)    = throw (BendException $ CompilationError $ "Enum match compilation not supported in HVM backend: " ++ show term)
   go (Log s x)     = termToHVM book x  -- For HVM, just return the result expression
   go (Num _)       = HVM.Era
   go (Val v)       = valToHVM book v
@@ -247,7 +253,7 @@ op2ToHVM book op a b = case op of
   MUL -> HVM.Op2 HVM.OP_MUL (termToHVM book a) (termToHVM book b)
   DIV -> HVM.Op2 HVM.OP_DIV (termToHVM book a) (termToHVM book b)
   MOD -> HVM.Op2 HVM.OP_MOD (termToHVM book a) (termToHVM book b)
-  POW -> error "POW binary operator not yet supported on Bend-to-HVM compiler."
+  POW -> throw (BendException $ CompilationError "POW binary operator not supported in HVM backend")
   EQL -> HVM.Op2 HVM.OP_EQ  (termToHVM book a) (termToHVM book b)
   NEQ -> HVM.Op2 HVM.OP_NE  (termToHVM book a) (termToHVM book b)
   LST -> HVM.Op2 HVM.OP_LT  (termToHVM book a) (termToHVM book b)
@@ -262,8 +268,8 @@ op2ToHVM book op a b = case op of
 
 op1ToHVM :: Book -> NOp1 -> Term -> HVM.Core
 op1ToHVM book op a = case op of
-  NOT -> error "NOT unary operator not yet supported on Bend-to-HVM compiler."
-  NEG -> error "NEG unary operator not yet supported on Bend-to-HVM compiler."
+  NOT -> throw (BendException $ CompilationError "NOT unary operator not supported in HVM backend")
+  NEG -> throw (BendException $ CompilationError "NEG unary operator not supported in HVM backend")
 
 refAppToHVM :: Book -> Term -> Maybe HVM.Core
 refAppToHVM book term =
@@ -271,7 +277,7 @@ refAppToHVM book term =
     (Ref k i, args) ->
       let (tm,ty)     = case getDefn book k of
             Just (_,tm,ty) -> (tm,ty)
-            Nothing        -> error ("unknown ref in hvm backend: " ++ show k)
+            Nothing        -> throw (BendException $ CompilationError $ "Unknown reference in HVM backend: " ++ show k)
           (era,arg,_) = collectLamArgs tm ty [] []
           argsHVM     = map (termToHVM book) (drop (length era) args)
           ari         = length arg
@@ -310,7 +316,7 @@ patToHVM book [x] m c@(([p], f) : _) =
     (Suc _)   -> simpleMat
     (Nil)     -> simpleMat
     (Con _ _) -> simpleMat
-    (Sym _)   -> error $ "Nested matches on constructors and matches on symbols are not yet supported on Bend-to-HVM compiler. " ++ show c
+    (Sym _)   -> throw (BendException $ CompilationError $ "Nested matches on constructors and matches on symbols not supported in HVM backend: " ++ show c)
     (Tup (Var a _) (Var b _)) ->
       case ctrPatToHVM book x m c of
         Just hvm -> hvm
@@ -396,7 +402,7 @@ cutDeep t = case cut t of
   (Let k t v f) -> Let k (fmap cutDeep t) (cutDeep v) (\x -> cutDeep (f (Sub x)))
   (Use k v f)   -> Use k (cutDeep v) (\x -> cutDeep (f (Sub x)))
   Set           -> Set
-  (Chk v t)     -> error "cutDeep reached Chk"
+  (Chk v t)     -> throw (BendException $ CompilationError "Chk terms should not appear in HVM compilation")
   (Tst v)       -> Tst (cutDeep v)
   Emp           -> Emp
   EmpM          -> EmpM
@@ -438,7 +444,7 @@ cutDeep t = case cut t of
   (SupM l f)    -> SupM (cutDeep l) (cutDeep f)
   (Frk l a b)   -> Frk (cutDeep l) (cutDeep a) (cutDeep b)
   (Rwt e f)     -> Rwt (cutDeep e) (cutDeep f)
-  (Loc s t)     -> error "cutDeep reached Loc"
+  (Loc s t)     -> throw (BendException $ CompilationError "Loc terms should not appear in HVM compilation")
   (Pri p)       -> Pri p
   (Pat x m c)   -> Pat (map cutDeep x) (map (\(k,v) -> (k, cutDeep v)) m) (map (\(p,x) -> (map cutDeep p, cutDeep x)) c)
 
