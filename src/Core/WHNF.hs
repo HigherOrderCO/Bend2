@@ -13,6 +13,7 @@
 
 module Core.WHNF where
 
+import Control.Exception (throw)
 import System.IO.Unsafe
 import Data.IORef
 import Data.Bits
@@ -21,6 +22,7 @@ import GHC.Float (castDoubleToWord64, castWord64ToDouble)
 import Debug.Trace
 
 import Core.Type
+import Core.Show
 
 -- Evaluation
 -- ==========
@@ -87,7 +89,7 @@ whnfApp book f x =
     SigM f     -> whnfSigM book x f
     SupM l f   -> whnfSupM book x l f
     EqlM f     -> whnfEqlM book x f
-    Frk _ _ _  -> error "unreachable"
+    Frk _ _ _  -> throw (BendException $ Unsupported noSpan (Ctx []) (Just "Fork constructs should not appear in application normalization"))
     f'         -> App f' x
 
 -- Normalizes a lambda application
@@ -452,14 +454,14 @@ normal book term =
     Era         -> Era
     Sup l a b   -> Sup l (normal book a) (normal book b)
     SupM l f    -> SupM (normal book l) (normal book f)
-    Frk l a b   -> error "Fork interactions unsupported in Haskell"
+    Frk l a b   -> throw (BendException $ Unsupported noSpan (Ctx []) (Just "Fork interactions unsupported in normalization"))
     Num t       -> Num t
     Val v       -> Val v
     Op2 o a b   -> Op2 o (normal book a) (normal book b)
     Op1 o a     -> Op1 o (normal book a)
     Pri p       -> Pri p
-    Met _ _ _   -> error "not-supported"
-    Pat _ _ _   -> error "not-supported"
+    Met _ _ _   -> throw (BendException $ Unsupported noSpan (Ctx []) (Just "Meta variables not supported in normalization"))
+    Pat _ _ _   -> throw (BendException $ Unsupported noSpan (Ctx []) (Just "Sugared Pat constructors not supported in normalization"))
 
 normalCtx :: Book -> Ctx -> Ctx
 normalCtx book (Ctx ctx) = Ctx (map normalAnn ctx)
