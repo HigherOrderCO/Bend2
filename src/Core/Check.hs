@@ -479,7 +479,7 @@ infer d span book@(Book defs names) ctx term =
 
     -- Not supported in infer
     Pat _ _ _ -> do
-      error "Pat not supported in infer"
+      Fail $ Unsupported span (normalCtx book ctx) (Just "Sugared Pat constructors not supported in type checking")
 
 -- Infer the result type of a binary numeric operation
 inferOp2Type :: Int -> Span -> Book -> Ctx -> NOp2 -> Term -> Term -> Result Term
@@ -1063,7 +1063,7 @@ check d span book ctx term      goal =
 
     -- Not supported
     (Pat _ _ _, _) -> do
-      error "not-supported"
+      Fail $ Unsupported span (normalCtx book ctx) (Just "Sugared Pat constructors not supported in type checking")
 
     -- ctx |- s : Char[]
     -- ctx |- x : T
