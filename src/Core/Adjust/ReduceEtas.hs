@@ -52,10 +52,10 @@ import Control.Applicative
 data ElimLabel
   = UNIM
   | BITM
-  | NATM
+  | NATM [String]
   | EMPM
-  | LSTM
-  | SIGM
+  | LSTM [String]
+  | SIGM [String]
   | SUPM Term
   | EQLM
   | ENUM [String] Bool
@@ -67,10 +67,10 @@ NONE <+> x    = x
 x    <+> NONE = x
 UNIM <+> UNIM = UNIM
 BITM <+> BITM = BITM
-NATM <+> NATM = NATM
+NATM s1 <+> NATM s2 = NATM s1
 EMPM <+> EMPM = EMPM
-LSTM <+> LSTM = LSTM
-SIGM <+> SIGM = SIGM
+LSTM s1 <+> LSTM s2 = LSTM s1
+SIGM s1 <+> SIGM s2 = SIGM s1
 EQLM <+> EQLM = EQLM
 ENUM s1 b1 <+> ENUM s2 b2                                = ENUM (s1 `union` s2) (b1 && b2)
 SUPM t1    <+> SUPM t2 | equal 0 (Book M.empty []) t1 t2 = SUPM t1
@@ -83,7 +83,7 @@ extendName nam         suffix = "$" ++ nam ++ "_" ++ suffix
 -- Main eta-reduction function
 --
 reduceEtas :: Int -> Term -> Term
-reduceEtas d t = case t of
+reduceEtas d term = case term of
 -- this assumes `t` is bound, because without this we can't (at least not easily) replace a var that is originally
 -- an argument of a constructor in a match by a var of the newly-pulled-outward match of the reduction
   Lam k mty f ->
@@ -91,48 +91,55 @@ reduceEtas d t = case t of
       EMPM -> EmpM
 
       EQLM -> EqlM refl where
-          refl = bindVarByName k Rfl (reduceEtas d (resolveMatches d k EQLM 0 "" [] (f (Var k d))))
+          nam = "$"++show d
+          refl = reduceEtas d $ bindVarByName nam Rfl (resolveMatches d nam EQLM 0 "" [] (f (Var nam d)))
 
       UNIM -> UniM u where
-          u = bindVarByName k One (reduceEtas d (resolveMatches d k UNIM 0 "" [] (f (Var k d))))
+          nam = "$"++show d
+          u = reduceEtas d $ bindVarByName nam One (resolveMatches d nam UNIM 0 "" [] (f (Var nam d)))
                                                                                             -- if we don't use f (Var k d), 
                                                                                             -- then the recursive reduceEtas
                                                                                             -- won't know that it has found
                                                                                             -- a deeper app-lam-match on k
       BITM -> BitM fl tr where
-          fl = bindVarByName k Bt0 (reduceEtas d (resolveMatches d k BITM 0 "" [] (f (Var k d))))
-          tr = bindVarByName k Bt1 (reduceEtas d (resolveMatches d k BITM 1 "" [] (f (Var k d))))
+          nam = "$"++show d
+          fl = reduceEtas d $ bindVarByName nam Bt0 (resolveMatches d nam BITM 0 "" [] (f (Var nam d)))
+          tr = reduceEtas d $ bindVarByName nam Bt1 (resolveMatches d nam BITM 1 "" [] (f (Var nam d)))
 
-      NATM -> NatM z s where
-          z = bindVarByName k Zer (reduceEtas d (resolveMatches d k NATM 0 "" [] (f (Var k d))))
-          s = reduceEtas d (Lam (extendName k "p") (Just Nat) (\q -> bindVarByName k (Suc q) (resolveMatches (d+1) k NATM 1 "" [Sub q] (f (Var k d)))))
+      NATM nams@[p] -> NatM z s where
+          nam = "$"++show d
+          z = reduceEtas d $ bindVarByName nam Zer (resolveMatches d nam (NATM [p]) 0 "" [] (f (Var nam d)))
+          s = reduceEtas d (Lam p (Just Nat) (\q -> bindVarByName nam (Suc q) (resolveMatches (d+1) nam (NATM nams) 1 "" [Sub q] (f (Var nam d)))))
 
-      LSTM -> LstM nil cons where
-          nil = bindVarByName k Nil (reduceEtas d (resolveMatches d k LSTM 0 "" [] (f (Var k d))))
-          cons = reduceEtas d (Lam (extendName k "h") Nothing (\h ->
-                               Lam (extendName k "t") Nothing (\t ->
-                               bindVarByName k (Con h t) (resolveMatches (d+2) k LSTM 1 "" [Sub h, Sub t] (f (Var k d))))))
+      LSTM nams@[h,t] -> LstM nil cons where
+          nam = "$"++show d
+          nil = reduceEtas d $ bindVarByName nam Nil (resolveMatches d nam (LSTM nams) 0 "" [] (f (Var nam d)))
+          cons = reduceEtas d (Lam h Nothing (\h ->
+                               Lam t Nothing (\t ->
+                               bindVarByName nam (Con h t) (resolveMatches (d+2) nam (LSTM nams) 1 "" [Sub h, Sub t] (f (Var nam d))))))
 
-      SIGM -> SigM pair where
-          pair = reduceEtas d (Lam (extendName k "a") Nothing (\a ->
-                               Lam (extendName k "b") Nothing (\b ->
-                               bindVarByName k (Tup a b) (resolveMatches (d+2) k SIGM 0 "" [Sub a, Sub b] (f (Var k d))))))
+      SIGM nams@[a,b] -> SigM pair where
+          nam = "$"++show d
+          pair = reduceEtas d (Lam a Nothing (\a ->
+                               Lam b Nothing (\b ->
+                               bindVarByName nam (Tup a b) (resolveMatches (d+2) nam (SIGM nams) 0 "" [Sub a, Sub b] (f (Var nam d))))))
 
       ENUM syms compl -> EnuM cases def where
-        cases = map (\sym -> (sym, bindVarByName k (Sym sym) (reduceEtas d (resolveMatches d k (ENUM syms compl) 0 sym [] (f (Var k d))))) ) syms
+        nam = "$"++show d
+        cases = map (\sym -> (sym, reduceEtas d $ bindVarByName nam (Sym sym) (resolveMatches d nam (ENUM syms compl) 0 sym [] (f (Var nam d))))) syms
         def = if compl
-            then reduceEtas d (Lam (extendName k "def") Nothing (\q -> bindVarByName k q (resolveMatches (d+1) k (ENUM syms compl) (-1) "" [Sub q] (f (Var k d)))))
+            then reduceEtas d (Lam (extendName k "def") Nothing (\q -> bindVarByName nam q (resolveMatches (d+1) nam (ENUM syms compl) (-1) "" [Sub q] (f (Var nam d)))))
             else One
       
-      SUPM lab -> SupM lab branches where
-          branches = reduceEtas d (Lam (extendName k "0") Nothing (\l ->
-                                   Lam (extendName k "1") Nothing (\r ->
-                                   Let k Nothing l (\v ->
-                                   bindVarByName k v (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d))))))
-                                  )
+      -- SUPM lab -> SupM lab branches where
+      --     branches = reduceEtas d (Lam (extendName k "0") Nothing (\l ->
+      --                              Lam (extendName k "1") Nothing (\r ->
+      --                              Let k Nothing l (\v ->
+      --                              bindVarByName k v (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d))))))
+      --                             )
 
       -- NONE -> Lam k mty (\x -> reduceEtas d (f x))
-      _ -> Lam k mty (\x -> reduceEtas d (f x))
+      _ -> Lam k mty (\x -> reduceEtas (d+1) (f x))
 
   -- Not a Lam, just propagate deeper
   Var n i       -> Var n i
@@ -210,7 +217,7 @@ resolveMatches d n l clause sym args t = case t of
             BitM (resolveMatches d n l clause sym args fl) (resolveMatches d n l clause sym args tr)
 
           -- Nat matches
-          (NatM z s, NATM) -> 
+          (NatM z s, NATM p) -> 
             case clause of
               0 -> resolveMatches d n l clause sym args z
               1 -> case (cut s, args) of
@@ -225,7 +232,7 @@ resolveMatches d n l clause sym args t = case t of
           (EmpM, _)    -> EmpM
           
           -- List matches
-          (LstM nil cons, LSTM) -> 
+          (LstM nil cons, LSTM nams) -> 
             case clause of
               0 -> resolveMatches d n l clause sym args nil
               1 -> case args of
@@ -240,7 +247,7 @@ resolveMatches d n l clause sym args t = case t of
             LstM (resolveMatches d n l clause sym args nil) (resolveMatches d n l clause sym args cons)
          
           -- Pair matches
-          (SigM pair, SIGM) -> 
+          (SigM pair, SIGM nams) -> 
             case args of
               [a, b] -> case cut pair of
                 Lam _ _ body1 -> case cut (body1 a) of
@@ -357,10 +364,10 @@ isEtaLong d n t = case t of
           case cut f of
           UniM _      -> UNIM <+> isEtaLong d n f
           BitM _ _    -> BITM <+> isEtaLong d n f
-          NatM _ _    -> NATM <+> isEtaLong d n f
+          NatM _ s    -> NATM (getVarName 1 s) <+> isEtaLong d n f
           EmpM        -> EMPM <+> isEtaLong d n f
-          LstM _ _    -> LSTM <+> isEtaLong d n f
-          SigM _      -> SIGM <+> isEtaLong d n f
+          LstM _ c    -> LSTM (getVarName 2 c) <+> isEtaLong d n f
+          SigM g      -> SIGM (getVarName 2 g) <+> isEtaLong d n f
           EqlM _      -> EQLM <+> isEtaLong d n f
           SupM l _    -> SUPM l <+> isEtaLong d n f
           EnuM cs def -> (ENUM (map fst cs) (isLam def)) <+> isEtaLong d n f
@@ -419,3 +426,10 @@ isEtaLong d n t = case t of
   Frk l a b   -> isEtaLong d n l <+> isEtaLong d n a <+> isEtaLong d n b
   Tst x       -> isEtaLong d n x
 
+
+getVarName 1 term = case cut term of
+  Lam k _ _ -> [k]
+  _ -> ["$noname"]
+getVarName n term = case cut term of
+  Lam k _ b -> k:(getVarName (n-1) (b (Var "_" 0)))
+  _         -> ["$noname" | _ <- [1..n]]
