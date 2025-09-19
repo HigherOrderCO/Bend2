@@ -185,6 +185,15 @@ whnfAppPri book p x =
       (CHAR_TO_U64, Val (CHR_V c)) -> Val (U64_V (fromIntegral (fromEnum c)))
       (HVM_INC    , t)             -> t
       (HVM_DEC    , t)             -> t
+      -- IO primitives create IO action values, they don't execute
+      -- These remain as applications to be executed by the runtime
+      (IO_PURE    , v)             -> App (Pri IO_PURE) v
+      (IO_BIND    , m)             -> App (Pri IO_BIND) m
+      (IO_PRINT   , s)             -> App (Pri IO_PRINT) s
+      (IO_PUTC    , c)             -> App (Pri IO_PUTC) c
+      (IO_GETC    , _)             -> Pri IO_GETC  -- IO_GETC takes no arguments
+      (IO_READ_FILE, path)         -> App (Pri IO_READ_FILE) path
+      (IO_WRITE_FILE, path)        -> App (Pri IO_WRITE_FILE) path
       _                            -> App (Pri p) x'
 
 -- Numeric operations
@@ -431,6 +440,7 @@ normal book term =
     Zer         -> Zer
     Suc n       -> Suc (normal book n)
     NatM z s    -> NatM (normal book z) (normal book s)
+    IO t        -> IO (normal book t)
     Lst t       -> Lst (normal book t)
     Nil         -> Nil
     Con h t     -> Con (normal book h) (normal book t)

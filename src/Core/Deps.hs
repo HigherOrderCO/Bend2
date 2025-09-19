@@ -43,6 +43,7 @@ collectDeps bound term = case term of
   Suc n       -> collectDeps bound n
   NatM z s    -> S.union (collectDeps bound z) (collectDeps bound s)
   Lst t       -> collectDeps bound t
+  IO t        -> collectDeps bound t
   Nil         -> S.empty
   Con h t     -> S.union (collectDeps bound h) (collectDeps bound t)
   LstM n c    -> S.union (collectDeps bound n) (collectDeps bound c)

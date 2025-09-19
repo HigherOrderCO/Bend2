@@ -79,6 +79,7 @@ reduceEtas d t = case t of
   Zer          -> Zer
   Suc n        -> Suc (reduceEtas d n)
   NatM a b     -> NatM (reduceEtas d a) (reduceEtas d b)
+  IO t         -> IO (reduceEtas d t)
   Lst t'       -> Lst (reduceEtas d t')
   Nil          -> Nil
   Con h t'     -> Con (reduceEtas d h) (reduceEtas d t')

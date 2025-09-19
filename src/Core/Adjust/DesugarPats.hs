@@ -70,6 +70,9 @@ desugarPats d span (LstM n c)      = do
   n' <- desugarPats d span n
   c' <- desugarPats d span c
   Done $ LstM n' c'
+desugarPats d span (IO t)          = do
+  t' <- desugarPats d span t
+  Done $ IO t'
 desugarPats d span (Enu s)         = Done $ Enu s
 desugarPats d span (Sym s)         = Done $ Sym s
 desugarPats d span (EnuM c e)      = do

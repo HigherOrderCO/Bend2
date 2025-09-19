@@ -64,6 +64,7 @@ parseTermIni = choice
   , parseSym
   , parseTupApp
   , parseView
+  , parseIo
   , parseVar
   ]
 
@@ -167,21 +168,28 @@ parseVar = label "variable" $ do
     qualifiedName <- name
     return $ n ++ "::" ++ qualifiedName
   case qualified of
-    "Set"         -> return Set
-    "Empty"       -> return Emp
-    "Unit"        -> return Uni
-    "Bool"        -> return Bit
-    "False"       -> return Bt0
-    "True"        -> return Bt1
-    "Nat"         -> return Nat
-    "U64"         -> return (Num U64_T)
-    "I64"         -> return (Num I64_T)
-    "F64"         -> return (Num F64_T)
-    "Char"        -> return (Num CHR_T)
-    "U64_TO_CHAR" -> return (Pri U64_TO_CHAR)
-    "CHAR_TO_U64" -> return (Pri CHAR_TO_U64)
-    "HVM_INC"     -> return (Pri HVM_INC)
-    "HVM_DEC"     -> return (Pri HVM_DEC)
+    "Set"           -> return Set
+    "Empty"         -> return Emp
+    "Unit"          -> return Uni
+    "Bool"          -> return Bit
+    "False"         -> return Bt0
+    "True"          -> return Bt1
+    "Nat"           -> return Nat
+    "U64"           -> return (Num U64_T)
+    "I64"           -> return (Num I64_T)
+    "F64"           -> return (Num F64_T)
+    "Char"          -> return (Num CHR_T)
+    "U64_TO_CHAR"   -> return (Pri U64_TO_CHAR)
+    "CHAR_TO_U64"   -> return (Pri CHAR_TO_U64)
+    "HVM_INC"       -> return (Pri HVM_INC)
+    "HVM_DEC"       -> return (Pri HVM_DEC)
+    "IO_PRINT"      -> return (Pri IO_PRINT)
+    "IO_BIND"       -> return (Pri IO_BIND)
+    "IO_PURE"       -> return (Pri IO_PURE)
+    "IO_PUTC"       -> return (Pri IO_PUTC)
+    "IO_GETC"       -> return (Pri IO_GETC)
+    "IO_READ_FILE"  -> return (Pri IO_READ_FILE)
+    "IO_WRITE_FILE" -> return (Pri IO_WRITE_FILE)
     _             -> return $ Var qualified 0
 
 -- | Syntax: ()
@@ -746,6 +754,16 @@ parseLst :: Term -> Parser Term
 parseLst t = label "list type" $ do
   _ <- try $ symbol "[]"
   return (Lst t)
+
+-- | Syntax: IO<Type>
+parseIo :: Parser Term
+parseIo = label "IO type" $ try $ do
+  _ <- symbol "IO"
+  notFollowedBy (satisfy isNameChar)  -- Ensure IO is not part of a longer name
+  _ <- symbol "<"
+  t <- parseTerm
+  _ <- symbol ">"
+  return (IO t)
 
 -- | Syntax: Type{term1 == term2} or Type{term1 != term2}
 parseEql :: Term -> Parser Term
