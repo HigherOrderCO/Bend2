@@ -34,6 +34,7 @@
 -- - Scrutinee is reconstructed with 'use' bindings unless field names conflict
 -- - Handles Let, Use, Chk, Loc, Log, and App as passthrough constructs
 
+{-# LANGUAGE ViewPatterns #-}
 module Core.Adjust.ReduceEtas where
 
 import Core.Type
@@ -86,60 +87,62 @@ reduceEtas :: Int -> Term -> Term
 reduceEtas d term = case term of
 -- this assumes `t` is bound, because without this we can't (at least not easily) replace a var that is originally
 -- an argument of a constructor in a match by a var of the newly-pulled-outward match of the reduction
-  Lam k mty f ->
-    case isEtaLong d k (f (Var k d)) of
-      EMPM -> EmpM
+  Lam k mty f -> 
+    -- trace ("reduce etas: " ++ show term ++ " == " ++ show res) $
+    -- trace ("is eta long: " ++ show term ++ " == " ++ show islong) $
+    res
+    where
+      nam = "$"++show d
+      islong = isEtaLong d nam (f (Var nam d))
+      res = case islong of
+        EMPM -> EmpM
 
-      EQLM -> EqlM refl where
-          nam = "$"++show d
-          refl = reduceEtas d $ bindVarByName nam Rfl (resolveMatches d nam EQLM 0 "" [] (f (Var nam d)))
+        EQLM -> EqlM refl where
+            refl = reduceEtas d $ bindVarByName nam Rfl (resolveMatches d nam EQLM 0 "" [] (f (Var nam d)))
 
-      UNIM -> UniM u where
-          nam = "$"++show d
-          u = reduceEtas d $ bindVarByName nam One (resolveMatches d nam UNIM 0 "" [] (f (Var nam d)))
-                                                                                            -- if we don't use f (Var k d), 
-                                                                                            -- then the recursive reduceEtas
-                                                                                            -- won't know that it has found
-                                                                                            -- a deeper app-lam-match on k
-      BITM -> BitM fl tr where
-          nam = "$"++show d
-          fl = reduceEtas d $ bindVarByName nam Bt0 (resolveMatches d nam BITM 0 "" [] (f (Var nam d)))
-          tr = reduceEtas d $ bindVarByName nam Bt1 (resolveMatches d nam BITM 1 "" [] (f (Var nam d)))
+        UNIM -> UniM u where
+            u = reduceEtas d $ bindVarByName nam One (resolveMatches d nam UNIM 0 "" [] (f (Var nam d)))
+                                                                                              -- if we don't use f (Var k d), 
+                                                                                              -- then the recursive reduceEtas
+                                                                                              -- won't know that it has found
+                                                                                              -- a deeper app-lam-match on k
+        BITM -> BitM fl tr where
+            fl = reduceEtas d $ bindVarByName nam Bt0 (resolveMatches d nam BITM 0 "" [] (f (Var nam d)))
+            tr = reduceEtas d $ bindVarByName nam Bt1 (resolveMatches d nam BITM 1 "" [] (f (Var nam d)))
 
-      NATM nams@[p] -> NatM z s where
-          nam = "$"++show d
-          z = reduceEtas d $ bindVarByName nam Zer (resolveMatches d nam (NATM [p]) 0 "" [] (f (Var nam d)))
-          s = reduceEtas d (Lam p (Just Nat) (\q -> bindVarByName nam (Suc q) (resolveMatches (d+1) nam (NATM nams) 1 "" [Sub q] (f (Var nam d)))))
+        NATM nams@[p] -> NatM z s where
+            z = reduceEtas d $ bindVarByName nam Zer (resolveMatches d nam (NATM [p]) 0 "" [] (f (Var nam d)))
+            s = reduceEtas d (Lam p (Just Nat) (\q -> bindVarByName nam (Suc q) (resolveMatches (d+1) nam (NATM nams) 1 "" [Sub q] (f (Var nam d)))))
 
-      LSTM nams@[h,t] -> LstM nil cons where
-          nam = "$"++show d
-          nil = reduceEtas d $ bindVarByName nam Nil (resolveMatches d nam (LSTM nams) 0 "" [] (f (Var nam d)))
-          cons = reduceEtas d (Lam h Nothing (\h ->
-                               Lam t Nothing (\t ->
-                               bindVarByName nam (Con h t) (resolveMatches (d+2) nam (LSTM nams) 1 "" [Sub h, Sub t] (f (Var nam d))))))
+        LSTM nams@[h,t] -> 
+          -- trace ("reduce etas LST: " ++ show term ++ " == " ++ show (LstM nil cons)) $
+          LstM nil cons 
+          where
+            nil = reduceEtas d $ bindVarByName nam Nil (resolveMatches d nam (LSTM nams) 0 "" [] (f (Var nam d)))
+            cons = reduceEtas d (Lam h Nothing (\h ->
+                                 Lam t Nothing (\t ->
+                                 bindVarByName nam (Con h t) (resolveMatches (d+2) nam (LSTM nams) 1 "" [Sub h, Sub t] (f (Var nam d))))))
 
-      SIGM nams@[a,b] -> SigM pair where
-          nam = "$"++show d
-          pair = reduceEtas d (Lam a Nothing (\a ->
-                               Lam b Nothing (\b ->
-                               bindVarByName nam (Tup a b) (resolveMatches (d+2) nam (SIGM nams) 0 "" [Sub a, Sub b] (f (Var nam d))))))
+        SIGM nams@[a,b] -> SigM pair where
+            pair = reduceEtas d (Lam a Nothing (\a ->
+                                 Lam b Nothing (\b ->
+                                 bindVarByName nam (Tup a b) (resolveMatches (d+2) nam (SIGM nams) 0 "" [Sub a, Sub b] (f (Var nam d))))))
 
-      ENUM syms compl -> EnuM cases def where
-        nam = "$"++show d
-        cases = map (\sym -> (sym, reduceEtas d $ bindVarByName nam (Sym sym) (resolveMatches d nam (ENUM syms compl) 0 sym [] (f (Var nam d))))) syms
-        def = if compl
-            then reduceEtas d (Lam (extendName k "def") Nothing (\q -> bindVarByName nam q (resolveMatches (d+1) nam (ENUM syms compl) (-1) "" [Sub q] (f (Var nam d)))))
-            else One
-      
-      -- SUPM lab -> SupM lab branches where
-      --     branches = reduceEtas d (Lam (extendName k "0") Nothing (\l ->
-      --                              Lam (extendName k "1") Nothing (\r ->
-      --                              Let k Nothing l (\v ->
-      --                              bindVarByName k v (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d))))))
-      --                             )
+        ENUM syms compl -> EnuM cases def where
+          cases = map (\sym -> (sym, reduceEtas d $ bindVarByName nam (Sym sym) (resolveMatches d nam (ENUM syms compl) 0 sym [] (f (Var nam d))))) syms
+          def = if compl
+              then reduceEtas d (Lam (extendName k "def") Nothing (\q -> bindVarByName nam q (resolveMatches (d+1) nam (ENUM syms compl) (-1) "" [Sub q] (f (Var nam d)))))
+              else One
+        
+        -- SUPM lab -> SupM lab branches where
+        --     branches = reduceEtas d (Lam (extendName k "0") Nothing (\l ->
+        --                              Lam (extendName k "1") Nothing (\r ->
+        --                              Let k Nothing l (\v ->
+        --                              bindVarByName k v (resolveMatches (d+2) k (SUPM lab) 0 "" [Sub l, Sub r] (f (Var k d))))))
+        --                             )
 
-      -- NONE -> Lam k mty (\x -> reduceEtas d (f x))
-      _ -> Lam k mty (\x -> reduceEtas (d+1) (f x))
+        -- NONE -> Lam k mty (\x -> reduceEtas d (f x))
+        _ -> Lam k mty (\x -> reduceEtas (d+1) (f x))
 
   -- Not a Lam, just propagate deeper
   Var n i       -> Var n i
@@ -207,90 +210,77 @@ resolveMatches d n l clause sym args t = case t of
         then case (cut f, l) of
           -- Unit matches
           (UniM u,     UNIM) -> resolveMatches d n l clause sym args u
-          (UniM u,        _) -> UniM (resolveMatches d n l clause sym args u)
-
           -- Bit matches
-          (BitM fl tr, BITM) -> 
-            let branch = [fl, tr] !! clause
-            in resolveMatches d n l clause sym args branch
-          (BitM fl tr,    _) ->
-            BitM (resolveMatches d n l clause sym args fl) (resolveMatches d n l clause sym args tr)
-
+          (BitM fl tr, BITM) -> resolveMatches d n l clause sym args ([fl, tr] !! clause)
           -- Nat matches
           (NatM z s, NATM p) -> 
             case clause of
               0 -> resolveMatches d n l clause sym args z
-              1 -> case (cut s, args) of
-                     (Lam _ _ body, [q]) -> resolveMatches d n l clause sym args (body q)
-                     _ -> foldl App (resolveMatches d n l clause sym args s) args
-              _ -> error "Invalid clause for NatM"
-          (NatM z s,    _) ->
-            NatM (resolveMatches d n l clause sym args z) (resolveMatches d n l clause sym args s)
+              1 -> case args of
+                     ([q]) -> resolveMatches d n l clause sym args $ appInnerArg 0 0 s q
+                     _     -> error "unreachable"
+              _            -> error "unreachable"
+              -- 1 -> case (cut s, args) of
+              --        (Lam _ _ body, [q]) -> resolveMatches d n l clause sym args (body q)
+              --        _ -> foldl App (resolveMatches d n l clause sym args s) args
 
           -- Empty matches
           (EmpM, EMPM) -> resolveMatches d n l clause sym args EmpM  -- Empty match has no branches
-          (EmpM, _)    -> EmpM
           
           -- List matches
           (LstM nil cons, LSTM nams) -> 
             case clause of
               0 -> resolveMatches d n l clause sym args nil
               1 -> case args of
-                     [h, t] -> case cut cons of
-                       Lam _ _ body1 -> case cut (body1 h) of
-                         Lam _ _ body2 -> resolveMatches d n l clause sym args (body2 t)
-                         _ -> error "LstM cons expects two lambda levels"
-                       _ -> foldl App (resolveMatches d n l clause sym args cons) args
-                     _ -> error "LstM cons case expects exactly two arguments"
-              _ -> error "Invalid clause for LstM"
-          (LstM nil cons, _) ->
-            LstM (resolveMatches d n l clause sym args nil) (resolveMatches d n l clause sym args cons)
+                     [h, t] -> resolveMatches d n l clause sym args $ appInnerArg 0 0 (appInnerArg 1 0 cons t) h
+                     _      -> error "unreachable"
+              _             -> error "unreachable"
+                      -- let res = appInnerArg 0 0 (appInnerArg 1 0 cons t) h
+                      -- in 
+                      --   -- trace ("applying inner " ++ show h ++"," ++ show t ++": " ++ show cons ++ " ----> " ++ show res) $
+                      --   res
          
           -- Pair matches
           (SigM pair, SIGM nams) -> 
             case args of
-              [a, b] -> case cut pair of
-                Lam _ _ body1 -> case cut (body1 a) of
-                  Lam _ _ body2 -> resolveMatches d n l clause sym args (body2 b)
-                  _ -> error "SigM expects two lambda levels"
-                _ -> foldl App (resolveMatches d n l clause sym args pair) args
-              _ -> error "SigM expects exactly two arguments"
-          (SigM pair, _) ->
-            SigM (resolveMatches d n l clause sym args pair)         
+              [a, b] -> resolveMatches d n l clause sym args $ appInnerArg 0 0 (appInnerArg 1 0 pair b) a
+              _ -> error "unreachable"
+              -- [a, b] -> case cut pair of
+              --   Lam _ _ body1 -> case cut (body1 a) of
+              --     Lam _ _ body2 -> resolveMatches d n l clause sym args (body2 b)
+              --     _ -> error "SigM expects two lambda levels"
+              --   _ -> foldl App (resolveMatches d n l clause sym args pair) args
+              -- _ -> error "SigM expects exactly two arguments"
 
           -- Sup matches
-          (SupM label branches, SUPM lab) ->
-            case args of
-              [lft, rgt] -> case cut branches of
-                Lam _ _ body1 -> case cut (body1 lft) of
-                  Lam _ _ body2 -> resolveMatches d n l clause sym args (body2 rgt)
-                  _             -> error "SupM expects two lambda levels"
-                _             -> foldl App (resolveMatches d n l clause sym args branches) args
-              _ -> error "SupM expects exactly two arguments"
-          (SupM label branches, _) ->
-            SupM (resolveMatches d n l clause sym args label) (resolveMatches d n l clause sym args branches)
+          -- (SupM label branches, SUPM lab) ->
+          --   case args of
+          --     [lft, rgt] -> case cut branches of
+          --       Lam _ _ body1 -> case cut (body1 lft) of
+          --         Lam _ _ body2 -> resolveMatches d n l clause sym args (body2 rgt)
+          --         _             -> error "SupM expects two lambda levels"
+          --       _             -> foldl App (resolveMatches d n l clause sym args branches) args
+          --     _ -> error "SupM expects exactly two arguments"
           
           -- Equality matches
           (EqlM refl, EQLM) -> resolveMatches d n l clause sym args refl
-          (EqlM refl, _)    -> EqlM (resolveMatches d n l clause sym args refl)
 
           -- Enum matches
           (EnuM cs def, ENUM syms _) ->
             if clause == -1 
               then
-                case (cut def, args) of
-                  (Lam _ _ body, [q]) -> resolveMatches (d+1) n l clause sym args (body q)
-                  _                   -> def
+                case args of [q] -> resolveMatches d n l clause sym args $ appInnerArg 0 0 def q
+                -- case (cut def, args) of
+                --   (Lam _ _ body, [q]) -> resolveMatches (d+1) n l clause sym args (body q)
+                --   _                   -> def
               else 
                 case lookup sym cs of
                   Just branch ->
                     resolveMatches d n l clause sym args branch
-                  Nothing     ->
-                    case cut def of
-                      Lam defK mtdef defB -> resolveMatches (d+1) n l clause sym args (defB (Var k i))
-                      _ -> error $ "Missing lambda in default case"
-          (EnuM cs def, _) ->
-            EnuM [(s, resolveMatches d n l clause sym args t) | (s,t) <- cs] (resolveMatches d n l clause sym args def)
+                  Nothing     -> resolveMatches d n l clause sym args $ appInnerArg 0 0 def (Var k i)
+                    -- case cut def of
+                    --   Lam defK mtdef defB -> resolveMatches (d+1) n l clause sym args (defB (Var k i))
+                    --   _ -> error $ "Missing lambda in default case"
           
           -- Not an eliminator application
           _ -> App (resolveMatches d n l clause sym args f) (resolveMatches d n l clause sym args x)
@@ -353,6 +343,25 @@ resolveMatches d n l clause sym args t = case t of
                       (resolveMatches d n l clause sym args b)
   Tst x        -> Tst (resolveMatches d n l clause sym args x)
 
+appInnerArg :: Int -> Int -> Term -> Term -> Term
+-- reduce lambdas
+appInnerArg i j (Loc l t) arg = Loc l (appInnerArg i j t arg)
+appInnerArg i j (App f x) arg = App (appInnerArg (i+1) j f arg) x
+appInnerArg 0 0 (Lam _ _ b) arg = b arg
+-- apply non-lambdas
+appInnerArg 0 0 func arg = App func arg
+-- go deeper for the next eliminator
+appInnerArg l 0 func arg = case func of
+  Lam k mt b  -> Lam k mt (\x -> appInnerArg (l-1) 0 (b x) arg) 
+  EmpM        -> EmpM
+  EqlM f      -> EqlM (appInnerArg (l-1) 0 f arg)
+  UniM f      -> UniM (appInnerArg (l-1) 0 f arg) 
+  BitM f t    -> BitM (appInnerArg (l-1) 0 f arg) (appInnerArg (l-1) 0 t arg)
+  NatM z s    -> NatM (appInnerArg (l-1) 0 z arg) (appInnerArg (l-1+1) 0 s arg)
+  LstM n c    -> LstM (appInnerArg (l-1) 0 n arg) (appInnerArg (l-1+2) 0 c arg)
+  SigM g      -> SigM (appInnerArg (l-1+2) 0 g arg)
+  EnuM cs def -> EnuM (map (\(s,t) -> (s, appInnerArg (l-1) 0 t arg)) cs) (appInnerArg (l-1+1) 0 def arg)
+
 -- Check if a term contains the eta-long pattern: App (λ{...}) (Var name)
 isEtaLong :: Int -> Name -> Term -> ElimLabel
 isEtaLong d n t = case t of
@@ -366,7 +375,7 @@ isEtaLong d n t = case t of
           BitM _ _    -> BITM <+> isEtaLong d n f
           NatM _ s    -> NATM (getVarName 1 s) <+> isEtaLong d n f
           EmpM        -> EMPM <+> isEtaLong d n f
-          LstM _ c    -> LSTM (getVarName 2 c) <+> isEtaLong d n f
+          LstM _ c    -> LSTM (getVar 2 c) <+> isEtaLong d n f
           SigM g      -> SIGM (getVarName 2 g) <+> isEtaLong d n f
           EqlM _      -> EQLM <+> isEtaLong d n f
           SupM l _    -> SUPM l <+> isEtaLong d n f
@@ -433,3 +442,43 @@ getVarName 1 term = case cut term of
 getVarName n term = case cut term of
   Lam k _ b -> k:(getVarName (n-1) (b (Var "_" 0)))
   _         -> ["$noname" | _ <- [1..n]]
+
+getVar :: Int -> Term -> [String]
+getVar i term = getVarGo i 0 term []
+  where
+  def = "$noname"
+  combine a b = 
+    -- trace ("combining " ++ show a ++ " and " ++ show b ++ " for " ++show term) $
+    case (a,b) of
+    (a:as,b:bs) -> case (a,b) of
+      (a,b) | a == def -> b:(combine as bs)
+      (a,b)            -> a:(combine as bs)
+    _           -> a
+  getVarGo 0 j term nams = nams
+  getVarGo i j term nams | j > 0 = case cut term of
+    App f x   -> getVarGo i j f nams
+    Lam k _ b -> getVarGo i (j-1) (b (Var "_" 0)) nams
+    UniM f    -> getVarGo i (j-1) f nams
+    BitM f t  -> combine (getVarGo i (j-1) f nams) (getVarGo i (j-1) t nams)
+    NatM z s  -> combine (getVarGo i (j-1) z nams) (getVarGo i (j-1+1) s nams)
+    LstM n c  -> combine (getVarGo i (j-1) n nams) (getVarGo i (j-1+2) c nams)
+    EnuM c d  -> getVarGo i (j-1+1) d nams
+    SigM g    -> getVarGo i (j-1+2) g nams
+    EqlM f    -> getVarGo i (j-1) f nams
+    -- EmpM      -> 
+    -- SupM f    ->
+    _ -> error $ "not enough arguments in eliminator clause:" ++ show term
+  getVarGo i 0 term nams = case cut term of
+    App f x   -> getVarGo i 1 f nams
+    Lam k _ b -> (k   : getVarGo (i-1) 0 (b (Var "_" 0)) nams)
+    UniM f    -> (def : getVarGo (i-1) 0 f nams)
+    BitM f t  -> (def : combine (getVarGo (i-1) 0 f nams) (getVarGo (i-1) 0 t nams))
+    NatM z s  -> (def : combine (getVarGo (i-1) 0 z nams) (getVarGo (i-1) 1 s nams))
+    LstM n c  -> (def : combine (getVarGo (i-1) 0 n nams) (getVarGo (i-1) 2 c nams))
+    EnuM c d  -> (def : getVarGo (i-1) 1 d nams)
+    SigM g    -> (def : getVarGo (i-1) 2 g nams)
+    EqlM f    -> (def : getVarGo (i-1) 0 f nams)
+    -- EmpM      -> 
+    -- SupM f    ->
+    _ -> error $ "not enough arguments in eliminator clause:" ++ show term
+
