@@ -38,6 +38,7 @@ binder lv term ctx vars = case term of
   Zer         -> Zer
   Suc n       -> Suc (binder lv n ctx vars)
   NatM z s    -> NatM (binder lv z ctx vars) (binder lv s ctx vars)
+  IO t        -> IO (binder lv t ctx vars)
   Lst t       -> Lst (binder lv t ctx vars)
   Nil         -> Nil
   Con h t     -> Con (binder lv h ctx vars) (binder lv t ctx vars)
@@ -104,6 +105,7 @@ bindVar match val term = go term where
     Zer         -> Zer
     Suc n       -> Suc (go n)
     NatM z s    -> NatM (go z) (go s)
+    IO t        -> IO (go t)
     Lst t       -> Lst (go t)
     Nil         -> Nil
     Con h t     -> Con (go h) (go t)

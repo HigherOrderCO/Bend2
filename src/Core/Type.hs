@@ -25,7 +25,6 @@ import qualified Data.Kind as DK
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-data Bits = O Bits | I Bits | E deriving Show
 type Name = String
 type Body = Term -> Term
 type Case = ([Term], Term)
@@ -63,6 +62,13 @@ data PriF
   | CHAR_TO_U64
   | HVM_INC
   | HVM_DEC
+  | IO_PURE        -- pure      : A → IO A
+  | IO_BIND        -- bind      : IO A → (A → IO B) → IO B
+  | IO_PRINT       -- print     : String → IO ()
+  | IO_PUTC        -- putc      : Char → IO ()
+  | IO_GETC        -- getc      : IO Char
+  | IO_READ_FILE   -- readFile  : String → IO String
+  | IO_WRITE_FILE  -- writeFile : String → String → IO ()
   deriving (Show, Eq)
 
 -- Bend's Term Type
@@ -71,6 +77,9 @@ data Term
   = Var Name Int -- x
   | Ref Name Int -- x, Reduce?
   | Sub Term     -- x
+
+  -- IO type
+  | IO Type
 
   -- Definitions
   | Fix Name Body                   -- μx. f
