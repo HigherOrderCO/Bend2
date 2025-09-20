@@ -44,16 +44,10 @@ whnfGo book term =
     Fix k f     -> whnfFix book k f
     Chk x _     -> whnf book x
     Tst x       -> whnf book x
-    -- Pattern match multi-arg IO primitives before generic App case
-    App (App (App (App (Pri IO_BIND) _) _) action) cont ->
-      whnfIOBind book action cont
-    App (App (Pri IO_WRITE_FILE) path) content ->
-      whnfIOWriteFile book path content
     App f x     -> whnfApp book f x
     Loc _ t     -> whnf book t
     Op2 o a b   -> whnfOp2 book o a b
     Op1 o a     -> whnfOp1 book o a
-    Pri IO_GETC -> whnfIOGetC  -- 0-arg IO primitive
     Pri p       -> Pri p
     -- Eql t a b   -> whnfEql book t a b
     Rwt e f     -> whnf book f  -- Rwt reduces to just the body
@@ -193,31 +187,13 @@ whnfAppPri book p x =
       (CHAR_TO_U64, Val (CHR_V c)) -> Val (U64_V (fromIntegral (fromEnum c)))
       (HVM_INC    , t)             -> t
       (HVM_DEC    , t)             -> t
-      -- IO primitives now execute immediately when fully applied
+      -- IO primitives accumulate arguments but don't execute until forced by bind
       (IO_PURE    , v)             -> v  -- Pure just returns the value
       (IO_BIND    , m)             -> App (Pri IO_BIND) x'  -- Accumulate args (handled in whnfGo)
-      (IO_PRINT   , s)             -> unsafePerformIO $ do
-                                        case termToString book s of
-                                          Just str -> do
-                                            putStr str
-                                            hFlush stdout
-                                          Nothing -> return ()
-                                        return One
-      (IO_PUTC    , Val (CHR_V c)) -> unsafePerformIO $ do
-                                        putChar c
-                                        hFlush stdout
-                                        return One
-      (IO_PUTC    , Val (U64_V n)) -> unsafePerformIO $ do
-                                        putChar (toEnum (fromIntegral n))
-                                        hFlush stdout
-                                        return One
+      (IO_PRINT   , s)             -> App (Pri IO_PRINT) x'
+      (IO_PUTC    , _)             -> App (Pri IO_PUTC) x'
       (IO_GETC    , _)             -> Pri IO_GETC  -- IO_GETC takes no arguments
-      (IO_READ_FILE, path)         -> unsafePerformIO $ do
-                                        case termToString book path of
-                                          Just filepath -> do
-                                            contents <- readFile filepath
-                                            return (stringToTerm contents)
-                                          Nothing -> return Nil
+      (IO_READ_FILE, path)         -> App (Pri IO_READ_FILE) x'
       (IO_WRITE_FILE, path)        -> App (Pri IO_WRITE_FILE) x'  -- Accumulate args (handled in whnfGo)
       _                            -> App (Pri p) x'
 
@@ -505,6 +481,10 @@ normalCtx book (Ctx ctx) = Ctx (map normalAnn ctx)
 -- IO Helper Functions
 -- ===================
 
+-- Execute IO actions - now just evaluates without performing IO
+executeIO :: Book -> Term -> Term
+executeIO book action = whnf book action
+
 -- Convert a Bend string (character list) to a Haskell String
 termToString :: Book -> Term -> Maybe String
 termToString book term = go (whnf book term)
@@ -520,26 +500,4 @@ stringToTerm :: String -> Term
 stringToTerm [] = Nil
 stringToTerm (c:cs) = Con (Val (CHR_V c)) (stringToTerm cs)
 
--- Execute IO_BIND: execute action, then apply continuation to result
-whnfIOBind :: Book -> Term -> Term -> Term
-whnfIOBind book action cont =
-  -- Force evaluation of the action to ensure side effects happen
-  let !result = whnf book action  -- Execute the action (side effects happen here)
-  in whnf book (App cont result)  -- Apply continuation to result and reduce
 
--- Execute IO_WRITE_FILE: write content to file
-whnfIOWriteFile :: Book -> Term -> Term -> Term
-whnfIOWriteFile book path content = unsafePerformIO $ do
-  case termToString book path of
-    Just filepath -> do
-      case termToString book content of
-        Just str -> writeFile filepath str
-        Nothing -> return ()
-    Nothing -> return ()
-  return One
-
--- Execute IO_GETC: read a character from stdin
-whnfIOGetC :: Term
-whnfIOGetC = unsafePerformIO $ do
-  c <- getChar
-  return (Val (CHR_V c))
