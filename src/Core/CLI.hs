@@ -77,92 +77,9 @@ parseFile file = do
   where
     takeDirectory path = reverse . dropWhile (/= '/') . reverse $ path
 
--- | Execute a normalized IO action and return the result
-executeIOWithResult :: Book -> Term -> IO Term
-executeIOWithResult book ioAction = case ioAction of
-  -- IO_PURE just returns a value (no side effect)
-  App (Pri IO_PURE) val -> return val
-
-  -- IO_PUTC outputs a character and returns Unit
-  App (Pri IO_PUTC) chr -> do
-    case chr of
-      Val (CHR_V c) -> do
-        putChar c
-        hFlush stdout
-      Val (U64_V n) -> do
-        putChar (toEnum (fromIntegral n) :: Char)
-        hFlush stdout
-      Val (I64_V n) -> do
-        putChar (toEnum (fromIntegral n) :: Char)
-        hFlush stdout
-      _ -> return ()
-    return Uni
-
-  -- IO_PRINT outputs a string and returns Unit
-  App (Pri IO_PRINT) str -> do
-    let chars = extractString book str
-    putStr chars
-    hFlush stdout
-    return Uni
-
-  -- IO_GETC reads a character and returns it
-  Pri IO_GETC -> do
-    c <- getChar
-    return (Val (CHR_V c))
-
-  -- IO_READ_FILE reads a file and returns its contents as a string
-  App (Pri IO_READ_FILE) path -> do
-    let pathStr = extractString book path
-    contents <- readFile pathStr
-    return (stringToTerm contents)
-
-  -- IO_WRITE_FILE writes to a file and returns Unit
-  App (App (Pri IO_WRITE_FILE) path) content -> do
-    let pathStr = extractString book path
-    let contentStr = extractString book content
-    writeFile pathStr contentStr
-    return Uni
-
-  -- IO_BIND sequences two IO actions (with type parameters)
-  -- Pattern: IO_BIND<A, B>(action, cont)
-  App (App (App (App (Pri IO_BIND) _typeA) _typeB) action) cont -> do
-    -- Execute the first action and get its result
-    result <- executeIOWithResult book action
-    -- Apply the continuation to the result
-    let nextAction = normal book (App cont result)
-    executeIOWithResult book nextAction
-
-  -- IO_BIND without type parameters (backwards compatibility)
-  App (App (Pri IO_BIND) action) cont -> do
-    -- Execute the first action and get its result
-    result <- executeIOWithResult book action
-    -- Apply the continuation to the result
-    let nextAction = normal book (App cont result)
-    executeIOWithResult book nextAction
-
-  _ -> return Uni  -- Unknown IO action, return Unit
-
--- | Execute a normalized IO action (wrapper that discards result)
-executeIO :: Book -> Term -> IO ()
-executeIO book ioAction = do
-  _ <- executeIOWithResult book ioAction
-  return ()
-
--- | Convert a Haskell String to a Bend term (character list)
-stringToTerm :: String -> Term
-stringToTerm [] = Nil
-stringToTerm (c:cs) = Con (Val (CHR_V c)) (stringToTerm cs)
-
--- | Extract a Haskell String from a Bend string (Lst (Num CHR_T))
-extractString :: Book -> Term -> String
-extractString book term = case normal book term of
-  Nil -> ""
-  Con chr tail -> case chr of
-    Val (CHR_V c) -> c : extractString book tail
-    Val (U64_V n) -> (toEnum (fromIntegral n) :: Char) : extractString book tail
-    Val (I64_V n) -> (toEnum (fromIntegral n) :: Char) : extractString book tail
-    _ -> extractString book tail  -- Skip non-character values
-  _ -> ""
+-- Note: IO execution now happens directly in WHNF reduction
+-- The executeIO functions have been removed as IO primitives
+-- now execute immediately when reduced to weak head normal form.
 
 -- | Run the main function from a book
 runMain :: FilePath -> Book -> IO ()
@@ -184,9 +101,10 @@ runMain filePath book = do
           let normTyp = normal book typ
           case normTyp of
             IO _ -> do
-              -- For IO types, normalize and execute the IO action
+              -- For IO types, just normalize - execution happens during normalization
               let normalizedIO = normal book mainCall
-              executeIO book normalizedIO
+              -- Force evaluation to trigger IO effects
+              seq normalizedIO (return ())
             _ -> do
               -- For non-IO types, just print the normalized result
               putStrLn ""
