@@ -1887,31 +1887,36 @@ check d span book ctx term      goal =
       let fn_name = "$aux_"++show d
       x'    <- check d span book ctx x (Eql Uni One One)
       goal' <- check d span book ctx goal Set
-      check d span book ctx (Let fn_name (Just (reduceEtas d $ All (Eql Uni One One) (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+      -- check d span book ctx (Let fn_name (Just (reduceEtas d $ All (Eql Uni One One) (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+      check d span book ctx (Let fn_name (Just (All (Eql Uni One One) (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
     
     (App fn@(cut -> EmpM) x, _) -> do
       let fn_name = "$aux_"++show d
       x'    <- check d span book ctx x Emp
       goal' <- check d span book ctx goal Set
-      check d span book ctx (Let fn_name (Just (reduceEtas d $ All Emp (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+      -- check d span book ctx (Let fn_name (Just (reduceEtas d $ All Emp (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+      check d span book ctx (Let fn_name (Just (All Emp (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
     
     (App fn@(cut -> UniM f) x, _) -> do
       let fn_name = "$aux_"++show d
       x'    <- check d span book ctx x Uni
       goal' <- check d span book ctx goal Set
-      check d span book ctx (Let fn_name (Just (reduceEtas d $ All Uni (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+      -- check d span book ctx (Let fn_name (Just (reduceEtas d $ All Uni (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+      check d span book ctx (Let fn_name (Just (All Uni (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
 
     (App fn@(cut -> BitM f t) x, _) -> do
       let fn_name = "$aux_"++show d
       x'    <- check d span book ctx x Bit
       goal' <- check d span book ctx goal Set
-      check d span book ctx (Let fn_name (Just (reduceEtas d $ All Bit (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+      -- check d span book ctx (Let fn_name (Just (reduceEtas d $ All Bit (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+      check d span book ctx (Let fn_name (Just (All Bit (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
     
     (App fn@(cut -> NatM z s) x, _) -> do
       let fn_name = "$aux_"++show d
       x'    <- check d span book ctx x Nat
       goal' <- check d span book ctx goal Set
-      check d span book ctx (Let fn_name (Just (reduceEtas d $ All Nat (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+      -- check d span book ctx (Let fn_name (Just (reduceEtas d $ All Nat (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+      check d span book ctx (Let fn_name (Just (All Nat (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
     
     (App fn@(cut -> LstM n c) x@(cut -> Nil), _) -> do
       check d span book ctx n goal
@@ -1923,7 +1928,8 @@ check d span book ctx term      goal =
           x'    <- check d span book ctx x xT
           goal' <- check d span book ctx goal Set
           
-          check d span book ctx (Let fn_name (Just (reduceEtas d $ All (Lst hT) (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+          -- check d span book ctx (Let fn_name (Just (reduceEtas d $ All (Lst hT) (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+          check d span book ctx (Let fn_name (Just (All (Lst hT) (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
         _      -> do
           Fail $ TypeMismatch span (normalCtx book ctx) (All (Var "_" 0) (Lam "_" Nothing (\_ -> (Var "_" 0)))) (normal book xT) Nothing
     
@@ -1937,7 +1943,8 @@ check d span book ctx term      goal =
         Sig _ _ -> do
           x' <- check d span book ctx x xT
           goal' <- check d span book ctx goal Set
-          check d span book ctx (Let fn_name (Just (reduceEtas d $ All xT (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+          -- check d span book ctx (Let fn_name (Just (reduceEtas d $ All xT (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
+          check d span book ctx (Let fn_name (Just (All xT (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
         _       -> do
           Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (Var "Σ_:_._" 0) (normal book xT) Nothing
         where
@@ -2047,7 +2054,3 @@ cutChk :: Term -> Term
 cutChk (Loc l x) = Loc l (cutChk x)
 cutChk (Chk x t) = x
 cutChk x         = x
-
-getSpan :: Span -> Term -> Span
-getSpan span (Loc l _) = l
-getSpan span _         = span

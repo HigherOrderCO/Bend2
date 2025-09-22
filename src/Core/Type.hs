@@ -261,6 +261,10 @@ collectApps f                args = (f, args)
 noSpan :: Span
 noSpan = Span (0,0) (0,0) "" ""
 
+getSpan :: Span -> Term -> Span
+getSpan span (Loc l _) = l
+getSpan span _         = span
+
 flattenTup :: Term -> [Term]
 flattenTup (Tup l r) = l : flattenTup (cut r)
 flattenTup t         = [t]
