@@ -101,7 +101,6 @@ parseFile file = do
       hPutStrLn stderr $ err
       exitFailure
     Right (book, parserState) -> do
-      putStrLn $ show book
       -- Auto-import unbound references with explicit import information
       autoImportedBook <- autoImportWithExplicit file book parserState
       return autoImportedBook
