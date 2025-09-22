@@ -38,7 +38,7 @@ elaborate book term =
   etas
   where
     splt = split 0 0 term
-    etas = reduceEtas 0 splt
+    etas = reduceEtas 0 noSpan splt
 
 -- | Elaborates a term. simplifying patterns but leaving terms as Pats.
 elaborateWithPats :: Book -> Term -> (Maybe Term) -> Term

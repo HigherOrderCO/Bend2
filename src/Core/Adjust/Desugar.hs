@@ -51,7 +51,7 @@ desugar book term =
     npat = desugarPats 0 noSpan flat
     nfrk = desugarFrks book 0 npat
     hoas = bind nfrk
-    etas = reduceEtas 0 hoas
+    etas = reduceEtas 0 noSpan hoas
 
 -- | Desugars a term. simplifying patterns but leaving terms as Pats.
 desugarWithPats :: Book -> Term -> Term

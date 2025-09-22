@@ -100,7 +100,7 @@ adjust book term =
     npat = desugarPats 0 noSpan flat
     nfrk = desugarFrks book 0 npat
     hoas = bind nfrk
-    done = reduceEtas 0 hoas
+    done = reduceEtas 0 noSpan hoas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
 adjustWithPats :: Book -> Term -> Term
