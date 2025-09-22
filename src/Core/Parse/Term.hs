@@ -31,6 +31,12 @@ import Core.Parse.Parse
 import Core.Type
 import Core.Show
 
+-- Do notation data types
+data DoStatement
+  = DoBinding String Term Type    -- x <- expr : Type
+  | DoLet String Term Type        -- x = expr : Type
+  | DoAction Term                 -- expr
+
 -- | Parse a "core" form
 parseTermIni :: Parser Term
 parseTermIni = choice
@@ -44,6 +50,7 @@ parseTermIni = choice
   , parseFrk
   , parseTrust
   , parseLog
+  , parseDo
   , parseAll
   , parseSig
   , parseTildeExpr
@@ -1186,6 +1193,99 @@ parseSupMCases scrut = do
   f <- parseTerm
   _ <- parseSemi
   return (App (SupM l f) scrut)
+
+-- Do notation parsers
+-- ==================
+
+-- | Syntax: do : IO<Type>: statements | do : IO<Type> { statements }
+parseDo :: Parser Term
+parseDo = label "do notation" $ do
+  srcPos <- getSourcePos
+  _ <- try $ keyword "do"
+  returnType <- parseDoReturnType
+  delim <- choice [ ':' <$ symbol ":", '{' <$ symbol "{" ]
+  stmts <- case delim of
+    ':' -> parseIndentDoStatements (unPos (sourceColumn srcPos))
+    '{' -> parseBraceDoStatements
+    _   -> fail "unreachable"
+  when (delim == '{') (void $ symbol "}")
+  return $ desugarDoBlock returnType stmts
+
+-- | Parse -> IO<Type>
+parseDoReturnType :: Parser Term
+parseDoReturnType = do
+  _ <- symbol ":"
+  _ <- symbol "IO"
+  notFollowedBy (satisfy isNameChar)  -- Ensure IO is not part of a longer name
+  _ <- symbol "<"
+  innerType <- parseTerm
+  _ <- symbol ">"
+  return innerType
+
+-- | Parse list of do statements with braces
+parseBraceDoStatements :: Parser [DoStatement]
+parseBraceDoStatements = some parseDoStatement
+
+-- | Parse list of do statements with indentation
+parseIndentDoStatements :: Int -> Parser [DoStatement]
+parseIndentDoStatements col = many statement where
+  statement = label "do statement" $ do
+    pos <- try $ do
+      skip
+      pos <- getSourcePos
+      guard (unPos (sourceColumn pos) >= col)
+      return pos
+    parseDoStatement
+
+-- | Parse individual do statement
+parseDoStatement :: Parser DoStatement
+parseDoStatement = choice
+  [ parseDoBinding   -- x <- expr : Type
+  , parseDoLet       -- x = expr : Type
+  , parseDoAction    -- expr
+  ]
+
+-- | Parse x <- expr : Type
+parseDoBinding :: Parser DoStatement
+parseDoBinding = label "binding statement" $ try $ do
+  x <- name
+  _ <- symbol "<-"
+  expr <- parseTermBefore ":"
+  _ <- symbol ":"
+  typ <- parseTerm
+  return $ DoBinding x expr typ
+
+-- | Parse x = expr : Type
+parseDoLet :: Parser DoStatement
+parseDoLet = label "let statement" $ try $ do
+  x <- name
+  _ <- symbol "="
+  expr <- parseTermBefore ":"
+  _ <- symbol ":"
+  typ <- parseTerm
+  return $ DoLet x expr typ
+
+-- | Parse bare expression
+parseDoAction :: Parser DoStatement
+parseDoAction = label "action statement" $ do
+  expr <- parseTerm
+  return $ DoAction expr
+
+-- | Desugar do block into IO_BIND chain
+desugarDoBlock :: Term -> [DoStatement] -> Term
+desugarDoBlock returnType [DoAction expr] = expr
+desugarDoBlock returnType (DoBinding x expr bindType : rest) =
+  let restBlock = desugarDoBlock returnType rest
+  in App (App (App (App (Pri IO_BIND) bindType) returnType) expr)
+         (Lam x (Just bindType) (\_ -> restBlock))
+desugarDoBlock returnType (DoLet x expr letType : rest) =
+  Let x (Just letType) expr (\_ -> desugarDoBlock returnType rest)
+desugarDoBlock returnType (DoAction expr : rest) =
+  let restBlock = desugarDoBlock returnType rest
+      unitType = Uni
+  in App (App (App (App (Pri IO_BIND) unitType) returnType) expr)
+         (Lam "_" (Just unitType) (\_ -> restBlock))
+desugarDoBlock _ [] = error "Empty do block"
 
 -- | Main entry points
 
