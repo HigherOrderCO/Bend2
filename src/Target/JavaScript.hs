@@ -79,6 +79,7 @@ termToCT book term dep = case term of
   Uni          -> CEra
   Bit          -> CEra
   Nat          -> CEra
+  IO _         -> CEra
   Lst _        -> CEra
   Enu _        -> CEra
   Num _        -> CEra

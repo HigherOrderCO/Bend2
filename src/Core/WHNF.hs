@@ -188,7 +188,7 @@ whnfAppPri book p x =
       (HVM_INC    , t)             -> t
       (HVM_DEC    , t)             -> t
       -- IO primitives accumulate arguments but don't execute until forced by bind
-      (IO_PURE    , v)             -> v  -- Pure just returns the value
+      (IO_PURE    , v)             -> App (Pri IO_PURE) x'  -- Keep IO wrapper for lazy evaluation
       (IO_BIND    , m)             -> App (Pri IO_BIND) x'  -- Accumulate args (handled in whnfGo)
       (IO_PRINT   , s)             -> App (Pri IO_PRINT) x'
       (IO_PUTC    , _)             -> App (Pri IO_PUTC) x'

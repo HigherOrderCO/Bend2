@@ -39,55 +39,33 @@ import qualified Target.Haskell as HS
 -- IO Runtime
 -- ==========
 
--- Execute an IO action term
-runIOAction :: Book -> Term -> IO ()
-runIOAction book action = case whnf book action of
+-- Execute an IO action term and return the result
+executeIOAction :: Book -> Term -> IO Term
+executeIOAction book action = case whnf book action of
     Pri IO_GETC -> do
       c <- getChar
-      return ()  -- This shouldn't happen in main
-    App (Pri IO_PURE) _ -> return ()
+      return (Val (CHR_V c))
+    App (App (Pri IO_PURE) typ) v -> return v
     App (Pri IO_PRINT) s -> case Core.WHNF.termToString book s of
-      Just str -> putStr str >> hFlush stdout
-      Nothing -> return ()
-    App (Pri IO_PUTC) (Val (CHR_V c)) -> putChar c >> hFlush stdout
-    App (Pri IO_PUTC) (Val (U64_V n)) -> putChar (toEnum (fromIntegral n)) >> hFlush stdout
+      Just str -> putStr str >> hFlush stdout >> return One
+      Nothing -> return One
+    App (Pri IO_PUTC) (Val (CHR_V c)) -> putChar c >> hFlush stdout >> return One
+    App (Pri IO_PUTC) (Val (U64_V n)) -> putChar (toEnum (fromIntegral n)) >> hFlush stdout >> return One
     App (Pri IO_READ_FILE) path -> case Core.WHNF.termToString book path of
-      Just filepath -> readFile filepath >> return ()  -- This shouldn't happen in main
-      Nothing -> return ()
+      Just filepath -> do
+        contents <- readFile filepath
+        return (Core.WHNF.stringToTerm contents)
+      Nothing -> return Nil
     App (App (Pri IO_WRITE_FILE) path) content -> case Core.WHNF.termToString book path of
       Just filepath -> case Core.WHNF.termToString book content of
-        Just str -> writeFile filepath str
-        Nothing -> return ()
-      Nothing -> return ()
+        Just str -> writeFile filepath str >> return One
+        Nothing -> return One
+      Nothing -> return One
     -- Handle IO_BIND by executing action then continuation
     App (App (App (App (Pri IO_BIND) _) _) action) cont -> do
-      result <- execIOForBind book action
-      runIOAction book (whnf book (App cont result))
-    _ -> return ()
-
--- Execute IO action and return the result as a Term
-execIOForBind :: Book -> Term -> IO Term
-execIOForBind book action = case whnf book action of
-  Pri IO_GETC -> do
-    c <- getChar
-    return (Val (CHR_V c))
-  App (Pri IO_PURE) v -> return v
-  App (Pri IO_PRINT) s -> case Core.WHNF.termToString book s of
-    Just str -> putStr str >> hFlush stdout >> return One
-    Nothing -> return One
-  App (Pri IO_PUTC) (Val (CHR_V c)) -> putChar c >> hFlush stdout >> return One
-  App (Pri IO_PUTC) (Val (U64_V n)) -> putChar (toEnum (fromIntegral n)) >> hFlush stdout >> return One
-  App (Pri IO_READ_FILE) path -> case Core.WHNF.termToString book path of
-    Just filepath -> do
-      contents <- readFile filepath
-      return (Core.WHNF.stringToTerm contents)
-    Nothing -> return Nil
-  App (App (Pri IO_WRITE_FILE) path) content -> case Core.WHNF.termToString book path of
-    Just filepath -> case Core.WHNF.termToString book content of
-      Just str -> writeFile filepath str >> return One
-      Nothing -> return One
-    Nothing -> return One
-  _ -> return One
+      result <- executeIOAction book action
+      executeIOAction book (whnf book (App cont result))
+    _ -> return One
 
 -- Type-check all definitions in a book
 checkBook :: Book -> IO Book
@@ -148,8 +126,13 @@ runMain filePath book = do
         Done typ -> do
           -- Check if main has IO type and run it properly
           case whnf book typ of
-            Core.Type.IO _ -> runIOAction book mainCall
-            _              -> print $ normal book mainCall
+            Core.Type.IO _ -> do
+              result <- executeIOAction book mainCall
+              -- Print the result if it's not Unit
+              case result of
+                One -> return ()  -- Unit type, don't print
+                _ -> print $ normal book result
+            _ -> print $ normal book mainCall
   where
     -- Helper function to extract module name from filepath (mirrors Import.hs logic)
     takeBaseName' :: FilePath -> String

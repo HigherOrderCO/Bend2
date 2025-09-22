@@ -126,6 +126,7 @@ termToHT book i term = case term of
   Zer         -> HZer
   Suc p       -> HSuc (termToHT book i p)
   NatM z s    -> HLam "x''" (HMat [HVar "x''"] [([HZer], termToHT book i z), ([HSuc (HVar "p''")], HApp (termToHT book i s) (HVar "p''"))])
+  IO _        -> HOne
   Lst _       -> HOne
   Nil         -> HNil
   Con h t     -> HCon (termToHT book i h) (termToHT book i t)
