@@ -25,7 +25,7 @@ compile book@(Book defs _) =
 prelude :: String
 prelude = unlines [
     "{-# LANGUAGE ViewPatterns #-}",
-    "import Prelude (print, fromIntegral, (==), (>=), (/=), (+), (-), (*), div, mod, (^), (<), (>), (<=), negate, id, pred, Integer, Bool(..), IO, undefined, Char)",
+    "import Prelude (print, fromIntegral, (==), (>=), (/=), (+), (-), (*), div, mod, (^), (<), (>), (<=), negate, id, pred, Integer, Bool(..), IO, undefined, Char, return, (>>=), putStrLn, putChar, getChar, readFile, writeFile)",
     "import Data.Bits ((.&.), (.|.), xor, shiftL, shiftR, complement)",
     "import Data.Char (chr, ord)",
     "import Data.Int (Int64)",
@@ -77,6 +77,7 @@ data HT
   | HBit               -- Bool type
   | HNat               -- Nat type  
   | HLst HT            -- List type
+  | HIo  HT            -- IO type
   | HNum NTyp          -- Numeric type
   | HSig HT HT         -- Pair type
   | HEnu               -- Enum type
@@ -166,6 +167,7 @@ typeToHT book t = case whnf book t of
   Bit         -> HBit
   Nat         -> HNat
   Lst t       -> HLst (typeToHT book t)
+  IO t       -> HIo  (typeToHT book t)
   Enu ss      -> HEnu
   Num t       -> HNum t
   Sig a (Lam n _ f) -> HSig (typeToHT book a) (typeToHT book (f (Var n 0)))
@@ -211,6 +213,7 @@ showTerm i term = case term of
   HZer           -> "(0 :: Integer)"
   HSuc n         -> "(" ++ showTerm i n ++ " + (1 :: Integer))"
   HLst t         -> "[" ++ showTerm i t ++ "]"
+  HIo  t         -> "IO " ++ showTerm i t
   HNil           -> "[]"
   HCon h t       -> "(" ++ showTerm i h ++ " : " ++ showTerm i t ++ ")"
   HSig a b       -> "(" ++ showTerm i a ++ ", " ++ showTerm i b ++ ")"
@@ -301,3 +304,10 @@ showPri p = case p of
   CHAR_TO_U64 -> "(fromIntegral . ord)"
   HVM_INC     -> "id"
   HVM_DEC     -> "id"
+  IO_PURE     -> "return"
+  IO_BIND     -> "(>>=)"
+  IO_PRINT    -> "putStrLn"
+  IO_PUTC     -> "putChar"
+  IO_GETC     -> "getChar"
+  IO_READ_FILE -> "readFile"
+  IO_WRITE_FILE -> "writeFile"
