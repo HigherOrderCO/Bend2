@@ -1,6 +1,6 @@
 {-./Type.hs-}
 
-module Core.Import (autoImport, autoImportWithExplicit) where
+module Core.Import (autoImport, autoImportWithExplicit, extractModuleName) where
 
 import Data.List (intercalate, isInfixOf, isSuffixOf, isPrefixOf, sort)
 import Data.List.Split (splitOn)
@@ -527,29 +527,20 @@ resolveRef st refName = do
             multiple -> do
               -- Multiple matches - ambiguous reference error
               pure $ Left $ "Ambiguous reference '" ++ refName ++ "' could refer to: " ++ show multiple
-  where
-    takeBaseName :: FilePath -> String
-    takeBaseName path = 
-      if ".bend" `isSuffixOf` path
-         then take (length path - 5) path  -- Remove .bend extension but keep full path
-         else path
-
+  
 -- | Extract module name from a file path
 -- Removes .bend extension and /_ suffix for module files (e.g., Term/_.bend -> Term)
 extractModuleName :: FilePath -> String
 extractModuleName path =
-  let withoutBend = if ".bend" `isSuffixOf'` path
+  let withoutBend = if ".bend" `isSuffixOf` path
                     then take (length path - 5) path  -- Remove .bend extension
                     else path
       -- Also remove /_ suffix if present (for files like Term/_.bend)
-      withoutUnderscore = if "/_" `isSuffixOf'` withoutBend
+      withoutUnderscore = if "/_" `isSuffixOf` withoutBend
                           then take (length withoutBend - 2) withoutBend  -- Remove /_
                           else withoutBend
   in withoutUnderscore
-  where
-    isSuffixOf' :: Eq a => [a] -> [a] -> Bool
-    isSuffixOf' suffix str = suffix == drop (length str - length suffix) str
-
+ 
 -- | Build substitution map for local definitions
 -- For each definition in the book with FQN "module::name", 
 -- add a mapping from "name" to "module::name"

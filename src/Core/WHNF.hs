@@ -478,26 +478,4 @@ normalCtx :: Book -> Ctx -> Ctx
 normalCtx book (Ctx ctx) = Ctx (map normalAnn ctx)
   where normalAnn (k,v,t) = (k, normal book v, normal book t)
 
--- IO Helper Functions
--- ===================
-
--- Execute IO actions - now just evaluates without performing IO
-executeIO :: Book -> Term -> Term
-executeIO book action = whnf book action
-
--- Convert a Bend string (character list) to a Haskell String
-termToString :: Book -> Term -> Maybe String
-termToString book term = go (whnf book term)
-  where
-    go Nil = Just ""
-    go (Con (Val (CHR_V c)) rest) = do
-      restStr <- go (whnf book rest)
-      return (c : restStr)
-    go _ = Nothing
-
--- Convert a Haskell String to a Bend string (character list)
-stringToTerm :: String -> Term
-stringToTerm [] = Nil
-stringToTerm (c:cs) = Con (Val (CHR_V c)) (stringToTerm cs)
-
 

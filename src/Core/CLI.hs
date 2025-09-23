@@ -25,7 +25,7 @@ import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Bind
 import Core.Check
 import Core.Deps
-import Core.Import (autoImport, autoImportWithExplicit)
+import Core.Import (autoImport, autoImportWithExplicit, extractModuleName)
 import Core.Parse.Book (doParseBook)
 import Core.Parse.Parse (ParserState(..))
 import Core.Type
@@ -40,31 +40,31 @@ import qualified Target.Haskell as HS
 -- ==========
 
 -- Execute an IO action term and return the result
-executeIOAction :: Book -> Term -> IO Term
-executeIOAction book action = case whnf book action of
+executeIO :: Book -> Term -> IO Term
+executeIO book action = case whnf book action of
     Pri IO_GETC -> do
       c <- getChar
       return (Val (CHR_V c))
     App (App (Pri IO_PURE) typ) v -> return v
-    App (Pri IO_PRINT) s -> case Core.WHNF.termToString book s of
+    App (Pri IO_PRINT) s -> case termToString book s of
       Just str -> putStr str >> hFlush stdout >> return One
       Nothing -> return One
     App (Pri IO_PUTC) (Val (CHR_V c)) -> putChar c >> hFlush stdout >> return One
     App (Pri IO_PUTC) (Val (U64_V n)) -> putChar (toEnum (fromIntegral n)) >> hFlush stdout >> return One
-    App (Pri IO_READ_FILE) path -> case Core.WHNF.termToString book path of
+    App (Pri IO_READ_FILE) path -> case termToString book path of
       Just filepath -> do
         contents <- readFile filepath
-        return (Core.WHNF.stringToTerm contents)
+        return (stringToTerm contents)
       Nothing -> return Nil
-    App (App (Pri IO_WRITE_FILE) path) content -> case Core.WHNF.termToString book path of
-      Just filepath -> case Core.WHNF.termToString book content of
+    App (App (Pri IO_WRITE_FILE) path) content -> case termToString book path of
+      Just filepath -> case termToString book content of
         Just str -> writeFile filepath str >> return One
         Nothing -> return One
       Nothing -> return One
     -- Handle IO_BIND by executing action then continuation
     App (App (App (App (Pri IO_BIND) _) _) action) cont -> do
-      result <- executeIOAction book action
-      executeIOAction book (whnf book (App cont result))
+      result <- executeIO book action
+      executeIO book (whnf book (App cont result))
     _ -> return One
 
 -- Type-check all definitions in a book
@@ -111,7 +111,7 @@ parseFile file = do
 runMain :: FilePath -> Book -> IO ()
 runMain filePath book = do
   -- Extract module name from file path (same logic as takeBaseName')
-  let moduleName = takeBaseName' filePath
+  let moduleName = extractModuleName filePath
       mainFQN = moduleName ++ "::main"
   case getDefn book mainFQN of
     Nothing -> do
@@ -126,27 +126,12 @@ runMain filePath book = do
           -- Check if main has IO type and run it properly
           case whnf book typ of
             Core.Type.IO _ -> do
-              result <- executeIOAction book mainCall
+              result <- executeIO book mainCall
               -- Print the result if it's not Unit
               case result of
                 One -> return ()  -- Unit type, don't print
                 _ -> print $ normal book result
             _ -> print $ normal book mainCall
-  where
-    -- Helper function to extract module name from filepath (mirrors Import.hs logic)
-    takeBaseName' :: FilePath -> String
-    takeBaseName' path = 
-      let withoutBend = if ".bend" `isSuffixOf'` path
-                        then take (length path - 5) path  -- Remove .bend extension
-                        else path
-          -- Also remove /_ suffix if present (for files like Term/_.bend)
-          withoutUnderscore = if "/_" `isSuffixOf'` withoutBend
-                              then take (length withoutBend - 2) withoutBend  -- Remove /_
-                              else withoutBend
-      in withoutUnderscore
-      where
-        isSuffixOf' :: Eq a => [a] -> [a] -> Bool
-        isSuffixOf' suffix str = suffix == drop (length str - length suffix) str
 
 -- | Process a Bend file: parse, check, and run
 processFile :: FilePath -> IO ()
@@ -355,3 +340,23 @@ hasMet term = case term of
   Pat s m c   -> any hasMet s || any (hasMet . snd) m || any (\(p,b) -> any hasMet p || hasMet b) c
   Frk l a b   -> hasMet l || hasMet a || hasMet b
   _           -> False
+
+-- IO Helper Functions
+-- ===================
+
+-- Convert a Bend string (character list) to a Haskell String
+termToString :: Book -> Term -> Maybe String
+termToString book term = go (whnf book term)
+  where
+    go Nil = Just ""
+    go (Con (Val (CHR_V c)) rest) = do
+      restStr <- go (whnf book rest)
+      return (c : restStr)
+    go _ = Nothing
+
+-- Convert a Haskell String to a Bend string (character list)
+stringToTerm :: String -> Term
+stringToTerm [] = Nil
+stringToTerm (c:cs) = Con (Val (CHR_V c)) (stringToTerm cs)
+
+
