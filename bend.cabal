@@ -35,7 +35,6 @@ library
                       Core.Adjust.FlattenPats,
                       Core.Adjust.DesugarPats,
                       Core.Adjust.DesugarFrks,
-                      Core.Adjust.SplitMatch,
                       Core.Adjust.Desugar,
                       Core.Adjust.Elaborate,
                       Core.Adjust.Annotate,

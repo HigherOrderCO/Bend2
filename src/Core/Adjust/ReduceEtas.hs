@@ -86,49 +86,54 @@ import Control.Applicative
 -- 2) Uses bindVarByName for the reconstructions x ~> A(a1,a2,..) and rebindings (after (f (Var nam d)) destroyed them)
 --    bindVarByIndex/Name is blind to `d`, hence the use of unique `nam`
 -- 3) Receives the eliminator type and var names a1.. from isEtaLong
+-- 4) The span in the ElimLabel is the span of the inner eliminator found by isEtaLong.
+--    This span bubbles up to become the span of the new outer eliminator we synthesize,
+--    since the new eliminator has no natural span of its own (it didn't exist in the source).
 -- 5) Rewrites the subterms using resolveMatches
 --
 -- Returns  : term in the form λ{A(a1..):λ{B:..}; ..}
 -- Important: this does not changes `SupM` eliminators.
 reduceEtas :: Int -> Span -> Term -> Term
-reduceEtas d span (Loc l term) = reduceEtas d l term
-reduceEtas d span term = case term of
+reduceEtas d span (Loc l term) = Loc l (reduceEtas d l term)
+reduceEtas d span term = 
+  case term of
   Lam k mty f ->
       -- The "$" prefix ensures `nam` won't clash with user variables
       let nam = "$"++show d in
-      case isEtaLong d span nam (f (Var nam d)) of
-        EMPM -> EmpM
-        EQLM -> EqlM refl 
+      let eta = isEtaLong d span nam (f (Var nam d)) in
+      case eta of
+        EMPM spa -> Loc spa $ EmpM
+        EQLM spa -> Loc spa $ EqlM refl 
             where
-            refl = reduceEtas d span $ bindVarByName nam Rfl (resolveMatches span nam EQLM 0 "" [] (f (Var nam d)))
-        UNIM -> UniM u 
+            refl = reduceEtas d span $ bindVarByName nam Rfl (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+        UNIM spa -> Loc spa $ UniM u
             where
-            u    = reduceEtas d span $ bindVarByName nam One (resolveMatches span nam UNIM 0 "" [] (f (Var nam d)))
-        BITM -> BitM fl tr 
+            u    = reduceEtas d span $ bindVarByName nam One (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+        BITM spa -> Loc spa $ BitM fl tr 
             where
-            fl   = reduceEtas d span $ bindVarByName nam Bt0 (resolveMatches span nam BITM 0 "" [] (f (Var nam d)))
-            tr   = reduceEtas d span $ bindVarByName nam Bt1 (resolveMatches span nam BITM 1 "" [] (f (Var nam d)))
-        NATM nams@[p] -> NatM z s 
+            fl   = reduceEtas d span $ bindVarByName nam Bt0 (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+            tr   = reduceEtas d span $ bindVarByName nam Bt1 (resolveMatches span nam eta 1 "" [] (f (Var nam d)))
+        NATM spa nams@[p] -> Loc spa $ NatM z s 
             where
-            z    = reduceEtas d span $ bindVarByName nam Zer (resolveMatches span nam (NATM [p]) 0 "" [] (f (Var nam d)))
+            z    = reduceEtas d span $ bindVarByName nam Zer (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
             s    = reduceEtas d span $ (Lam p (Just Nat) (\q -> 
-                                       bindVarByName nam (Suc q) (resolveMatches span nam (NATM nams) 1 "" [Sub q] (f (Var nam d)))))
-        LSTM nams@[h,t] -> LstM nil cons 
+                                       bindVarByName nam (Suc q) (resolveMatches span nam eta 1 "" [Sub q] (f (Var nam d)))))
+        LSTM spa nams@[h,t] -> Loc spa $ LstM nil cons 
             where
-            nil  = reduceEtas d span $ bindVarByName nam Nil (resolveMatches span nam (LSTM nams) 0 "" [] (f (Var nam d)))
+            nil  = reduceEtas d span $ bindVarByName nam Nil (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
             cons = reduceEtas d span $ (Lam h Nothing (\h ->
                                         Lam t Nothing (\t ->
-                                       bindVarByName nam (Con h t) (resolveMatches span nam (LSTM nams) 1 "" [Sub h, Sub t] (f (Var nam d))))))
-        SIGM nams@[a,b] -> SigM pair
+                                       bindVarByName nam (Con h t) (resolveMatches span nam eta 1 "" [Sub h, Sub t] (f (Var nam d))))))
+        SIGM spa nams@[a,b] -> Loc spa $ SigM pair
             where
             pair = reduceEtas d span $ (Lam a Nothing (\a ->
                                         Lam b Nothing (\b ->
-                                       bindVarByName nam (Tup a b) (resolveMatches span nam (SIGM nams) 0 "" [Sub a, Sub b] (f (Var nam d))))))
-        ENUM syms compl nams@[de] -> EnuM cases def 
+                                       bindVarByName nam (Tup a b) (resolveMatches span nam eta 0 "" [Sub a, Sub b] (f (Var nam d))))))
+        ENUM spa syms compl nams@[de] -> Loc spa $ EnuM cases def 
           where
-          cases = map (\sym -> (sym, reduceEtas d span $ bindVarByName nam (Sym sym) (resolveMatches span nam (ENUM syms compl nams) 0 sym [] (f (Var nam d))))) syms
+          cases = map (\sym -> (sym, reduceEtas d span $ bindVarByName nam (Sym sym) (resolveMatches span nam eta 0 sym [] (f (Var nam d))))) syms
           def = if compl
-                then reduceEtas d span (Lam de Nothing (\q -> bindVarByName nam q (resolveMatches span nam (ENUM syms compl nams) (-1) "" [Sub q] (f (Var nam d)))))
+                then reduceEtas d span (Lam de Nothing (\q -> bindVarByName nam q (resolveMatches span nam eta (-1) "" [Sub q] (f (Var nam d)))))
                 else One
         _ -> Lam k mty (\x -> reduceEtas (d+1) span (f x))
         -- SUPM lab -> not reduced
@@ -196,25 +201,25 @@ reduceEtas d span term = case term of
 -- Returns: NatM z s applied to 'nam' with clause=0           -> returns z
 --          NatM z s applied to 'nam' with clause=1, args=[p] -> returns s(p)[nam -> 1n+p]
 resolveMatches :: Span -> Name -> ElimLabel -> Int -> String -> [Term] -> Term -> Term
-resolveMatches span nam elim clause sym args (Loc span' term) = resolveMatches span' nam elim clause sym args term
+resolveMatches span nam elim clause sym args (Loc span' term) = Loc span' (resolveMatches span' nam elim clause sym args term)
 resolveMatches span nam elim clause sym args t = case t of
   App f x      ->
     case cut x of
       (Var k i) -> if k == nam
         then case (cut f, elim, args) of
-          (UniM u       , UNIM      , [])    -> resolveMatches span nam elim clause sym args $ u
-          (BitM fl tr   , BITM      , [])    -> resolveMatches span nam elim clause sym args $ ([fl, tr] !! clause)
-          (NatM z s     , NATM _    , [])    -> resolveMatches span nam elim clause sym args $ z
-          (NatM z s     , NATM _    , [p])   -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span s) s p
-          (EmpM         , EMPM      , [])    -> resolveMatches span nam elim clause sym args EmpM
-          (LstM nil cons, LSTM _    , [])    -> resolveMatches span nam elim clause sym args $ nil
-          (LstM nil cons, LSTM _    , [h,t]) -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span cons)  
+          (UniM u       , UNIM _      , [])    -> resolveMatches span nam elim clause sym args $ u
+          (BitM fl tr   , BITM _      , [])    -> resolveMatches span nam elim clause sym args $ ([fl, tr] !! clause)
+          (NatM z s     , NATM _ _    , [])    -> resolveMatches span nam elim clause sym args $ z
+          (NatM z s     , NATM _ _    , [p])   -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span s) s p
+          (EmpM         , EMPM _      , [])    -> resolveMatches span nam elim clause sym args EmpM
+          (LstM nil cons, LSTM _ _    , [])    -> resolveMatches span nam elim clause sym args $ nil
+          (LstM nil cons, LSTM _ _    , [h,t]) -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span cons)  
                                                                                                  (appInnerArg 1 (getSpan span cons) cons t) h
-          (SigM pair    , SIGM _    , [a,b]) -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span pair)
+          (SigM pair    , SIGM _ _    , [a,b]) -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span pair)
                                                                                                  (appInnerArg 1 (getSpan span pair) pair b) a
-          (EqlM refl    , EQLM      , [])    -> resolveMatches span nam elim clause sym args refl
-          (EnuM cs def  , ENUM _ _ _, [q])   -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span def) def q
-          (EnuM cs def  , ENUM _ _ _, [])    -> case lookup sym cs of
+          (EqlM refl    , EQLM _      , [])    -> resolveMatches span nam elim clause sym args refl
+          (EnuM cs def  , ENUM _ _ _ _, [q])   -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span def) def q
+          (EnuM cs def  , ENUM _ _ _ _, [])    -> case lookup sym cs of
                                 Just branch  -> resolveMatches span nam elim clause sym args $ branch
                                 Nothing      -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span def) def (Var k i)
           _ -> App (resolveMatches span nam elim clause sym args f) (resolveMatches span nam elim clause sym args x)
@@ -266,7 +271,7 @@ resolveMatches span nam elim clause sym args t = case t of
   Era          -> Era
   Sup l' a b   -> Sup (resolveMatches span nam elim clause sym args l') (resolveMatches span nam elim clause sym args a) (resolveMatches span nam elim clause sym args b)
   SupM l' f    -> SupM (resolveMatches span nam elim clause sym args l') (resolveMatches span nam elim clause sym args f)
---Loc span t'  -> Loc span (resolveMatches span nam l clause sym args t')
+--Loc l t'     -> Loc span (resolveMatches span nam elim clause sym args t')
   Log s x      -> Log (resolveMatches span nam elim clause sym args s) (resolveMatches span nam elim clause sym args x)
   Pri pf       -> Pri pf
   Pat ss ms cs -> Pat (map (resolveMatches span nam elim clause sym args) ss)
@@ -284,6 +289,9 @@ resolveMatches span nam elim clause sym args t = case t of
 --    2.2) Multiple compatible eliminators combine (e.g., NATM <+> NATM = NATM)
 --    2.3) Incompatible eliminators cancel (e.g., NATM <+> BITM = NONE)
 -- 3) Uses getVarNames to get the names of the clause arguments, if they are given
+-- 4) Captures the span of each eliminator found, which will become the span of
+--    the synthesized outer eliminator in reduceEtas (since that new eliminator
+--    has no span of its own)
 --
 -- Returns: from λx. (λ{0:Z; S:...}(x), λ{0:W; S:...}(x)) 
 -- the label NATM [pred_name_from_S]
@@ -297,14 +305,14 @@ isEtaLong d span nam t = case t of
         then
           case cut f of
        -- SupM l _    -> not eliminated
-          EqlM _      -> EQLM <+> isEtaLong d span nam f
-          EmpM        -> EMPM <+> isEtaLong d span nam f
-          UniM _      -> UNIM <+> isEtaLong d span nam f
-          BitM _ _    -> BITM <+> isEtaLong d span nam f
-          NatM _ s    -> NATM (getVarNames 1 (getSpan span s) s) <+> isEtaLong d span nam f
-          LstM _ c    -> LSTM (getVarNames 2 (getSpan span c) c) <+> isEtaLong d span nam f
-          SigM g      -> SIGM (getVarNames 2 (getSpan span g) g) <+> isEtaLong d span nam f
-          EnuM cs def -> (ENUM (map fst cs) (isLam def) (getVarNames 1 span def)) <+> isEtaLong d span nam f
+          EqlM _      -> EQLM span <+> isEtaLong d span nam f
+          EmpM        -> EMPM span <+> isEtaLong d span nam f
+          UniM _      -> UNIM span <+> isEtaLong d span nam f
+          BitM _ _    -> BITM span <+> isEtaLong d span nam f
+          NatM _ s    -> NATM span (getVarNames 1 (getSpan span s) s) <+> isEtaLong d span nam f
+          LstM _ c    -> LSTM span (getVarNames 2 (getSpan span c) c) <+> isEtaLong d span nam f
+          SigM g      -> SIGM span (getVarNames 2 (getSpan span g) g) <+> isEtaLong d span nam f
+          EnuM cs def -> (ENUM span (map fst cs) (isLam def) (getVarNames 1 span def)) <+> isEtaLong d span nam f
           _           -> isEtaLong d span nam f
         else
             isEtaLong d span nam f <+> isEtaLong d span nam x
@@ -353,7 +361,7 @@ isEtaLong d span nam t = case t of
   Era         -> NONE
   Sup l a b   -> isEtaLong d span nam l <+> isEtaLong d span nam a <+> isEtaLong d span nam b
   SupM l f    -> isEtaLong d span nam l <+> isEtaLong d span nam f
---Loc _ t'    -> isEtaLong d span nam t'
+  -- Loc _ t'    -> isEtaLong d span nam t'
   Log s x     -> isEtaLong d span nam s <+> isEtaLong d span nam x
   Pri _       -> NONE
   Pat ss ms cs -> foldr (<+>) NONE (map (isEtaLong d span nam) ss ++ map (isEtaLong d span nam . snd) ms ++ concatMap (\(ps, rhs) -> map (isEtaLong d span nam) ps ++ [isEtaLong d span nam rhs]) cs)
@@ -365,14 +373,14 @@ isEtaLong d span nam t = case t of
 
 -- SUPM not reduced
 data ElimLabel
-  = UNIM
-  | BITM
-  | NATM [String]               -- [predName]
-  | EMPM
-  | LSTM [String]               -- [headName,tailName]
-  | SIGM [String]               -- [fstName , sndName]
-  | EQLM
-  | ENUM [String] Bool [String] -- [symbolNames], isNotComplete, [defaultArgName]
+  = UNIM Span                        -- Span of the original eliminator
+  | BITM Span                        -- Span of the original eliminator
+  | NATM Span [String]               -- Span of the original eliminator, [predName]
+  | EMPM Span                        -- Span of the original eliminator
+  | LSTM Span [String]               -- Span of the original eliminator, [headName,tailName]
+  | SIGM Span [String]               -- Span of the original eliminator, [fstName , sndName]
+  | EQLM Span                        -- Span of the original eliminator
+  | ENUM Span [String] Bool [String] -- Span of the original eliminator, [symbolNames], isNotComplete, [defaultArgName]
   | NONE
   deriving Show -- SUPM not reduced
 
@@ -385,17 +393,17 @@ data ElimLabel
 -- Returns: NATM [p] <+> NATM [q] -> NATM [p]
 --          NATM [p] <+> BITM      -> NONE
 (<+>) :: ElimLabel -> ElimLabel -> ElimLabel
-NONE          <+> x             = x
-x             <+> NONE          = x
-UNIM          <+> UNIM          = UNIM
-BITM          <+> BITM          = BITM
-NATM s1       <+> NATM s2       = NATM s1
-EMPM          <+> EMPM          = EMPM
-LSTM s1       <+> LSTM s2       = LSTM s1
-SIGM s1       <+> SIGM s2       = SIGM s1
-EQLM          <+> EQLM          = EQLM
-ENUM s1 b1 d1 <+> ENUM s2 b2 d2 = ENUM (s1 `union` s2) (b1 && b2) d1
-_             <+> _             = NONE
+NONE             <+> x                = x
+x                <+> NONE             = x
+UNIM l1          <+> UNIM l2          = UNIM l1
+BITM l1          <+> BITM l2          = BITM l1
+NATM l1 s1       <+> NATM l2 s2       = NATM l1 s1
+EMPM l1          <+> EMPM l2          = EMPM l1
+LSTM l1 s1       <+> LSTM l2 s2       = LSTM l1 s1
+SIGM l1 s1       <+> SIGM l2 s2       = SIGM l1 s1
+EQLM l1          <+> EQLM l2          = EQLM l1
+ENUM l1 s1 b1 d1 <+> ENUM l2 s2 b2 d2 = ENUM l1 (s1 `union` s2) (b1 && b2) d1
+_                <+> _                = NONE
 
 -- Extracts variable names from eliminator/lambda branches
 -- 1) Traverses i' layers deep to find lambda-bound names

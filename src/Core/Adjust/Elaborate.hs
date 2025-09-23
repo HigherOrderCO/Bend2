@@ -16,7 +16,6 @@ import Debug.Trace
 import Core.Adjust.DesugarFrks
 import Core.Adjust.FlattenPats
 import Core.Adjust.ReduceEtas
-import Core.Adjust.SplitMatch
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -33,12 +32,11 @@ import Core.BigCheck
 elaborate :: Book -> Term -> Term
 elaborate book term =
   trace ("term: " ++ show term) $
-  trace ("splt: " ++ show splt) $
   trace ("etas: " ++ show etas) $
   etas
   where
-    splt = split 0 0 term
-    etas = reduceEtas 0 noSpan splt
+    -- splt = split 0 0 term
+    etas = reduceEtas 0 noSpan etas
 
 -- | Elaborates a term. simplifying patterns but leaving terms as Pats.
 elaborateWithPats :: Book -> Term -> (Maybe Term) -> Term

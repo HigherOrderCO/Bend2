@@ -72,7 +72,6 @@ import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ReduceEtas
-import Core.Adjust.SplitMatch
 import Core.Adjust.ResolveEnums
 import Core.Bind
 import Core.Deps

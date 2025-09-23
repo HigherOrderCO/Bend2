@@ -64,11 +64,6 @@ reWrap (Loc l _) z = Loc l z
 reWrap (Chk x t) z = Chk z t
 reWrap _        z = z
 
-cutChk :: Term -> Term
-cutChk (Loc l x) = Loc l (cutChk x)
-cutChk (Chk x t) = x
-cutChk x         = x
-
 -- Type Checker
 -- ------------
 --
@@ -90,7 +85,7 @@ inferIndirect d span book ctx target term =
     findDefault :: Term -> Term -> Maybe Term
     findDefault (cut -> Tup a b) term = case infer d span book ctx b Nothing of
       Done bT -> Just bT
-      _ -> Nothing
+      _       -> Nothing
     findDefault x term = Nothing
 
 replaceUnconstrained :: Int -> Span -> Book -> Ctx -> Term -> Term -> Maybe Term -> Result Term
@@ -107,6 +102,71 @@ replaceUnconstrained d span book ctx term target def = do
 --
 -- Returns: inferred type for 'var', or "_unconstrained" if no constraint on the type of 'var' was found
 inferIndirectGo :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
+inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> SigM g) x) = 
+  do
+  if eql False d book var x
+  then do
+      aT <- infer d span book ctx a Nothing
+      let bT = infer d span book ctx b Nothing
+      case bT of
+        Done bT@(cut ->App bTFunc a') | eql False d book a a' -> return $ Sig aT bTFunc
+        r -> do
+          case cut g of
+            Lam l mtl lb -> do
+              case cut (lb (Var l d)) of
+                Lam r mtr rb -> do
+                  rT <- inferIndirectGo d span book (extend ctx l (Var l d) aT) (Var r (d+1)) (rb (Var r (d+1)))
+                  return $ Sig aT (Lam l (Just aT) (\v -> bindVarByName l v rT))
+                _ -> do
+                  Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+            _ -> do
+              res <- do
+                let new_var = Var "$b" d
+                let new_term = appInnerArg 1 g new_var
+                bTFunc <-
+                  do
+                  bTFunc' <- inferIndirectGo (d+1) span book (extend ctx "$b" new_var (Var "_unconstrained" 0)) new_var new_term
+                  case r of
+                    Done bT -> replaceUnconstrained d span book ctx bTFunc' b (Just bT)
+                    _       -> return bTFunc'
+                return $ Sig aT bTFunc
+              return res
+  else Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+  where 
+    appInnerArg 0 func arg = App func arg
+    appInnerArg l func arg = case cut func of
+      Lam k mt b  -> Lam k mt (\x -> appInnerArg (l-1) (b x) arg) 
+      EmpM        -> EmpM
+      EqlM f      -> EqlM (appInnerArg (l-1) f arg)
+      UniM f      -> UniM (appInnerArg (l-1) f arg) 
+      BitM f t    -> BitM (appInnerArg (l-1) f arg) (appInnerArg (l-1) t arg)
+      LstM h t    -> LstM (appInnerArg (l-1) h arg) (appInnerArg (l-1) t arg)
+      NatM z s    -> NatM (appInnerArg (l-1) z arg) (appInnerArg (l) s arg)
+      SigM g      -> SigM (appInnerArg (l-1) g arg)
+      EnuM cs def -> EnuM (map (\(s,t) -> (s, appInnerArg (l-1) t arg)) cs) (appInnerArg (l-1) def arg)
+      _ -> error "unreachaboe appInnerArg"
+
+inferIndirectGo d span book ctx target@(cut -> SigM g) term@(cut -> App (cut -> SigM g') x@(cut -> Var k i)) = 
+  do
+  if eql False d book g g'
+  then do
+    xT <- infer d span book ctx x Nothing
+    case cut xT of
+      Sig lT rTFunc -> do
+        case cut g of
+          Lam l mtl lb -> do
+            case cut (lb (Var l d)) of
+              Lam r mtr rb -> do
+                let rT = App rTFunc (Var l d) 
+                gT <- infer d span book (extend (extend ctx l (Var l d) lT) r (Var r (d+1)) rT) (rb (Var r (d+1))) Nothing
+                return $ All (Sig lT (Lam l (Just lT) (\v -> bindVarByName l v rT))) (Lam l mtl (\lv -> Lam r mtr (\rv -> bindVarByNameMany [(l,lv),(r,rv)] gT)))
+              _ -> do
+                Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+          _ -> do
+            Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+      _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  else Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
+
 inferIndirectGo d span book ctx var@(Var k i) term = do
   case term of
     Var x j -> do
@@ -419,70 +479,6 @@ inferIndirectGo d span book ctx var@(Var k i) term = do
       Just t -> return t
       Nothing -> Fail $ CantInfer span (normalCtx book ctx) Nothing
 
-inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> SigM g) x) = 
-  do
-  if eql False d book var x
-  then do
-      aT <- infer d span book ctx a Nothing
-      let bT = infer d span book ctx b Nothing
-      case bT of
-        Done bT@(cut ->App bTFunc a') | eql False d book a a' -> return $ Sig aT bTFunc
-        r -> do
-          case cut g of
-            Lam l mtl lb -> do
-              case cut (lb (Var l d)) of
-                Lam r mtr rb -> do
-                  rT <- inferIndirectGo d span book (extend ctx l (Var l d) aT) (Var r (d+1)) (rb (Var r (d+1)))
-                  return $ Sig aT (Lam l (Just aT) (\v -> bindVarByName l v rT))
-                _ -> do
-                  Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
-            _ -> do
-              res <- do
-                let new_var = Var "$b" d
-                let new_term = appInnerArg 1 g new_var
-                bTFunc <-
-                  do
-                  bTFunc' <- inferIndirectGo (d+1) span book (extend ctx "$b" new_var (Var "_unconstrained" 0)) new_var new_term
-                  case r of
-                    Done bT -> replaceUnconstrained d span book ctx bTFunc' b (Just bT)
-                    _       -> return bTFunc'
-                return $ Sig aT bTFunc
-              return res
-  else Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
-  where 
-    appInnerArg 0 func arg = App func arg
-    appInnerArg l func arg = case cut func of
-      Lam k mt b  -> Lam k mt (\x -> appInnerArg (l-1) (b x) arg) 
-      EmpM        -> EmpM
-      EqlM f      -> EqlM (appInnerArg (l-1) f arg)
-      UniM f      -> UniM (appInnerArg (l-1) f arg) 
-      BitM f t    -> BitM (appInnerArg (l-1) f arg) (appInnerArg (l-1) t arg)
-      LstM h t    -> LstM (appInnerArg (l-1) h arg) (appInnerArg (l-1) t arg)
-      NatM z s    -> NatM (appInnerArg (l-1) z arg) (appInnerArg (l) s arg)
-      SigM g      -> SigM (appInnerArg (l-1) g arg)
-      EnuM cs def -> EnuM (map (\(s,t) -> (s, appInnerArg (l-1) t arg)) cs) (appInnerArg (l-1) def arg)
-      _ -> error "unreachaboe appInnerArg"
-
-inferIndirectGo d span book ctx target@(cut -> SigM g) term@(cut -> App (cut -> SigM g') x@(cut -> Var k i)) = 
-  do
-  if eql False d book g g'
-  then do
-    xT <- infer d span book ctx x Nothing
-    case cut xT of
-      Sig lT rTFunc -> do
-        case cut g of
-          Lam l mtl lb -> do
-            case cut (lb (Var l d)) of
-              Lam r mtr rb -> do
-                let rT = App rTFunc (Var l d) 
-                gT <- infer d span book (extend (extend ctx l (Var l d) lT) r (Var r (d+1)) rT) (rb (Var r (d+1))) Nothing
-                return $ All (Sig lT (Lam l (Just lT) (\v -> bindVarByName l v rT))) (Lam l mtl (\lv -> Lam r mtr (\rv -> bindVarByNameMany [(l,lv),(r,rv)] gT)))
-              _ -> do
-                Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
-          _ -> do
-            Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
-      _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
-  else Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
 inferIndirectGo d span book ctx target term = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
 
@@ -679,7 +675,9 @@ unifyTerms d book t1 t2 = case (t1, t2) of
 infer :: Int -> Span -> Book -> Ctx -> Term -> Maybe Term -> Result Term
 infer d span book ctx term environment = 
   case inferStructural d span book ctx term of
-    Done t -> return t
+    Done t -> 
+      -- trace ("infered " ++ show term ++ " :: " ++ show t) $ 
+      return t
     _      -> case cut term of
       Lam k mt b -> case mt of
         Just t -> do -- already tried by inferStructural
@@ -687,9 +685,14 @@ infer d span book ctx term environment =
         Nothing -> do
           t <- inferIndirect (d+1) span book ctx (Var k d) (b (Var k d))
           bT <- inferStructural (d+1) span book (extend ctx k (Var k d) t) (b (Var k d)) -- could this be infer?
+          let res = All t (Lam k (Just t) (\v -> bindVarByIndex d v bT))
+          -- trace ("infered " ++ show term ++ " :: " ++ show res) $ return res
           return $ All t (Lam k (Just t) (\v -> bindVarByIndex d v bT))
       _ -> case environment of 
-        Just env -> inferIndirect d span book ctx term env
+        Just env -> do
+          -- res <- inferIndirect d span book ctx term env
+          -- trace ("infered " ++ show term ++ " :: " ++ show res) $ return res
+          inferIndirect d span book ctx term env
         _        -> Fail $ CantInfer span (normalCtx book ctx) Nothing
 
 -- Direct structural type inference
@@ -1339,6 +1342,7 @@ check d span book ctx (Loc l t) goal = do
   return $ Loc l t'
 check d span book ctx term      goal =
   -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal)) $
+  -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal) ++ " ::: span: " ++ show span) $
   -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal) ++ "\n- ctx:\n" ++ show ctx ++ "\n") $
   let nGoal = force book goal in
   case (term, nGoal) of
@@ -1480,7 +1484,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for EmpM
     (EmpM, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Emp (Lam "_" Nothing (\_ -> Set)))) Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Emp (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- f : R({==})
     -- -------------------------------------- UniM-Eql
@@ -1498,7 +1502,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for UniM
     (UniM f, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Uni (Lam "_" Nothing (\_ -> Set)))) Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Uni (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- f : R({==})
     -- ------------------------------------------------------ BitM-Eql-Bt0-Bt0
@@ -1537,7 +1541,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for BitM
     (BitM f t, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Bit (Lam "_" Nothing (\_ -> Set)))) Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Bit (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- z : R({==})
     -- ------------------------------------------- NatM-Eql-Zer-Zer
@@ -1576,7 +1580,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for NatM
     (NatM z s, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Nat (Lam "_" Nothing (\_ -> Set)))) Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Nat (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- n : R({==})
     -- ------------------------------------------ LstM-Eql-Nil-Nil
@@ -1617,7 +1621,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for LstM
     (LstM n c, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> Set)))) Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- s ∈ tags
     -- ---------------------- Sym
@@ -1659,7 +1663,12 @@ check d span book ctx term      goal =
     -- ctx |- λ{cs;df} : ∀x:enum{syms}. R
     (EnuM cs df, All (force book -> Enu syms) rT) -> do
       -- mapM_ (\(s, t) -> check d span book ctx t (App rT (Sym s))) cs
-      cs' <- mapM (\(s, t) -> do t' <-check d span book ctx t (App rT (Sym s)); return (s,t')) cs
+      cs' <- mapM (\(s, t) -> do 
+          -- goal' <- check d span book ctx (App rT (Sym s)) Set
+          -- t'    <- check d span book ctx t goal'; 
+          t'    <- check d span book ctx t (App rT (Sym s)); 
+          return (s,t')
+        ) cs
       let covered_syms = map fst cs
       let all_covered = length covered_syms >= length syms
                      && all (`elem` syms) covered_syms
@@ -1681,7 +1690,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for EnuM
     (EnuM cs df, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu []) (Lam "_" Nothing (\_ -> Set)))) Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu []) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- f : ∀xp:A{x1==x2}. ∀yp:B(x1){y1==y2}. R((xp,yp))
     -- ------------------------------------------------------- SigM-Eql
@@ -1701,7 +1710,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for SigM
     (SigM f, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Sig (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0))) (Lam "_" Nothing (\_ -> Set)))) Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Sig (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0))) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- a : A
     -- ctx |- b : B(a)
@@ -1836,7 +1845,7 @@ check d span book ctx term      goal =
         All xT rT -> do
           f' <- check d span book ctx f (All xT (Lam "p" Nothing (\p -> All xT (Lam "q" Nothing (\q -> App rT (Sup l p q))))))
           return $ SupM l' f'
-        _ -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> Set)))) Nothing
+        _ -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- l : U64
     -- ctx |- a : T
@@ -1958,8 +1967,6 @@ check d span book ctx term      goal =
         Lst hT -> do
           x'    <- check d span book ctx x xT
           goal' <- check d span book ctx goal Set
-          
-          -- check d span book ctx (Let fn_name (Just (reduceEtas d $ All (Lst hT) (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
           check d span book ctx (Let fn_name (Just (All (Lst hT) (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
         _      -> do
           Fail $ TypeMismatch span (normalCtx book ctx) (All (Var "_" 0) (Lam "_" Nothing (\_ -> (Var "_" 0)))) (normal book xT) Nothing
@@ -1974,7 +1981,6 @@ check d span book ctx term      goal =
         Sig _ _ -> do
           x' <- check d span book ctx x xT
           goal' <- check d span book ctx goal Set
-          -- check d span book ctx (Let fn_name (Just (reduceEtas d $ All xT (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
           check d span book ctx (Let fn_name (Just (All xT (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
         _       -> do
           Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (Var "Σ_:_._" 0) (normal book xT) Nothing
@@ -2069,6 +2075,7 @@ verify :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 verify d span book ctx term goal = do
   t <- infer d span book ctx term Nothing
   if
+    -- trace ("-verify: " ++ show term ++ " :: " ++ show t) $
     equal d book t goal
     then do 
       return term
