@@ -14,8 +14,6 @@
 module Core.WHNF where
 
 import Control.Exception (throw)
-import System.IO.Unsafe
-import Data.IORef
 import Data.Bits
 import GHC.Float (castDoubleToWord64, castWord64ToDouble)
 
@@ -185,6 +183,14 @@ whnfAppPri book p x =
       (CHAR_TO_U64, Val (CHR_V c)) -> Val (U64_V (fromIntegral (fromEnum c)))
       (HVM_INC    , t)             -> t
       (HVM_DEC    , t)             -> t
+      -- IO primitives accumulate arguments but don't execute until forced by bind
+      (IO_PURE    , v)             -> App (Pri IO_PURE) x'  -- Keep IO wrapper for lazy evaluation
+      (IO_BIND    , m)             -> App (Pri IO_BIND) x'  -- Accumulate args (handled in whnfGo)
+      (IO_PRINT   , s)             -> App (Pri IO_PRINT) x'
+      (IO_PUTC    , _)             -> App (Pri IO_PUTC) x'
+      (IO_GETC    , _)             -> Pri IO_GETC  -- IO_GETC takes no arguments
+      (IO_READ_FILE, path)         -> App (Pri IO_READ_FILE) x'
+      (IO_WRITE_FILE, path)        -> App (Pri IO_WRITE_FILE) x'  -- Accumulate args (handled in whnfGo)
       _                            -> App (Pri p) x'
 
 -- Numeric operations
@@ -431,6 +437,7 @@ normal book term =
     Zer         -> Zer
     Suc n       -> Suc (normal book n)
     NatM z s    -> NatM (normal book z) (normal book s)
+    IO t        -> IO (normal book t)
     Lst t       -> Lst (normal book t)
     Nil         -> Nil
     Con h t     -> Con (normal book h) (normal book t)
@@ -466,3 +473,5 @@ normal book term =
 normalCtx :: Book -> Ctx -> Ctx
 normalCtx book (Ctx ctx) = Ctx (map normalAnn ctx)
   where normalAnn (k,v,t) = (k, normal book v, normal book t)
+
+
