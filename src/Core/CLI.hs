@@ -110,7 +110,6 @@ parseFile file = do
 -- | Run the main function from a book
 runMain :: FilePath -> Book -> IO ()
 runMain filePath book = do
-  -- Extract module name from file path (same logic as takeBaseName')
   let moduleName = extractModuleName filePath
       mainFQN = moduleName ++ "::main"
   case getDefn book mainFQN of
