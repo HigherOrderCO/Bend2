@@ -1,6 +1,5 @@
 {-./Type.hs-}
 
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GADTs #-}
@@ -15,9 +14,6 @@
 module Core.WHNF where
 
 import Control.Exception (throw)
-import System.IO.Unsafe (unsafePerformIO)
-import System.IO (hFlush, stdout, getChar)
-import Data.IORef
 import Data.Bits
 import GHC.Float (castDoubleToWord64, castWord64ToDouble)
 
