@@ -678,7 +678,7 @@ infer d span book ctx term environment =
     Done t -> 
       -- trace ("infered " ++ show term ++ " :: " ++ show t) $ 
       return t
-    _      -> case cut term of
+    Fail (CantInfer _ _ _) -> case cut term of
       Lam k mt b -> case mt of
         Just t -> do -- already tried by inferStructural
           Fail $ CantInfer span (normalCtx book ctx) Nothing
@@ -694,6 +694,7 @@ infer d span book ctx term environment =
           -- trace ("infered " ++ show term ++ " :: " ++ show res) $ return res
           inferIndirect d span book ctx term env
         _        -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+    e -> e
 
 -- Direct structural type inference
 -- 1) Follows standard inference rules for each term constructor (e.g. term = Bit0 implies term : Bit)
@@ -1662,31 +1663,21 @@ check d span book ctx term      goal =
     -- -------------------------------------------------- EnuM
     -- ctx |- λ{cs;df} : ∀x:enum{syms}. R
     (EnuM cs df, All (force book -> Enu syms) rT) -> do
-      -- mapM_ (\(s, t) -> check d span book ctx t (App rT (Sym s))) cs
-      cs' <- mapM (\(s, t) -> do 
-          -- goal' <- check d span book ctx (App rT (Sym s)) Set
-          -- t'    <- check d span book ctx t goal'; 
-          t'    <- check d span book ctx t (App rT (Sym s)); 
-          return (s,t')
-        ) cs
-      let covered_syms = map fst cs
-      let all_covered = length covered_syms >= length syms
-                     && all (`elem` syms) covered_syms
-      if not all_covered
-        then do
-          -- case df of
-          --   -- (cut -> Lam k Nothing (unlam k d -> One)) -> do
-          --   Nothing  -> do -- TODO: check this rule
-          --     Fail $ IncompleteMatch span (normalCtx book ctx) Nothing
-          --   Just df' -> do
-          --     let enu_type = Enu syms
-          --     let lam_goal = All enu_type (Lam "_" Nothing (\v -> App rT v))
-          --     check d span book ctx df' lam_goal
-          let enu_type = Enu syms
-          let lam_goal = All enu_type (Lam "_" Nothing (\v -> App rT v))
-          df' <- check d span book ctx df lam_goal
-          return $ EnuM cs' df'
-        else return (EnuM cs' (Lam "_" Nothing (\_ -> One)))
+      let covered_syms    = map fst cs
+      let mismatched_syms = [s | s <- covered_syms, not (s `elem` syms)]
+      case mismatched_syms of
+        [] -> do
+          let all_covered = length covered_syms >= length syms 
+                         && all (`elem` syms) covered_syms
+          cs' <- mapM (\(s, t) -> do t' <- check d span book ctx t (App rT (Sym s)); return (s,t')) cs
+          if not all_covered
+            then do
+              let lam_goal = All (Enu syms) (Lam "_" Nothing (\v -> App rT v))
+              df' <- check d span book ctx df lam_goal
+              return $ EnuM cs' df'
+            else return (EnuM cs' (Lam "_" Nothing (\_ -> One)))
+        (h:t) -> do
+          Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu [h, "..."]) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- Type mismatch for EnuM
     (EnuM cs df, _) -> do
@@ -2075,7 +2066,7 @@ verify :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 verify d span book ctx term goal = do
   t <- infer d span book ctx term Nothing
   if
-    -- trace ("-verify: " ++ show term ++ " :: " ++ show t) $
+    trace ("-verify: " ++ show term ++ " :: " ++ show t ++ " == " ++ show goal) $
     equal d book t goal
     then do 
       return term
