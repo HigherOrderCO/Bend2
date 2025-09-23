@@ -131,7 +131,7 @@ fresh = do
 
 -- Name conversion
 nameToJS :: String -> String
-nameToJS x = "$" ++ map (\c -> if c == '/' || c == '.' || c == '-' || c == '#' then '$' else c) x
+nameToJS x = "$" ++ map (\c -> if c == '/' || c == '.' || c == '-' || c == '#' || c == ':' then '$' else c) x
 
 -- Statement generation
 set :: String -> String -> JSM String
@@ -527,6 +527,13 @@ ctToJS book fnName fnArgs isTail var term dep = case term of
       CHAR_TO_U64 -> set var "(x => BigInt(x.charCodeAt(0)))"
       HVM_INC     -> set var "(x => x)"
       HVM_DEC     -> set var "(x => x)"
+      IO_PURE     -> set var "(x => () => x)"
+      IO_BIND     -> set var "(action => cont => () => { const result = action(); return cont(result)(); })"
+      IO_PRINT    -> set var "(str => () => { console.log(str); return null; })"
+      IO_PUTC     -> set var "(c => () => { process.stdout.write(String.fromCharCode(Number(c))); return null; })"
+      IO_GETC     -> set var "(() => { if (typeof process !== 'undefined' && process.stdin) { throw new Error('Synchronous getChar not supported in Node.js'); } else if (typeof prompt !== 'undefined') { return (prompt('Enter character:') || 'x').charAt(0).charCodeAt(0); } else { throw new Error('getChar not supported in this environment'); } })"
+      IO_READ_FILE -> set var "(path => () => { if (typeof require !== 'undefined') { const fs = require('fs'); return fs.readFileSync(path, 'utf8'); } else { throw new Error('File operations not supported in browser'); } })"
+      IO_WRITE_FILE -> set var "(path => content => () => { if (typeof require !== 'undefined') { const fs = require('fs'); fs.writeFileSync(path, content); return null; } else { throw new Error('File operations not supported in browser'); } })"
 
     compileLet var v f dep = do
       vName <- fresh
