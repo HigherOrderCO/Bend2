@@ -121,18 +121,18 @@ inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> Si
                   Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
             _ -> do
               res <- do
-                let new_var = Var "$b" d
+                let new_var  = Var "$b" d
                 let new_term = appInnerArg 1 g new_var
-                bTFunc <-
-                  do
-                  bTFunc' <- inferIndirectGo (d+1) span book (extend ctx "$b" new_var (Var "_unconstrained" 0)) new_var new_term
-                  case r of
+                bTFunc <- case inferIndirectGo (d+1) span book (extend ctx "$b" new_var (Var "_unconstrained" 0)) new_var new_term of
+                  Done bTFunc' -> case r of
                     Done bT -> replaceUnconstrained d span book ctx bTFunc' b (Just bT)
                     _       -> return bTFunc'
+                  _ -> Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
                 return $ Sig aT bTFunc
               return res
   else Fail $ CantInfer (getSpan span x) (normalCtx book ctx) Nothing
   where 
+    appInnerArg :: Int -> Term -> Term -> Term
     appInnerArg 0 func arg = App func arg
     appInnerArg l func arg = case cut func of
       Lam k mt b  -> Lam k mt (\x -> appInnerArg (l-1) (b x) arg) 
@@ -144,7 +144,7 @@ inferIndirectGo d span book ctx var@(cut -> Tup a b) term@(cut -> App (cut -> Si
       NatM z s    -> NatM (appInnerArg (l-1) z arg) (appInnerArg (l) s arg)
       SigM g      -> SigM (appInnerArg (l-1) g arg)
       EnuM cs def -> EnuM (map (\(s,t) -> (s, appInnerArg (l-1) t arg)) cs) (appInnerArg (l-1) def arg)
-      _ -> error "unreachaboe appInnerArg"
+      _ -> func
 
 inferIndirectGo d span book ctx target@(cut -> SigM g) term@(cut -> App (cut -> SigM g') x@(cut -> Var k i)) = 
   do
