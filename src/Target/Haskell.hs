@@ -1,7 +1,5 @@
 {-./../Core/Type.hs-}
 
-{-# LANGUAGE ViewPatterns #-}
-
 module Target.Haskell where
 
 import Control.Exception (throw)
@@ -13,19 +11,19 @@ import Data.List (intercalate)
 import qualified Data.Map as M
 
 -- Main compilation function
-compile :: Book -> String
-compile book@(Book defs _) =
+compile :: Book -> String -> String
+compile book@(Book defs _) mainFQN =
   let compiledFns = map (compileDefn book) (M.toList defs)
-  in prelude ++ intercalate "\n\n" compiledFns
+  in prelude mainFQN ++ intercalate "\n\n" compiledFns
   where
     compileDefn :: Book -> (Name, Defn) -> String
     compileDefn book (name, (_, term, typ)) = compileFn book name term typ
 
 -- Prelude necessary for the compiled code to run
-prelude :: String
-prelude = unlines [
+prelude :: String -> String
+prelude mainFQN = unlines [
     "{-# LANGUAGE ViewPatterns #-}",
-    "import Prelude (print, fromIntegral, (==), (>=), (/=), (+), (-), (*), div, mod, (^), (<), (>), (<=), negate, id, pred, Integer, Bool(..), IO, undefined, Char, return, (>>=), putStrLn, putChar, getChar, readFile, writeFile)",
+    "import Prelude (print, fromIntegral, (==), (>=), (/=), (+), (-), (*), (.), div, mod, (^), (<), (>), (<=), negate, id, pred, Integer, Bool(..), IO, undefined, Char, return, (>>=), putStrLn, putChar, getChar, readFile, writeFile)",
     "import Data.Bits ((.&.), (.|.), xor, shiftL, shiftR, complement)",
     "import Data.Char (chr, ord)",
     "import Data.Int (Int64)",
@@ -35,7 +33,7 @@ prelude = unlines [
     "import Unsafe.Coerce (unsafeCoerce)",
     "",
     "main :: IO ()",
-    "main = print (f''main)",
+    "main = print (" ++ refNam mainFQN ++ ")",
     ""
   ]
 
@@ -161,7 +159,7 @@ termToHT book i term = case term of
 
 -- Convert a Bend term to a Haskell type.
 typeToHT :: Book -> Type -> HT
-typeToHT book t = case whnf book t of
+typeToHT book t = case whnf book t of -- TODO: types with infinite normal form will loop the compiler.
   Var n _     -> HVar ("t''" ++ n)
   Uni         -> HUni
   Bit         -> HBit
@@ -182,7 +180,7 @@ typeToHT book t = case whnf book t of
 
 -- Clean function names for Haskell
 refNam :: String -> String
-refNam n = "f''" ++ (map (\c -> if c == '/' then '\'' else c) n)
+refNam n = "f''" ++ (map (\c -> if c == '/' then '\'' else if c == ':' then '\'' else c) n)
 
 varNam :: Int -> String -> String
 varNam i n = "x" ++ show i ++ "''" ++ n

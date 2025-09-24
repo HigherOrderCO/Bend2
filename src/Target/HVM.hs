@@ -16,21 +16,15 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified HVM.Type as HVM
 
-compile :: Book -> String
-compile book@(Book defs _) =
-  case findMainFunction defs of
-    Nothing -> throw (BendException $ CompilationError "Missing main function for HVM compilation")
-    Just mainName ->
-      let ds      = map (compileDef book) (M.toList defs)
-          (ts,fs) = partitionEithers ds
-          main    = "@main = " ++ showHVM 1 (termToHVM book (Ref mainName 1)) ++ "\n\n"
-      in prelude ++ main ++ unlines ts ++ unlines fs
-  where
-    findMainFunction defs =
-      case filter (isSuffixOf "::main") (M.keys defs) of
-        [mainName] -> Just mainName
-        []         -> Nothing
-        multiple   -> Just (head multiple) -- If multiple, just pick the first one
+compile :: Book -> String -> String
+compile book@(Book defs _) mainFQN =
+  if M.notMember mainFQN defs then
+    throw (BendException $ CompilationError "Missing main function for HVM compilation")
+  else
+    let ds      = map (compileDef book) (M.toList defs)
+        (ts,fs) = partitionEithers ds
+        main    = "@main = " ++ showHVM 1 (termToHVM book (Ref mainFQN 1)) ++ "\n\n"
+    in prelude ++ main ++ unlines ts ++ unlines fs
 
 prelude :: String
 prelude = unlines [
@@ -289,6 +283,7 @@ refAppToHVM book term =
       CHAR_TO_U64 -> return $ wrapRef "CHAR_TO_U64" (map (termToHVM book) args) (length args) 1
       HVM_INC     -> return $ wrapRef "HVM_INC" (map (termToHVM book) args) (length args) 1
       HVM_DEC     -> return $ wrapRef "HVM_DEC" (map (termToHVM book) args) (length args) 1
+      _           -> throw (BendException $ CompilationError $ "Primitive function not supported in HVM backend: " ++ show p)
     _ -> Nothing
   where
     -- Eta expand the Ref if less args than needed and rebuild the Apps if more args than needed
@@ -386,7 +381,7 @@ badPatCase ((Var _ _ : _), Pat _ _ []) = True
 badPatCase _ = False
 
 defNam :: Name -> HVM.Name
-defNam n = (replace '/' "__" n) ++ "$"
+defNam n = (replace ':' "__" (replace '/' "__" n)) ++ "$"
 
 bindNam :: Name -> HVM.Name
 bindNam n = if n == "_" then "_" else ('&':n)

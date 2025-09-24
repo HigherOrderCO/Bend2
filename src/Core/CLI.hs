@@ -13,6 +13,7 @@ module Core.CLI
 import Control.Monad (unless, forM_)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.List (isSuffixOf)
 import Data.Maybe (fromJust)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
@@ -97,9 +98,7 @@ parseFile :: FilePath -> IO Book
 parseFile file = do
   content <- readFile file
   case doParseBook file content of
-    Left err -> do
-      hPutStrLn stderr $ err
-      exitFailure
+    Left err -> showErrAndDie err
     Right (book, parserState) -> do
       -- Auto-import unbound references with explicit import information
       autoImportedBook <- autoImportWithExplicit file book parserState
@@ -118,9 +117,7 @@ runMain filePath book = do
     Just _ -> do
       let mainCall = Ref mainFQN 1
       case infer 0 noSpan book (Ctx []) mainCall of
-        Fail e -> do
-          hPutStrLn stderr $ show e
-          exitFailure
+        Fail e -> showErrAndDie e
         Done typ -> do
           -- Check if main has IO type and run it properly
           case whnf book typ of
@@ -139,15 +136,11 @@ processFile file = do
   result <- try $ do
     bookAdj <- case adjustBook book of
       Done b -> return b
-      Fail e -> do
-        hPutStrLn stderr $ show e
-        exitFailure
+      Fail e -> showErrAndDie e
     bookChk <- checkBook bookAdj
     runMain file bookChk
   case result of
-    Left (BendException e) -> do
-      hPutStrLn stderr $ show e
-      exitFailure
+    Left (BendException e) -> showErrAndDie e
     Right () -> return ()
 
 -- | Process a Bend file and return it's Core form
@@ -157,15 +150,11 @@ processFileToCore file = do
   result <- try $ do
     bookAdj <- case adjustBook book of
       Done b -> return b
-      Fail e -> do
-        hPutStrLn stderr $ show e
-        exitFailure
+      Fail e -> showErrAndDie e
     bookChk <- checkBook bookAdj
     putStrLn $ showBookWithFQN bookChk
   case result of
-    Left (BendException e) -> do
-      hPutStrLn stderr $ show e
-      exitFailure
+    Left (BendException e) -> showErrAndDie e
     Right () -> return ()
   where
     showBookWithFQN (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
@@ -194,56 +183,48 @@ processFileToJS file = do
   result <- try $ do
     bookAdj <- case adjustBook book of
       Done b -> return b
-      Fail e -> do
-        hPutStrLn stderr $ show e
-        exitFailure
+      Fail e -> showErrAndDie e
     bookChk <- checkBook bookAdj
     let jsCode = JS.compile bookChk
     formattedJS <- formatJavaScript jsCode
     putStrLn formattedJS
   case result of
-    Left (BendException e) -> do
-      hPutStrLn stderr $ show e
-      exitFailure
+    Left (BendException e) -> showErrAndDie e
     Right () -> return ()
 
 -- | Process a Bend file and compile to HVM
 processFileToHVM :: FilePath -> IO ()
 processFileToHVM file = do
+  let moduleName = extractModuleName file
+  let mainFQN = moduleName ++ "::main"
   book <- parseFile file
   result <- try $ do
     bookAdj <- case adjustBookWithPats book of
       Done b -> return b
-      Fail e -> do
-        hPutStrLn stderr $ show e
-        exitFailure
+      Fail e -> showErrAndDie e
     -- putStrLn $ show bookAdj
-    let hvmCode = HVM.compile bookAdj
+    let hvmCode = HVM.compile bookAdj mainFQN
     putStrLn hvmCode
   case result of
-    Left (BendException e) -> do
-      hPutStrLn stderr $ show e
-      exitFailure
+    Left (BendException e) -> showErrAndDie e
     Right () -> return ()
 
 -- | Process a Bend file and compile to Haskell
 processFileToHS :: FilePath -> IO ()
 processFileToHS file = do
+  let moduleName = extractModuleName file
+  let mainFQN = moduleName ++ "::main"
   book <- parseFile file
   result <- try $ do
     bookAdj <- case adjustBook book of
       Done b -> return b
-      Fail e -> do
-        hPutStrLn stderr $ show e
-        exitFailure
+      Fail e -> showErrAndDie e
     -- bookChk <- checkBook bookAdj
     -- putStrLn $ show bookChk
-    let hsCode = HS.compile bookAdj
+    let hsCode = HS.compile bookAdj mainFQN
     putStrLn hsCode
   case result of
-    Left (BendException e) -> do
-      hPutStrLn stderr $ show e
-      exitFailure
+    Left (BendException e) -> showErrAndDie e
     Right () -> return ()
 
 -- | List all dependencies of a Bend file (including transitive dependencies)
@@ -253,9 +234,7 @@ listDependencies file = do
   book <- parseFile file
   bookAdj <- case adjustBook book of
     Done b -> return b
-    Fail e -> do
-      hPutStrLn stderr $ show e
-      exitFailure
+    Fail e -> showErrAndDie e
   -- Collect all refs from the fully imported book
   let allRefs = collectAllRefs bookAdj
   -- Print all refs (these are all the dependencies)
@@ -267,9 +246,7 @@ getGenDeps file = do
   book <- parseFile file
   bookAdj@(Book defs names) <- case adjustBook book of
     Done b -> return b
-    Fail e -> do
-      hPutStrLn stderr $ show e
-      exitFailure
+    Fail e -> showErrAndDie e
   
   -- Find all definitions that are `try` definitions (i.e., contain a Met)
   let tryDefs = M.filter (\(_, term, _) -> hasMet term) defs
@@ -340,6 +317,11 @@ hasMet term = case term of
   Frk l a b   -> hasMet l || hasMet a || hasMet b
   _           -> False
 
+showErrAndDie :: Show a => a -> IO b
+showErrAndDie err = do
+  hPutStrLn stderr $ show err
+  exitFailure
+
 -- IO Helper Functions
 -- ===================
 
@@ -357,5 +339,3 @@ termToString book term = go (whnf book term)
 stringToTerm :: String -> Term
 stringToTerm [] = Nil
 stringToTerm (c:cs) = Con (Val (CHR_V c)) (stringToTerm cs)
-
-
