@@ -350,7 +350,7 @@ lhs_to_list (LHS k l) = case k of
 
 deref :: Book -> String -> Int -> LHS -> Term -> Term
 deref book k i lhs body =
-  case body of
+  case cut body of
     EmpM ->
       Lam "x" Nothing $ \x -> derefUndo book k i lhs EmpM x
     UniM f ->
@@ -397,7 +397,7 @@ force book term =
       Ref k i -> case getDefn book k of
         Just (True,fn',_) -> force book $ foldl App fn' xs
         otherwise         -> term'
-      term' -> term'
+      fn' -> term'
       where (fn,xs) = collectApps term' []
 
 -- Normalization
