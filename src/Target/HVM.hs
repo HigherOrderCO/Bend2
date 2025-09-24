@@ -443,6 +443,7 @@ cutDeep t = case cut t of
   (Loc s t)     -> throw (BendException $ CompilationError "Loc terms should not appear in HVM compilation")
   (Pri p)       -> Pri p
   (Pat x m c)   -> Pat (map cutDeep x) (map (\(k,v) -> (k, cutDeep v)) m) (map (\(p,x) -> (map cutDeep p, cutDeep x)) c)
+  (IO t)        -> IO (cutDeep t)
 
 replace :: Char -> String -> String -> String
 replace old new xs = foldr (\c acc -> if c == old then new ++ acc else c : acc) [] xs

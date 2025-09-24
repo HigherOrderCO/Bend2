@@ -140,16 +140,7 @@ flattenPat d span book pat =
         moves    = ms
         -- moves   = ms ++ map (\ (s,i) -> (patOf (d+i) s, s)) (zip ss [0..])
         picks   = Pat (fs   ++ ss) ms ps
-        drops   = case (ct, ds) of
-          -- Check for incomplete patterns on native types
-          (Con _ _, []) -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for []"))
-          (Nil, [])     -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for _<>_"))
-          (Bt0, [])     -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for True"))
-          (Bt1, [])     -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for False"))
-          (Suc _, [])   -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for 0n"))
-          (Zer, [])     -> throw (BendException $ IncompleteMatch span (Ctx []) (Just "missing case for 1n+_"))
-          -- For other cases (Sym, Tup, etc.) or non-empty ds, proceed normally
-          _             -> Pat (var d : ss) ms ds
+        drops   = Pat (var d : ss) ms ds
     flattenPatGo d book pat@(Pat [] ms (([],rhs):cs)) =
       flattenPats d span book rhs
     flattenPatGo d book pat@(Pat (_:_) _ []) =
