@@ -865,29 +865,19 @@ parseAss t = label "location binding" $ do
 -- | Syntax: λ x y z. body | lam x y z. body | λ (x,y) z. body
 parseLam :: Parser Term
 parseLam = label "lambda abstraction" $ do
-  -- Commit to lambda parsing after seeing the lambda keyword
-  _ <- choice [symbol "λ", keyword "lambda"]
-  notFollowedBy (symbol "{")
-
-  -- Parse binders with better error handling
+  _ <- try $ do
+    _ <- choice [symbol "λ", keyword "lambda"]
+    notFollowedBy (symbol "{")
+    return ()
+  -- Parse terms instead of just names to support patterns
+  -- pats <- some parseTerm
   binders <- some $ do
     pat <- parseTermBefore ":"
     mtyp <- optional $ do
       _ <- symbol ":"
       parseTerm
     return (pat, mtyp)
-
-  -- Better error message for missing dot
-  _ <- choice
-    [ symbol "."
-    , do
-        -- If we see end of file, give specific lambda error
-        atEof <- atEnd
-        if atEof
-          then fail "lambda expressions must end with '. <body>' but found end of file. Did you mean to use '.' instead of ':'?"
-          else fail "lambda expressions require '. <body>' after parameters. Expected '.' but found something else"
-    ]
-
+  _  <- symbol "."
   body  <- parseTerm
   -- Desugar pattern lambdas
   return $ foldr desugarLamPat body (zip [0..] binders)
