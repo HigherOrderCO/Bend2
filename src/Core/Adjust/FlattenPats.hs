@@ -80,7 +80,6 @@ flattenPats d span book term       = case term of
   (Suc n)       -> Suc (flattenPats d span book n)
   (NatM z s)    -> NatM (flattenPats d span book z) (flattenPats d span book s)
   (Lst t)       -> Lst (flattenPats d span book t)
-  (IO t)        -> IO (flattenPats d span book t)
   Nil           -> Nil
   (Con h t)     -> Con (flattenPats d span book h) (flattenPats d span book t)
   (LstM n c)    -> LstM (flattenPats d span book n) (flattenPats d span book c)

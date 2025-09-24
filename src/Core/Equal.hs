@@ -72,7 +72,6 @@ cmp red d book a b =
     (Zer            , Zer            ) -> True
     (Suc na         , Suc nb         ) -> eql red d book na nb
     (NatM za sa     , NatM zb sb     ) -> eql red d book za zb && eql red d book sa sb
-    (IO ta          , IO tb          ) -> eql red d book ta tb
     (Lst ta         , Lst tb         ) -> eql red d book ta tb
     (Nil            , Nil            ) -> True
     (Con ha ta      , Con hb tb      ) -> eql red d book ha hb && eql red d book ta tb

@@ -138,7 +138,6 @@ termToHVM book term = go term where
   go Zer           = HVM.Ctr "#Z" []
   go (Suc p)       = HVM.Ctr "#S" [termToHVM book p]
   go (NatM z s)    = HVM.Lam "x$" $ HVM.Mat (HVM.MAT 0) (HVM.Var "x$") [] [("#Z", [], termToHVM book z), ("#S", ["x$p"], HVM.App (termToHVM book s) (HVM.Var "x$p"))]
-  go (IO t)        = HVM.Era
   go (Lst t)       = HVM.Era
   go Nil           = HVM.Ctr "#Nil" []
   go (Con h t)     = HVM.Ctr "#Cons" [termToHVM book h, termToHVM book t]

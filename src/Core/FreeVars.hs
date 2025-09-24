@@ -17,7 +17,6 @@ freeVars ctx tm = case tm of
   BitM f t    -> S.union (freeVars ctx f) (freeVars ctx t)
   Suc n       -> freeVars ctx n
   NatM z s    -> S.union (freeVars ctx z) (freeVars ctx s)
-  IO t        -> freeVars ctx t
   Lst t       -> freeVars ctx t
   Con h t     -> S.union (freeVars ctx h) (freeVars ctx t)
   LstM n c    -> S.union (freeVars ctx n) (freeVars ctx c)

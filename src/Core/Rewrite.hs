@@ -49,7 +49,6 @@ rewriteGo d book old neo val =
     Zer         -> Zer
     Suc n       -> Suc (rewrite d book old neo n)
     NatM z s    -> NatM (rewrite d book old neo z) (rewrite d book old neo s)
-    IO t        -> IO (rewrite d book old neo t)
     Lst t       -> Lst (rewrite d book old neo t)
     Nil         -> Nil
     Con h t     -> Con (rewrite d book old neo h) (rewrite d book old neo t)

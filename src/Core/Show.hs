@@ -80,9 +80,6 @@ showPlain ctx term = case term of
   Ref k i      -> showName ctx k
   Sub t        -> showPlain ctx t
 
-  -- IO type
-  IO t         -> "IO<" ++ showPlain ctx t ++ ">"
-
   -- Binding forms
   Fix k f      -> showFix ctx k f
   Let k t v f  -> showLet ctx k t v f
@@ -322,17 +319,10 @@ showPat ctx ts ms cs = "match " ++ unwords (map (showPlain ctx) ts) ++ " {" ++ m
 
 showPri :: PriF -> String
 showPri p = case p of
-  U64_TO_CHAR    -> "U64_TO_CHAR"
-  CHAR_TO_U64    -> "CHAR_TO_U64"
-  HVM_INC        -> "HVM_INC"
-  HVM_DEC        -> "HVM_DEC"
-  IO_PURE        -> "IO_PURE"
-  IO_BIND        -> "IO_BIND"
-  IO_PRINT       -> "IO_PRINT"
-  IO_PUTC        -> "IO_PUTC"
-  IO_GETC        -> "IO_GETC"
-  IO_READ_FILE   -> "IO_READ_FILE"
-  IO_WRITE_FILE  -> "IO_WRITE_FILE"
+  U64_TO_CHAR -> "U64_TO_CHAR"
+  CHAR_TO_U64 -> "CHAR_TO_U64" 
+  HVM_INC     -> "HVM_INC"
+  HVM_DEC     -> "HVM_DEC"
 
 showNum :: NTyp -> String
 showNum t = case t of
@@ -429,10 +419,9 @@ collectQualifiedNames = go S.empty
     go bound term = case term of
       Ref k _ -> if "::" `isInfixOf` k then S.insert k bound else bound
       Sym s -> if "::" `isInfixOf` s then S.insert s bound else bound
-
+      
       -- Traverse all subterms
       Sub t -> go bound t
-      IO t -> go bound t
       Fix _ f -> go bound (f (Var "_dummy" 0))
       Let _ t v f -> go (maybe bound (go bound) t) v `S.union` go bound (f (Var "_dummy" 0))
       Use _ v f -> go bound v `S.union` go bound (f (Var "_dummy" 0))
@@ -462,7 +451,7 @@ collectQualifiedNames = go S.empty
       SupM l f -> go bound l `S.union` go bound f
       Loc _ t -> go bound t
       Log s x -> go bound s `S.union` go bound x
-      Pat ts ms cs -> S.unions (map (go bound) ts) `S.union`
+      Pat ts ms cs -> S.unions (map (go bound) ts) `S.union` 
                      S.unions (map (go bound . snd) ms) `S.union`
                      S.unions [S.unions (map (go bound) ps) `S.union` go bound b | (ps, b) <- cs]
       Frk l a b -> go bound l `S.union` go bound a `S.union` go bound b
@@ -495,9 +484,8 @@ getShadowed term = S.fromList [k | (k, _) <- duplicates]
 adjustDepths :: Term -> Int -> Term
 adjustDepths term depth = case term of
   Var k i    -> Var k i
-  Ref k i    -> Ref k i
+  Ref k i    -> Ref k i  
   Sub t      -> Sub (adjustDepths t depth)
-  IO t       -> IO (adjustDepths t depth)
   Fix k f    -> Fix k (\x -> adjustDepths (f (Var k depth)) (depth + 1))
   Let k t v f -> Let k (fmap (\t' -> adjustDepths t' depth) t) (adjustDepths v depth) (\x -> adjustDepths (f (Var k depth)) (depth + 1))
   Use k v f  -> Use k (adjustDepths v depth) (\x -> adjustDepths (f (Var k depth)) (depth + 1))
@@ -545,7 +533,7 @@ adjustDepths term depth = case term of
   Loc s t    -> Loc s (adjustDepths t depth)
   Log s x    -> Log (adjustDepths s depth) (adjustDepths x depth)
   Pri p      -> Pri p
-  Pat ts ms cs -> Pat (map (\t -> adjustDepths t depth) ts)
+  Pat ts ms cs -> Pat (map (\t -> adjustDepths t depth) ts) 
                       [(k, adjustDepths v depth) | (k, v) <- ms]
                       [([adjustDepths p depth | p <- ps], adjustDepths t depth) | (ps, t) <- cs]
   Frk l a b  -> Frk (adjustDepths l depth) (adjustDepths a depth) (adjustDepths b depth)

@@ -144,9 +144,6 @@ resolveEnumsInTerm emap = go
       Lst t -> do
         t2 <- go t
         Done (Lst t2)
-      IO t -> do
-        t2 <- go t
-        Done (IO t2)
       Con h t -> do
         h2 <- go h
         t2 <- go t

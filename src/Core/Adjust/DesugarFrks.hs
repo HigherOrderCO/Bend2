@@ -48,7 +48,6 @@ desugarFrksGo book d ctx Nat           = Nat
 desugarFrksGo book d ctx Zer           = Zer
 desugarFrksGo book d ctx (Suc n)       = Suc (desugarFrksGo book d ctx n)
 desugarFrksGo book d ctx (NatM z s)    = NatM (desugarFrksGo book d ctx z) (desugarFrksGo book d ctx s)
-desugarFrksGo book d ctx (IO t)        = IO (desugarFrksGo book d ctx t)
 desugarFrksGo book d ctx (Lst t)       = Lst (desugarFrksGo book d ctx t)
 desugarFrksGo book d ctx Nil           = Nil
 desugarFrksGo book d ctx (Con h t)     = Con (desugarFrksGo book d ctx h) (desugarFrksGo book d ctx t)

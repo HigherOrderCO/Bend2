@@ -1,6 +1,6 @@
 {-./Type.hs-}
 
-module Core.Import (autoImport, autoImportWithExplicit, extractModuleName) where
+module Core.Import (autoImport, autoImportWithExplicit) where
 
 import Data.List (intercalate, isInfixOf, isSuffixOf, isPrefixOf, sort)
 import Data.List.Split (splitOn)
@@ -113,67 +113,77 @@ substituteRefs subst = go S.empty
   where
     fMap = functionMap subst
     go bound term = case term of
-      Var k i     -> if k `S.member` bound
-                     then Var k i
-                     else case M.lookup k fMap of
-                            Just newName -> Var newName i
-                            Nothing -> Var k i
-      Ref k i     -> case M.lookup k fMap of
-                       Just newName -> Ref newName i
-                       Nothing -> Ref k i
-      Sym name    -> Sym (substituteInEnumName subst name)
-      Sub t       -> Sub (go bound t)
-      Fix k f     -> Fix k (\v -> go (S.insert k bound) (f v))
+      Ref k i ->
+        case M.lookup k fMap of
+          Just newName -> Ref newName i
+          Nothing -> Ref k i
+
+      -- Handle binding constructs
+      Var k i ->
+        if k `S.member` bound
+        then Var k i  -- It's a bound variable, don't substitute
+        else case M.lookup k fMap of
+          Just newName -> Var newName i  -- It's a free variable, substitute it
+          Nothing -> Var k i
+      
+      -- Handle enum names that might contain aliases
+      Sym name -> Sym (substituteInEnumName subst name)
+      
+      Sub t -> Sub (go bound t)
+      Fix k f -> Fix k (\v -> go (S.insert k bound) (f v))
       Let k t v f -> Let k (fmap (go bound) t) (go bound v) (\u -> go (S.insert k bound) (f u))
-      Use k v f   -> Use k (go bound v) (\u -> go (S.insert k bound) (f u))
-      Set         -> Set
-      Chk x t     -> Chk (go bound x) (go bound t)
-      Tst x       -> Tst (go bound x)
-      Emp         -> Emp
-      EmpM        -> EmpM
-      Uni         -> Uni
-      One         -> One
-      UniM f      -> UniM (go bound f)
-      Bit         -> Bit
-      Bt0         -> Bt0
-      Bt1         -> Bt1
-      BitM f t    -> BitM (go bound f) (go bound t)
-      Nat         -> Nat
-      Zer         -> Zer
-      Suc n       -> Suc (go bound n)
-      NatM z s    -> NatM (go bound z) (go bound s)
-      Lst t       -> Lst (go bound t)
-      IO t        -> IO (go bound t)
-      Nil         -> Nil
-      Con h t     -> Con (go bound h) (go bound t)
-      LstM n c    -> LstM (go bound n) (go bound c)
-      Enu cs      -> Enu cs
-      EnuM cs d   -> EnuM (map (\(s, t) -> (s, go bound t)) cs) (go bound d)
-      Num n       -> Num n
-      Val v       -> Val v
-      Op2 op a b  -> Op2 op (go bound a) (go bound b)
-      Op1 op a    -> Op1 op (go bound a)
-      Sig a b     -> Sig (go bound a) (go bound b)
-      Tup a b     -> Tup (go bound a) (go bound b)
-      SigM f      -> SigM (go bound f)
-      All a b     -> All (go bound a) (go bound b)
-      Lam k t f   -> Lam k (fmap (go bound) t) (\u -> go (S.insert k bound) (f u))
-      App f x     -> App (go bound f) (go bound x)
-      Eql t a b   -> Eql (go bound t) (go bound a) (go bound b)
-      Rfl         -> Rfl
-      EqlM f      -> EqlM (go bound f)
+      Use k v f -> Use k (go bound v) (\u -> go (S.insert k bound) (f u))
+      Set -> Set
+      Chk x t -> Chk (go bound x) (go bound t)
+      Tst x -> Tst (go bound x)
+      Emp -> Emp
+      EmpM -> EmpM
+      Uni -> Uni
+      One -> One
+      UniM f -> UniM (go bound f)
+      Bit -> Bit
+      Bt0 -> Bt0
+      Bt1 -> Bt1
+      BitM f t -> BitM (go bound f) (go bound t)
+      Nat -> Nat
+      Zer -> Zer
+      Suc n -> Suc (go bound n)
+      NatM z s -> NatM (go bound z) (go bound s)
+      Lst t -> Lst (go bound t)
+      Nil -> Nil
+      Con h t -> Con (go bound h) (go bound t)
+      LstM n c -> LstM (go bound n) (go bound c)
+      Enu cs -> Enu cs
+      EnuM cs d -> EnuM (map (\(s, t) -> (s, go bound t)) cs) (go bound d)
+      Num n -> Num n
+      Val v -> Val v
+      Op2 op a b -> Op2 op (go bound a) (go bound b)
+      Op1 op a -> Op1 op (go bound a)
+      Sig a b -> Sig (go bound a) (go bound b)
+      Tup a b -> Tup (go bound a) (go bound b)
+      SigM f -> SigM (go bound f)
+      All a b -> All (go bound a) (go bound b)
+      Lam k t f -> Lam k (fmap (go bound) t) (\u -> go (S.insert k bound) (f u))
+      App f x -> 
+        let newF = go bound f
+            newX = go bound x
+            result = App newF newX
+        in result
+      Eql t a b -> Eql (go bound t) (go bound a) (go bound b)
+      Rfl -> Rfl
+      EqlM f -> EqlM (go bound f)
       Met n t ctx -> Met n (go bound t) (map (go bound) ctx)
-      Era         -> Era
-      Sup l a b   -> Sup (go bound l) (go bound a) (go bound b)
-      SupM l f    -> SupM (go bound l) (go bound f)
-      Loc sp t    -> Loc sp (go bound t)
-      Log s x     -> Log (go bound s) (go bound x)
-      Pri p       -> Pri p
-      Rwt e f     -> Rwt (go bound e) (go bound f)
-      Pat s m c   -> Pat (map (go bound) s)
-                         (map (\(n, t) -> (n, go bound t)) m)
-                         (map (\(ps, b) -> (map (go bound) ps, go bound b)) c)
-      Frk l a b   -> Frk (go bound l) (go bound a) (go bound b)
+      Era -> Era
+      Sup l a b -> Sup (go bound l) (go bound a) (go bound b)
+      SupM l f -> SupM (go bound l) (go bound f)
+      Loc sp t -> Loc sp (go bound t)
+      Log s x -> Log (go bound s) (go bound x)
+      Pri p -> Pri p
+      Rwt e f -> Rwt (go bound e) (go bound f)
+      Pat s m c -> Pat (map (go bound) s) 
+                      (map (\(n, t) -> (n, go bound t)) m) 
+                      (map (\(ps, b) -> (map (go bound) ps, go bound b)) c)
+      Frk l a b -> Frk (go bound l) (go bound a) (go bound b)
 
 -- | Apply substitution to a book
 substituteRefsInBook :: SubstMap -> Book -> Book
@@ -336,7 +346,7 @@ resolveLocalImport (ModuleImport modulePath maybeAlias) = do
               possibleFQNs = M.keys defs
               -- Create mappings for ALL functions in the module
               -- e.g., "tst::mul2" -> "examples/main::mul2", "tst::id" -> "examples/main::id", etc.
-              modulePrefix = extractModuleName actualPath
+              modulePrefix = takeBaseName' actualPath
               aliasEntries = [(alias ++ "::" ++ dropModulePrefix modulePrefix fqn, fqn) | fqn <- possibleFQNs]
               
               -- For external imports, also check if there's a main function that matches the original module path
@@ -439,7 +449,7 @@ processSelectiveImport modulePath nameAliases = do
       case doParseBook path content of
         Left err        -> pure $ Left $ "Failed to parse " ++ path ++ ": " ++ err
         Right (book, _) -> do
-          let modulePrefix = extractModuleName path
+          let modulePrefix = takeBaseName' path
               Book defs defNames = book
               -- Extract just the function names for filtering
               functionNames = map fst nameAliases
@@ -527,27 +537,34 @@ resolveRef st refName = do
             multiple -> do
               -- Multiple matches - ambiguous reference error
               pure $ Left $ "Ambiguous reference '" ++ refName ++ "' could refer to: " ++ show multiple
-  
--- | Extract module name from a file path
--- Removes .bend extension and /_ suffix for module files (e.g., Term/_.bend -> Term)
-extractModuleName :: FilePath -> String
-extractModuleName path =
-  let withoutBend = if ".bend" `isSuffixOf` path
+  where
+    takeBaseName :: FilePath -> String
+    takeBaseName path = 
+      if ".bend" `isSuffixOf` path
+         then take (length path - 5) path  -- Remove .bend extension but keep full path
+         else path
+
+takeBaseName' :: FilePath -> String
+takeBaseName' path = 
+  let withoutBend = if ".bend" `isSuffixOf'` path
                     then take (length path - 5) path  -- Remove .bend extension
                     else path
       -- Also remove /_ suffix if present (for files like Term/_.bend)
-      withoutUnderscore = if "/_" `isSuffixOf` withoutBend
+      withoutUnderscore = if "/_" `isSuffixOf'` withoutBend
                           then take (length withoutBend - 2) withoutBend  -- Remove /_
                           else withoutBend
   in withoutUnderscore
- 
+  where
+    isSuffixOf' :: Eq a => [a] -> [a] -> Bool
+    isSuffixOf' suffix str = suffix == drop (length str - length suffix) str
+
 -- | Build substitution map for local definitions
 -- For each definition in the book with FQN "module::name", 
 -- add a mapping from "name" to "module::name"
 -- Also handles enum names: "module::Type::Enum" -> "Enum" maps to full FQN
 buildLocalSubstMap :: FilePath -> Book -> SubstMap
 buildLocalSubstMap currentFile (Book defs _) =
-  let filePrefix = extractModuleName currentFile ++ "::"
+  let filePrefix = takeBaseName' currentFile ++ "::"
       localDefs = M.filterWithKey (\k _ -> filePrefix `isPrefixOf` k) defs
 
       -- Separate function mappings from enum mappings
@@ -650,9 +667,9 @@ loadRef st refName = do
                   merged   = mergeBooks (stBook st) substitutedImported
                   loaded'  = S.union (stLoaded st) (bookNames substitutedImported)
                   -- Auto-import should only work if refName matches the module name
-                  importFilePrefix = extractModuleName path ++ "::"
+                  importFilePrefix = takeBaseName' path ++ "::"
                   importQualified = importFilePrefix ++ refName
-                  moduleName = extractModuleName path
+                  moduleName = takeBaseName' path
                   -- With our change, Term/_.bend now gives moduleName "Term" (not "Term/_")
                   -- So definitions are Term::foo, not Term/_::foo
                   Book importedDefs _ = substitutedImported

@@ -240,13 +240,6 @@ infer d span book@(Book defs names) ctx term =
       Fail $ CantInfer span (normalCtx book ctx) Nothing
 
     -- ctx |- T : Set
-    -- -----------------
-    -- ctx |- IO<T> : Set
-    IO t -> do
-      check d span book ctx t Set
-      Done Set
-
-    -- ctx |- T : Set
     -- ---------------- Lst
     -- ctx |- T[] : Set
     Lst t -> do
@@ -475,56 +468,6 @@ infer d span book@(Book defs names) ctx term =
       Fail $ CantInfer span (normalCtx book ctx) Nothing
     Pri HVM_DEC -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
-
-    -- ctx |-
-    -- -------------------------------- Pri-IO_PURE
-    -- ctx |- IO_PURE : ∀A:Set. A -> IO<A>
-    Pri IO_PURE -> do
-      Done (All Set (Lam "A" (Just Set) (\a ->
-        All a (Lam "x" (Just a) (\_ -> IO a)))))
-
-    -- ctx |-
-    -- --------------------------------------------------------------- Pri-IO_BIND
-    -- ctx |- IO_BIND : ∀A:Set. ∀B:Set. IO<A> -> (A -> IO<B>) -> IO<B>
-    Pri IO_BIND -> do
-      Done (All Set (Lam "A" (Just Set) (\a ->
-        All Set (Lam "B" (Just Set) (\b ->
-          All (IO a) (Lam "m" (Just (IO a)) (\_ ->
-            All (All a (Lam "_" (Just a) (\_ -> IO b))) (Lam "f" Nothing (\_ ->
-              IO b)))))))))
-
-    -- ctx |- s : Char[]
-    -- ---------------------------- Pri-IO_PRINT
-    -- ctx |- IO_PRINT s : IO<Unit>
-    Pri IO_PRINT -> do
-      Done (All (Lst (Num CHR_T)) (Lam "s" Nothing (\_ -> IO Uni)))
-    
-    -- ctx |- c : Char
-    -- -------------------------------- Pri-IO_PUTC
-    -- ctx |- IO_PUTC c : IO<Unit>
-    Pri IO_PUTC -> do
-      Done (All (Num CHR_T) (Lam "c" Nothing (\_ -> IO Uni)))
-
-    -- ctx |-
-    -- -------------------------------- Pri-IO_GETC
-    -- ctx |- IO_GETC : IO<Char>
-    Pri IO_GETC -> do
-      Done (IO (Num CHR_T))
-
-    -- ctx |- s : Char[]
-    -- -------------------------------- Pri-IO_READ_FILE
-    -- ctx |- IO_READ_FILE s : IO<Char[]>
-    Pri IO_READ_FILE -> do
-      Done (All (Lst (Num CHR_T)) (Lam "path" Nothing (\_ -> IO (Lst (Num CHR_T)))))
-
-    -- ctx |- path    : Char[]
-    --        content : Char[]
-    -- -------------------------------------------- Pri-IO_WRITE_FILE
-    -- ctx |- IO_WRITE_FILE path content : IO<Unit>
-    Pri IO_WRITE_FILE -> do
-      Done (All (Lst (Num CHR_T)) (Lam "path" Nothing (\_ ->
-        All (Lst (Num CHR_T)) (Lam "content" Nothing (\_ ->
-          IO Uni)))))
 
     -- ctx |- s : Char[]
     -- ctx |- x : T
