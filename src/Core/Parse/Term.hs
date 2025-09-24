@@ -31,12 +31,18 @@ import Core.Parse.Parse
 import Core.Type
 import Core.Show
 
+-- Do notation data types
+data DoStatement
+  = DoBinding String Term Type    -- x <- expr : Type
+  | DoLet String Term Type        -- x = expr : Type
+  | DoAction Term                 -- expr
+
 -- | Parse a "core" form
 parseTermIni :: Parser Term
 parseTermIni = choice
   [ parseFix
-  , parseLam
   , parseLamMatch
+  , parseLam
   , parseBifIf
   , parsePat
   , parseRewrite
@@ -44,6 +50,7 @@ parseTermIni = choice
   , parseFrk
   , parseTrust
   , parseLog
+  , parseDo
   , parseAll
   , parseSig
   , parseTildeExpr
@@ -64,6 +71,7 @@ parseTermIni = choice
   , parseSym
   , parseTupApp
   , parseView
+  , parseIo
   , parseVar
   ]
 
@@ -167,21 +175,28 @@ parseVar = label "variable" $ do
     qualifiedName <- name
     return $ n ++ "::" ++ qualifiedName
   case qualified of
-    "Set"         -> return Set
-    "Empty"       -> return Emp
-    "Unit"        -> return Uni
-    "Bool"        -> return Bit
-    "False"       -> return Bt0
-    "True"        -> return Bt1
-    "Nat"         -> return Nat
-    "U64"         -> return (Num U64_T)
-    "I64"         -> return (Num I64_T)
-    "F64"         -> return (Num F64_T)
-    "Char"        -> return (Num CHR_T)
-    "U64_TO_CHAR" -> return (Pri U64_TO_CHAR)
-    "CHAR_TO_U64" -> return (Pri CHAR_TO_U64)
-    "HVM_INC"     -> return (Pri HVM_INC)
-    "HVM_DEC"     -> return (Pri HVM_DEC)
+    "Set"           -> return Set
+    "Empty"         -> return Emp
+    "Unit"          -> return Uni
+    "Bool"          -> return Bit
+    "False"         -> return Bt0
+    "True"          -> return Bt1
+    "Nat"           -> return Nat
+    "U64"           -> return (Num U64_T)
+    "I64"           -> return (Num I64_T)
+    "F64"           -> return (Num F64_T)
+    "Char"          -> return (Num CHR_T)
+    "U64_TO_CHAR"   -> return (Pri U64_TO_CHAR)
+    "CHAR_TO_U64"   -> return (Pri CHAR_TO_U64)
+    "HVM_INC"       -> return (Pri HVM_INC)
+    "HVM_DEC"       -> return (Pri HVM_DEC)
+    "IO_PRINT"      -> return (Pri IO_PRINT)
+    "IO_BIND"       -> return (Pri IO_BIND)
+    "IO_PURE"       -> return (Pri IO_PURE)
+    "IO_PUTC"       -> return (Pri IO_PUTC)
+    "IO_GETC"       -> return (Pri IO_GETC)
+    "IO_READ_FILE"  -> return (Pri IO_READ_FILE)
+    "IO_WRITE_FILE" -> return (Pri IO_WRITE_FILE)
     _             -> return $ Var qualified 0
 
 -- | Syntax: ()
@@ -747,6 +762,16 @@ parseLst t = label "list type" $ do
   _ <- try $ symbol "[]"
   return (Lst t)
 
+-- | Syntax: IO<Type>
+parseIo :: Parser Term
+parseIo = label "IO type" $ try $ do
+  _ <- symbol "IO"
+  notFollowedBy (satisfy isNameChar)  -- Ensure IO is not part of a longer name
+  _ <- symbol "<"
+  t <- parseTerm
+  _ <- symbol ">"
+  return (IO t)
+
 -- | Syntax: Type{term1 == term2} or Type{term1 != term2}
 parseEql :: Term -> Parser Term
 parseEql t = label "equality type" $ do
@@ -865,26 +890,36 @@ parseAss t = label "location binding" $ do
 -- | Syntax: λ x y z. body | lam x y z. body | λ (x,y) z. body
 parseLam :: Parser Term
 parseLam = label "lambda abstraction" $ do
-  _ <- try $ do
-    _ <- choice [symbol "λ", keyword "lambda"]
-    notFollowedBy (symbol "{")
-    return ()
-  -- Parse terms instead of just names to support patterns
-  -- pats <- some parseTerm
+  -- Commit to lambda parsing after seeing the lambda keyword
+  _ <- choice [symbol "λ", keyword "lambda"]
+  notFollowedBy (symbol "{")
+
+  -- Parse binders with better error handling
   binders <- some $ do
     pat <- parseTermBefore ":"
     mtyp <- optional $ do
       _ <- symbol ":"
       parseTerm
     return (pat, mtyp)
-  _  <- symbol "."
+
+  -- Better error message for missing dot
+  _ <- choice
+    [ symbol "."
+    , do
+        -- If we see end of file, give specific lambda error
+        atEof <- atEnd
+        if atEof
+          then fail "lambda expressions must end with '. <body>' but found end of file. Did you mean to use '.' instead of ':'?"
+          else fail "lambda expressions require '. <body>' after parameters. Expected '.' but found something else"
+    ]
+
   body  <- parseTerm
   -- Desugar pattern lambdas
   return $ foldr desugarLamPat body (zip [0..] binders)
   where
     desugarLamPat :: (Int, (Term, Maybe Term)) -> Term -> Term
     desugarLamPat (_  , (cut -> (Var x _), mtyp)) acc = Lam x mtyp (\_ -> acc)
-    desugarLamPat (idx, (pat,mtyp))               acc = 
+    desugarLamPat (idx, (pat,mtyp))               acc =
       -- Generate a fresh variable name using index
       let freshVar = "_" ++ show idx
       in Lam freshVar mtyp (\_ -> Pat [Var freshVar 0] [] [([pat], acc)])
@@ -1159,6 +1194,99 @@ parseSupMCases scrut = do
   _ <- parseSemi
   return (App (SupM l f) scrut)
 
+-- Do notation parsers
+-- ==================
+
+-- | Syntax: do : IO<Type>: statements | do : IO<Type> { statements }
+parseDo :: Parser Term
+parseDo = label "do notation" $ do
+  srcPos <- getSourcePos
+  _ <- try $ keyword "do"
+  returnType <- parseDoReturnType
+  delim <- choice [ ':' <$ symbol ":", '{' <$ symbol "{" ]
+  stmts <- case delim of
+    ':' -> parseIndentDoStatements (unPos (sourceColumn srcPos))
+    '{' -> parseBraceDoStatements
+    _   -> fail "unreachable"
+  when (delim == '{') (void $ symbol "}")
+  return $ desugarDoBlock returnType stmts
+
+-- | Parse -> IO<Type>
+parseDoReturnType :: Parser Term
+parseDoReturnType = do
+  _ <- symbol ":"
+  _ <- symbol "IO"
+  notFollowedBy (satisfy isNameChar)  -- Ensure IO is not part of a longer name
+  _ <- symbol "<"
+  innerType <- parseTerm
+  _ <- symbol ">"
+  return innerType
+
+-- | Parse list of do statements with braces
+parseBraceDoStatements :: Parser [DoStatement]
+parseBraceDoStatements = some parseDoStatement
+
+-- | Parse list of do statements with indentation
+parseIndentDoStatements :: Int -> Parser [DoStatement]
+parseIndentDoStatements col = many statement where
+  statement = label "do statement" $ do
+    pos <- try $ do
+      skip
+      pos <- getSourcePos
+      guard (unPos (sourceColumn pos) >= col)
+      return pos
+    parseDoStatement
+
+-- | Parse individual do statement
+parseDoStatement :: Parser DoStatement
+parseDoStatement = choice
+  [ parseDoBinding   -- x <- expr : Type
+  , parseDoLet       -- x = expr : Type
+  , parseDoAction    -- expr
+  ]
+
+-- | Parse x <- expr : Type
+parseDoBinding :: Parser DoStatement
+parseDoBinding = label "binding statement" $ try $ do
+  x <- name
+  _ <- symbol "<-"
+  expr <- parseTermBefore ":"
+  _ <- symbol ":"
+  typ <- parseTerm
+  return $ DoBinding x expr typ
+
+-- | Parse x = expr : Type
+parseDoLet :: Parser DoStatement
+parseDoLet = label "let statement" $ try $ do
+  x <- name
+  _ <- symbol "="
+  expr <- parseTermBefore ":"
+  _ <- symbol ":"
+  typ <- parseTerm
+  return $ DoLet x expr typ
+
+-- | Parse bare expression
+parseDoAction :: Parser DoStatement
+parseDoAction = label "action statement" $ do
+  expr <- parseTerm
+  return $ DoAction expr
+
+-- | Desugar do block into IO_BIND chain
+desugarDoBlock :: Term -> [DoStatement] -> Term
+desugarDoBlock returnType [DoAction expr] = expr
+desugarDoBlock returnType (DoBinding x expr bindType : rest) =
+  let restBlock = desugarDoBlock returnType rest
+  in App (App (App (App (Pri IO_BIND) bindType) returnType) expr)
+         (Lam x (Just bindType) (\_ -> restBlock))
+desugarDoBlock returnType (DoLet x expr letType : rest) =
+  Let x (Just letType) expr (\_ -> desugarDoBlock returnType rest)
+desugarDoBlock returnType (DoAction expr : rest) =
+  let restBlock = desugarDoBlock returnType rest
+      unitType = Uni
+  in App (App (App (App (Pri IO_BIND) unitType) returnType) expr)
+         (Lam "_" (Just unitType) (\_ -> restBlock))
+desugarDoBlock _ [] = error "Empty do block"
+
 -- | Main entry points
 
 -- | Parse a term from a string, returning an error message on failure
@@ -1166,7 +1294,9 @@ doParseTerm :: FilePath -> String -> Either String Term
 doParseTerm file input =
   case evalState (runParserT p file input) (ParserState True input [] M.empty [] 0 file) of
     Left err  -> Left (formatError input err)
-    Right res -> Right (adjust (Book M.empty []) res)
+    Right res -> case adjust (Book M.empty []) res of
+      Done t -> Right t
+      Fail e -> Left (show e)
   where
     p = do
       skip

@@ -4,7 +4,9 @@
 
 module Target.JavaScript where
 
+import Control.Exception (throw)
 import Control.Monad (forM)
+import Core.Show
 import Core.Type
 import Data.Int (Int64)
 import Data.List (intercalate, isPrefixOf, isSuffixOf, isInfixOf)
@@ -58,7 +60,7 @@ type CTBook = M.Map String CT
 -- Convert CT back to Term for substitution
 ctToTerm :: CT -> Term
 ctToTerm (CVar k i) = Var k i
-ctToTerm _ = error "ctToTerm: only variables can be converted back"
+ctToTerm _ = throw (BendException $ CompilationError "ctToTerm: only variables can be converted back")
 
 -- Convert Term to CT (erase types, keep runtime values)
 termToCT :: Book -> Term -> Int -> CT
@@ -77,6 +79,7 @@ termToCT book term dep = case term of
   Uni          -> CEra
   Bit          -> CEra
   Nat          -> CEra
+  IO _         -> CEra
   Lst _        -> CEra
   Enu _        -> CEra
   Num _        -> CEra
@@ -114,7 +117,7 @@ termToCT book term dep = case term of
   SupM l f     -> CSupM CEra (termToCT book l dep) (termToCT book f dep)
   Frk l a b    -> CFrk (termToCT book l dep) (termToCT book a dep) (termToCT book b dep)
   Rwt _ _      -> CEra  -- Erases at runtime
-  Pat _ _ _  -> error "unreachable"
+  Pat _ _ _  -> throw (BendException $ CompilationError "Sugared Pat constructors should not appear in JavaScript compilation")
 
 -- JavaScript State Monad
 type JSM = ST.State Int
@@ -128,7 +131,7 @@ fresh = do
 
 -- Name conversion
 nameToJS :: String -> String
-nameToJS x = "$" ++ map (\c -> if c == '/' || c == '.' || c == '-' || c == '#' then '$' else c) x
+nameToJS x = "$" ++ map (\c -> if c == '/' || c == '.' || c == '-' || c == '#' || c == ':' then '$' else c) x
 
 -- Statement generation
 set :: String -> String -> JSM String
@@ -240,7 +243,7 @@ compileConstructor var (CTup a b) dep = do
   bStmt <- ctToJS' False bName b dep
   setStmt <- set var $ "[" ++ aName ++ ", " ++ bName ++ "]"
   return $ concat [aStmt, bStmt, setStmt]
-compileConstructor _ _ _ = error "compileConstructor: not a constructor"
+compileConstructor _ _ _ = throw (BendException $ CompilationError "compileConstructor: not a constructor")
 
 -- Compile numeric value
 compileNumeric :: String -> NVal -> JSM String
@@ -421,7 +424,7 @@ compileSaturatedCall (CRef funName) appArgs var dep = do
     return (argName, argStmt)
   retStmt <- set var $ nameToJS funName ++ "$(" ++ intercalate ", " (map fst argNamesStmts) ++ ")"
   return $ concat (map snd argNamesStmts ++ [retStmt])
-compileSaturatedCall _ _ _ _ = error "Saturated call with non-reference"
+compileSaturatedCall _ _ _ _ = throw (BendException $ CompilationError "Saturated call with non-reference")
 
 -- Compile normal application
 compileNormalApp :: String -> CT -> [CT] -> Int -> JSM String
@@ -513,9 +516,9 @@ ctToJS book fnName fnArgs isTail var term dep = case term of
   CUse _      -> set var "(x => null)"
   CEql _      -> set var "(x => null)"
   CEra        -> set var "null"
-  CSup _ _ _  -> error "Superpositions not supported in JavaScript backend"
-  CSupM _ _ _ -> error "Superpositions not supported in JavaScript backend"
-  CFrk _ _ _  -> error "Superpositions not supported in JavaScript backend"
+  CSup _ _ _  -> throw (BendException $ CompilationError "Superpositions not supported in JavaScript backend")
+  CSupM _ _ _ -> throw (BendException $ CompilationError "Superposition matches not supported in JavaScript backend")
+  CFrk _ _ _  -> throw (BendException $ CompilationError "Fork constructs not supported in JavaScript backend")
   CPri p      -> compilePri p
   where
 
@@ -524,6 +527,13 @@ ctToJS book fnName fnArgs isTail var term dep = case term of
       CHAR_TO_U64 -> set var "(x => BigInt(x.charCodeAt(0)))"
       HVM_INC     -> set var "(x => x)"
       HVM_DEC     -> set var "(x => x)"
+      IO_PURE     -> set var "(x => () => x)"
+      IO_BIND     -> set var "(action => cont => () => { const result = action(); return cont(result)(); })"
+      IO_PRINT    -> set var "(str => () => { console.log(str); return null; })"
+      IO_PUTC     -> set var "(c => () => { process.stdout.write(String.fromCharCode(Number(c))); return null; })"
+      IO_GETC     -> set var "(() => { if (typeof process !== 'undefined' && process.stdin) { throw new Error('Synchronous getChar not supported in Node.js'); } else if (typeof prompt !== 'undefined') { return (prompt('Enter character:') || 'x').charAt(0).charCodeAt(0); } else { throw new Error('getChar not supported in this environment'); } })"
+      IO_READ_FILE -> set var "(path => () => { if (typeof require !== 'undefined') { const fs = require('fs'); return fs.readFileSync(path, 'utf8'); } else { throw new Error('File operations not supported in browser'); } })"
+      IO_WRITE_FILE -> set var "(path => content => () => { if (typeof require !== 'undefined') { const fs = require('fs'); fs.writeFileSync(path, content); return null; } else { throw new Error('File operations not supported in browser'); } })"
 
     compileLet var v f dep = do
       vName <- fresh

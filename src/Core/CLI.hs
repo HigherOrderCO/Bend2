@@ -18,26 +18,57 @@ import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.Process (readProcessWithExitCode)
 import System.Exit (ExitCode(..))
-import Control.Exception (catch, IOException)
-import System.IO (hPutStrLn, stderr)
+import Control.Exception (catch, IOException, try)
+import System.IO (hPutStrLn, stderr, hFlush, stdout)
 
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
-import Core.Adjust.Desugar (desugarBook)
+-- import Core.Adjust.Desugar (desugarBook)
 import Core.Adjust.Annotate (annotateBook)
 import Core.Adjust.Elaborate (elaborateBook)
 import Core.Bind
 import Core.Check
 import Core.Deps
-import Core.Import (autoImport, autoImportWithExplicit)
+import Core.Import (autoImport, autoImportWithExplicit, extractModuleName)
 import Core.Parse.Book (doParseBook)
 import Core.Parse.Parse (ParserState(..))
 import Core.Type
-import Core.Show (showTerm)
+import Core.Show (showTerm, BendException(..))
 import Core.WHNF
 
 import qualified Target.JavaScript as JS
 import qualified Target.HVM as HVM
 import qualified Target.Haskell as HS
+
+-- IO Runtime
+-- ==========
+
+-- Execute an IO action term and return the result
+executeIO :: Book -> Term -> IO Term
+executeIO book action = case whnf book action of
+    Pri IO_GETC -> do
+      c <- getChar
+      return (Val (CHR_V c))
+    App (App (Pri IO_PURE) typ) v -> return v
+    App (Pri IO_PRINT) s -> case termToString book s of
+      Just str -> putStr str >> hFlush stdout >> return One
+      Nothing -> return One
+    App (Pri IO_PUTC) (Val (CHR_V c)) -> putChar c >> hFlush stdout >> return One
+    App (Pri IO_PUTC) (Val (U64_V n)) -> putChar (toEnum (fromIntegral n)) >> hFlush stdout >> return One
+    App (Pri IO_READ_FILE) path -> case termToString book path of
+      Just filepath -> do
+        contents <- readFile filepath
+        return (stringToTerm contents)
+      Nothing -> return Nil
+    App (App (Pri IO_WRITE_FILE) path) content -> case termToString book path of
+      Just filepath -> case termToString book content of
+        Just str -> writeFile filepath str >> return One
+        Nothing -> return One
+      Nothing -> return One
+    -- Handle IO_BIND by executing action then continuation
+    App (App (App (App (Pri IO_BIND) _) _) action) cont -> do
+      result <- executeIO book action
+      executeIO book (whnf book (App cont result))
+    _ -> return One
 
 -- Type-check all definitions in a book
 checkBook :: Book -> IO Book
@@ -82,8 +113,7 @@ parseFile file = do
 -- | Run the main function from a book
 runMain :: FilePath -> Book -> IO ()
 runMain filePath book = do
-  -- Extract module name from file path (same logic as takeBaseName')
-  let moduleName = takeBaseName' filePath
+  let moduleName = extractModuleName filePath
       mainFQN = moduleName ++ "::main"
   case getDefn book mainFQN of
     Nothing -> do
@@ -95,52 +125,56 @@ runMain filePath book = do
           hPutStrLn stderr $ show e
           exitFailure
         Done typ -> do
-          putStrLn ""
-          print $ normal book mainCall
-  where
-    -- Helper function to extract module name from filepath (mirrors Import.hs logic)
-    takeBaseName' :: FilePath -> String
-    takeBaseName' path = 
-      let withoutBend = if ".bend" `isSuffixOf'` path
-                        then take (length path - 5) path  -- Remove .bend extension
-                        else path
-          -- Also remove /_ suffix if present (for files like Term/_.bend)
-          withoutUnderscore = if "/_" `isSuffixOf'` withoutBend
-                              then take (length withoutBend - 2) withoutBend  -- Remove /_
-                              else withoutBend
-      in withoutUnderscore
-      where
-        isSuffixOf' :: Eq a => [a] -> [a] -> Bool
-        isSuffixOf' suffix str = suffix == drop (length str - length suffix) str
+          -- Check if main has IO type and run it properly
+          case whnf book typ of
+            Core.Type.IO _ -> do
+              result <- executeIO book mainCall
+              -- Print the result if it's not Unit
+              case result of
+                One -> return ()  -- Unit type, don't print
+                _ -> print $ normal book result
+            _ -> print $ normal book mainCall
 
 -- | Process a Bend file: parse, check, and run
 processFile :: FilePath -> IO ()
 processFile file = do
   book <- parseFile file
-  -- let bookAdj@(Book defs _) = adjustBook book
-  let desBook@(Book defs _)         = desugarBook book
-  putStrLn $ "\n---- Big Check: ----\n"
-  (chkBook@(Book defs _), success) <- annotateBook desBook
-
-  let bookAdj@(Book defs _) = chkBook
-  -- let bookAdj@(Book defs _) = elaborateBook chkBook
-  -- let bookAdj@(Book defs _) = desBook
-  
-  -- putStrLn $ show $ M.keys defs
-  putStrLn $ "\n---- Core Check: ----\n"
-  -- putStrLn $ show $ getDefn bookAdj "Term/gen/intr" 
-  unless success exitFailure
-  bookChk <- checkBook bookAdj
-  let bookChk = bookAdj
-  runMain file bookChk
+  result <- try $ do
+    bookAdj <- case adjustBook book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    putStrLn $ "\n---- Big Check: ----\n"
+    (chkBook@(Book defs _), success) <- annotateBook bookAdj
+    putStrLn $ "\n---- Core Check: ----\n"
+    bookChk <- checkBook chkBook
+    -- runMain file bookChk
+    unless success exitFailure
+    runMain file chkBook
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
 
 -- | Process a Bend file and return it's Core form
 processFileToCore :: FilePath -> IO ()
 processFileToCore file = do
   book <- parseFile file
-  let bookAdj = adjustBook book
-  bookChk <- checkBook bookAdj
-  putStrLn $ showBookWithFQN bookChk
+  result <- try $ do
+    bookAdj <- case adjustBook book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    bookChk <- checkBook bookAdj
+    putStrLn $ showBookWithFQN bookChk
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
   where
     showBookWithFQN (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
     showDefn k (_, x, t) = k ++ " : " ++ showTerm True False t ++ " = " ++ showTerm True False x
@@ -165,37 +199,71 @@ formatJavaScript jsCode = do
 processFileToJS :: FilePath -> IO ()
 processFileToJS file = do
   book <- parseFile file
-  let bookAdj = adjustBook book
-  bookChk <- checkBook bookAdj
-  let jsCode = JS.compile bookChk
-  formattedJS <- formatJavaScript jsCode
-  putStrLn formattedJS
+  result <- try $ do
+    bookAdj <- case adjustBook book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    bookChk <- checkBook bookAdj
+    let jsCode = JS.compile bookChk
+    formattedJS <- formatJavaScript jsCode
+    putStrLn formattedJS
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
 
 -- | Process a Bend file and compile to HVM
 processFileToHVM :: FilePath -> IO ()
 processFileToHVM file = do
   book <- parseFile file
-  let bookAdj = adjustBookWithPats book
-  -- putStrLn $ show bookAdj
-  let hvmCode = HVM.compile bookAdj
-  putStrLn hvmCode
+  result <- try $ do
+    bookAdj <- case adjustBookWithPats book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    -- putStrLn $ show bookAdj
+    let hvmCode = HVM.compile bookAdj
+    putStrLn hvmCode
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
 
 -- | Process a Bend file and compile to Haskell
 processFileToHS :: FilePath -> IO ()
 processFileToHS file = do
   book <- parseFile file
-  let bookAdj = adjustBook book
-  -- bookChk <- checkBook bookAdj
-  -- putStrLn $ show bookChk
-  let hsCode = HS.compile bookAdj
-  putStrLn hsCode
+  result <- try $ do
+    bookAdj <- case adjustBook book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    -- bookChk <- checkBook bookAdj
+    -- putStrLn $ show bookChk
+    let hsCode = HS.compile bookAdj
+    putStrLn hsCode
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
 
 -- | List all dependencies of a Bend file (including transitive dependencies)
 listDependencies :: FilePath -> IO ()
 listDependencies file = do
   -- Parse and auto-import the file
   book <- parseFile file
-  let bookAdj = adjustBook book
+  bookAdj <- case adjustBook book of
+    Done b -> return b
+    Fail e -> do
+      hPutStrLn stderr $ show e
+      exitFailure
   -- Collect all refs from the fully imported book
   let allRefs = collectAllRefs bookAdj
   -- Print all refs (these are all the dependencies)
@@ -205,7 +273,11 @@ listDependencies file = do
 getGenDeps :: FilePath -> IO ()
 getGenDeps file = do
   book <- parseFile file
-  let bookAdj@(Book defs names) = adjustBook book
+  bookAdj@(Book defs names) <- case adjustBook book of
+    Done b -> return b
+    Fail e -> do
+      hPutStrLn stderr $ show e
+      exitFailure
   
   -- Find all definitions that are `try` definitions (i.e., contain a Met)
   let tryDefs = M.filter (\(_, term, _) -> hasMet term) defs
@@ -275,3 +347,23 @@ hasMet term = case term of
   Pat s m c   -> any hasMet s || any (hasMet . snd) m || any (\(p,b) -> any hasMet p || hasMet b) c
   Frk l a b   -> hasMet l || hasMet a || hasMet b
   _           -> False
+
+-- IO Helper Functions
+-- ===================
+
+-- Convert a Bend string (character list) to a Haskell String
+termToString :: Book -> Term -> Maybe String
+termToString book term = go (whnf book term)
+  where
+    go Nil = Just ""
+    go (Con (Val (CHR_V c)) rest) = do
+      restStr <- go (whnf book rest)
+      return (c : restStr)
+    go _ = Nothing
+
+-- Convert a Haskell String to a Bend string (character list)
+stringToTerm :: String -> Term
+stringToTerm [] = Nil
+stringToTerm (c:cs) = Con (Val (CHR_V c)) (stringToTerm cs)
+
+

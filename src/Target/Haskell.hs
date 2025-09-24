@@ -4,6 +4,8 @@
 
 module Target.Haskell where
 
+import Control.Exception (throw)
+import qualified Core.Show as Show
 import Core.Type
 import Core.WHNF
 import Data.Char (isUpper)
@@ -23,7 +25,7 @@ compile book@(Book defs _) =
 prelude :: String
 prelude = unlines [
     "{-# LANGUAGE ViewPatterns #-}",
-    "import Prelude (print, fromIntegral, (==), (>=), (/=), (+), (-), (*), div, mod, (^), (<), (>), (<=), negate, id, pred, Integer, Bool(..), IO, undefined, Char)",
+    "import Prelude (print, fromIntegral, (==), (>=), (/=), (+), (-), (*), div, mod, (^), (<), (>), (<=), negate, id, pred, Integer, Bool(..), IO, undefined, Char, return, (>>=), putStrLn, putChar, getChar, readFile, writeFile)",
     "import Data.Bits ((.&.), (.|.), xor, shiftL, shiftR, complement)",
     "import Data.Char (chr, ord)",
     "import Data.Int (Int64)",
@@ -75,6 +77,7 @@ data HT
   | HBit               -- Bool type
   | HNat               -- Nat type  
   | HLst HT            -- List type
+  | HIo  HT            -- IO type
   | HNum NTyp          -- Numeric type
   | HSig HT HT         -- Pair type
   | HEnu               -- Enum type
@@ -124,6 +127,7 @@ termToHT book i term = case term of
   Zer         -> HZer
   Suc p       -> HSuc (termToHT book i p)
   NatM z s    -> HLam "x''" (HMat [HVar "x''"] [([HZer], termToHT book i z), ([HSuc (HVar "p''")], HApp (termToHT book i s) (HVar "p''"))])
+  IO _        -> HOne
   Lst _       -> HOne
   Nil         -> HNil
   Con h t     -> HCon (termToHT book i h) (termToHT book i t)
@@ -145,15 +149,15 @@ termToHT book i term = case term of
   Rfl         -> HOne
   EqlM f      -> HLam "_" (termToHT book i f)
   Rwt _ f     -> termToHT book i f
-  Met _ _ _   -> error "Metas not supported for Haskell compilation"
+  Met _ _ _   -> throw (Show.BendException $ CompilationError "Meta variables not supported for Haskell compilation")
   Era         -> HEra
-  Sup _ _ _   -> error "Superpositions not supported for Haskell compilation"
-  SupM _ _    -> error "Superposition matches not supported for Haskell compilation"
+  Sup _ _ _   -> throw (Show.BendException $ CompilationError "Superpositions not supported for Haskell compilation")
+  SupM _ _    -> throw (Show.BendException $ CompilationError "Superposition matches not supported for Haskell compilation")
   Log s x     -> HLog (termToHT book i s) (termToHT book i x)
   Loc _ t     -> termToHT book i t
   Pri p       -> HPri p
   Pat xs _ cs -> HMat (map (termToHT book i) xs) (map (\(ps, b) -> (map (termToHT book i) ps, termToHT book i b)) cs)
-  Frk _ _ _   -> error "Fork not supported for Haskell compilation"
+  Frk _ _ _   -> throw (Show.BendException $ CompilationError "Fork constructs not supported for Haskell compilation")
 
 -- Convert a Bend term to a Haskell type.
 typeToHT :: Book -> Type -> HT
@@ -163,6 +167,7 @@ typeToHT book t = case whnf book t of
   Bit         -> HBit
   Nat         -> HNat
   Lst t       -> HLst (typeToHT book t)
+  IO t       -> HIo  (typeToHT book t)
   Enu ss      -> HEnu
   Num t       -> HNum t
   Sig a (Lam n _ f) -> HSig (typeToHT book a) (typeToHT book (f (Var n 0)))
@@ -208,6 +213,7 @@ showTerm i term = case term of
   HZer           -> "(0 :: Integer)"
   HSuc n         -> "(" ++ showTerm i n ++ " + (1 :: Integer))"
   HLst t         -> "[" ++ showTerm i t ++ "]"
+  HIo  t         -> "IO " ++ showTerm i t
   HNil           -> "[]"
   HCon h t       -> "(" ++ showTerm i h ++ " : " ++ showTerm i t ++ ")"
   HSig a b       -> "(" ++ showTerm i a ++ ", " ++ showTerm i b ++ ")"
@@ -262,7 +268,7 @@ showPat pat = case pat of
   HBt1     -> "True"
   HBt0     -> "False"
   HSym s   -> "\"" ++ s ++ "\""
-  _ -> error "Invalid pattern"
+  _ -> throw (Show.BendException $ CompilationError "Invalid pattern in Haskell compilation")
 
 -- Convert binary operators to Haskell
 showOp2 :: NOp2 -> String
@@ -298,3 +304,10 @@ showPri p = case p of
   CHAR_TO_U64 -> "(fromIntegral . ord)"
   HVM_INC     -> "id"
   HVM_DEC     -> "id"
+  IO_PURE     -> "return"
+  IO_BIND     -> "(>>=)"
+  IO_PRINT    -> "putStrLn"
+  IO_PUTC     -> "putChar"
+  IO_GETC     -> "getChar"
+  IO_READ_FILE -> "readFile"
+  IO_WRITE_FILE -> "writeFile"

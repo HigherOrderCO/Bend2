@@ -4,6 +4,7 @@
 
 module Core.Equal where
 
+import Control.Exception (throw)
 import System.IO.Unsafe
 import Data.IORef
 import Data.Bits
@@ -13,6 +14,7 @@ import GHC.Float (castDoubleToWord64, castWord64ToDouble)
 
 import Core.Type
 import Core.WHNF
+import Core.Show
 
 import Debug.Trace
 
@@ -70,6 +72,7 @@ cmp red d book a b =
     (Zer            , Zer            ) -> True
     (Suc na         , Suc nb         ) -> eql red d book na nb
     (NatM za sa     , NatM zb sb     ) -> eql red d book za zb && eql red d book sa sb
+    (IO ta          , IO tb          ) -> eql red d book ta tb
     (Lst ta         , Lst tb         ) -> eql red d book ta tb
     (Nil            , Nil            ) -> True
     (Con ha ta      , Con hb tb      ) -> eql red d book ha hb && eql red d book ta tb
@@ -99,6 +102,6 @@ cmp red d book a b =
     (Op2 oa aa ba   , Op2 ob ab bb   ) -> oa == ob && eql red d book aa ab && eql red d book ba bb
     (Op1 oa aa      , Op1 ob ab      ) -> oa == ob && eql red d book aa ab
     (Pri pa         , Pri pb         ) -> pa == pb
-    (Met _  _  _    , Met _  _  _    ) -> error "not-supported"
-    (Pat _  _  _    , Pat _  _  _    ) -> error "not-supported"
+    (Met _  _  _    , Met _  _  _    ) -> throw (BendException $ Unsupported noSpan (Ctx []) (Just "Meta variables not supported in equality checking"))
+    (Pat _  _  _    , Pat _  _  _    ) -> throw (BendException $ Unsupported noSpan (Ctx []) (Just "Sugared Pat constructors not supported in equality checking"))
     (_              , _              ) -> False

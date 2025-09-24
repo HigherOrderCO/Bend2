@@ -13,14 +13,14 @@
 
 module Core.WHNF where
 
-import System.IO.Unsafe
-import Data.IORef
+import Control.Exception (throw)
 import Data.Bits
 import GHC.Float (castDoubleToWord64, castWord64ToDouble)
 
 import Debug.Trace
 
 import Core.Type
+import Core.Show
 
 -- Evaluation
 -- ==========
@@ -87,7 +87,7 @@ whnfApp book f x =
     SigM f     -> whnfSigM book x f
     SupM l f   -> whnfSupM book x l f
     EqlM f     -> whnfEqlM book x f
-    Frk _ _ _  -> error "unreachable"
+    Frk _ _ _  -> throw (BendException $ Unsupported noSpan (Ctx []) (Just "Fork constructs should not appear in application normalization"))
     f'         -> App f' x
 
 -- Normalizes a lambda application
@@ -183,6 +183,14 @@ whnfAppPri book p x =
       (CHAR_TO_U64, Val (CHR_V c)) -> Val (U64_V (fromIntegral (fromEnum c)))
       (HVM_INC    , t)             -> t
       (HVM_DEC    , t)             -> t
+      -- IO primitives accumulate arguments but don't execute until forced by bind
+      (IO_PURE    , v)             -> App (Pri IO_PURE) x'  -- Keep IO wrapper for lazy evaluation
+      (IO_BIND    , m)             -> App (Pri IO_BIND) x'  -- Accumulate args (handled in whnfGo)
+      (IO_PRINT   , s)             -> App (Pri IO_PRINT) x'
+      (IO_PUTC    , _)             -> App (Pri IO_PUTC) x'
+      (IO_GETC    , _)             -> Pri IO_GETC  -- IO_GETC takes no arguments
+      (IO_READ_FILE, path)         -> App (Pri IO_READ_FILE) x'
+      (IO_WRITE_FILE, path)        -> App (Pri IO_WRITE_FILE) x'  -- Accumulate args (handled in whnfGo)
       _                            -> App (Pri p) x'
 
 -- Numeric operations
@@ -429,6 +437,7 @@ normal book term =
     Zer         -> Zer
     Suc n       -> Suc (normal book n)
     NatM z s    -> NatM (normal book z) (normal book s)
+    IO t        -> IO (normal book t)
     Lst t       -> Lst (normal book t)
     Nil         -> Nil
     Con h t     -> Con (normal book h) (normal book t)
@@ -452,15 +461,17 @@ normal book term =
     Era         -> Era
     Sup l a b   -> Sup l (normal book a) (normal book b)
     SupM l f    -> SupM (normal book l) (normal book f)
-    Frk l a b   -> error "Fork interactions unsupported in Haskell"
+    Frk l a b   -> throw (BendException $ Unsupported noSpan (Ctx []) (Just "Fork interactions unsupported in normalization"))
     Num t       -> Num t
     Val v       -> Val v
     Op2 o a b   -> Op2 o (normal book a) (normal book b)
     Op1 o a     -> Op1 o (normal book a)
     Pri p       -> Pri p
-    Met _ _ _   -> error "not-supported"
-    Pat _ _ _   -> error "not-supported"
+    Met _ _ _   -> throw (BendException $ Unsupported noSpan (Ctx []) (Just "Meta variables not supported in normalization"))
+    Pat _ _ _   -> throw (BendException $ Unsupported noSpan (Ctx []) (Just "Sugared Pat constructors not supported in normalization"))
 
 normalCtx :: Book -> Ctx -> Ctx
 normalCtx book (Ctx ctx) = Ctx (map normalAnn ctx)
   where normalAnn (k,v,t) = (k, normal book v, normal book t)
+
+

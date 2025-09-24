@@ -2066,7 +2066,7 @@ verify :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 verify d span book ctx term goal = do
   t <- infer d span book ctx term Nothing
   if
-    trace ("-verify: " ++ show term ++ " :: " ++ show t ++ " == " ++ show goal) $
+    -- trace ("-verify: " ++ show term ++ " :: " ++ show t ++ " == " ++ show goal) $
     equal d book t goal
     then do 
       return term

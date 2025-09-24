@@ -29,6 +29,42 @@ import Core.WHNF
 extend :: Ctx -> Name -> Term -> Term -> Ctx
 extend (Ctx ctx) k v t = Ctx (ctx ++ [(k, v, t)])
 
+-- -- Extract the most specific span from a term, fallback to provided span
+-- getSpan :: Span -> Term -> Span
+-- getSpan fallback term = case term of
+--   Loc span _ -> span
+--   _          -> fallback
+
+-- Get span for the left operand of a binary operation by estimating from the operator span
+getLeftOperandSpan :: Span -> Span
+getLeftOperandSpan opSpan =
+  let (begLine, begCol) = spanBeg opSpan
+      (endLine, endCol) = spanEnd opSpan
+      src = spanSrc opSpan
+      pth = spanPth opSpan
+  in if begLine == endLine
+     then
+       -- Try to find the '+' operator and end the span just before it
+       let line = lines src !! (begLine - 1)
+           beforeCol = take (endCol - 1) line
+           -- Find the last '+' in the span and end just before it
+           plusPos = case reverse $ zip [1..] beforeCol of
+             [] -> begCol
+             positions -> case [(pos, c) | (pos, c) <- positions, c == '+'] of
+               [] -> begCol  -- No + found, use beginning
+               ((pos, _):_) -> pos - 1  -- End just before the +
+       in Span (begLine, begCol) (begLine, max begCol plusPos) pth src
+     else opSpan  -- Multi-line, just use original span
+
+-- Check if a type is valid for binary operations (more precise than canOp2)
+isValidForOp2 :: Term -> Bool
+isValidForOp2 typ = case typ of
+  Num _ -> True
+  Nat   -> True
+  Bit   -> True
+  All _ _ -> False  -- Function types are not valid for binary operations
+  _     -> False
+
 -- Check if a Sigma type represents a constructor
 -- Constructor types are sigma lists that:
 -- 1. Start with an Enum (constructor tag)
@@ -202,6 +238,13 @@ infer d span book@(Book defs names) ctx term =
     -- Can't infer NatM
     NatM z s -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
+
+    -- ctx |- T : Set
+    -- -----------------
+    -- ctx |- IO<T> : Set
+    IO t -> do
+      check d span book ctx t Set
+      Done Set
 
     -- ctx |- T : Set
     -- ---------------- Lst
@@ -396,7 +439,16 @@ infer d span book@(Book defs names) ctx term =
     Op2 op a b -> do
       ta <- infer d span book ctx a
       tb <- infer d span book ctx b
-      inferOp2Type d span book ctx op ta tb
+      -- Early check: if either operand is definitely not valid for operations, fail immediately
+      let aForced = force book ta
+      let bForced = force book tb
+      case (aForced, bForced) of
+        (ta', _) | not (isValidForOp2 ta') ->
+          Fail $ TypeMismatch (getLeftOperandSpan span) (normalCtx book ctx) (normal book (Var "Num/Bit/Nat" 0)) (normal book ta) Nothing
+        (_, tb') | not (isValidForOp2 tb') ->
+          Fail $ TypeMismatch (getSpan span b) (normalCtx book ctx) (normal book (Var "Num/Bit/Nat" 0)) (normal book tb) Nothing
+        _ ->
+          inferOp2Type d span book ctx op ta tb
 
     -- ctx |- a : ta
     -- inferOp1Type op ta = tr
@@ -424,6 +476,56 @@ infer d span book@(Book defs names) ctx term =
     Pri HVM_DEC -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
 
+    -- ctx |-
+    -- -------------------------------- Pri-IO_PURE
+    -- ctx |- IO_PURE : ∀A:Set. A -> IO<A>
+    Pri IO_PURE -> do
+      Done (All Set (Lam "A" (Just Set) (\a ->
+        All a (Lam "x" (Just a) (\_ -> IO a)))))
+
+    -- ctx |-
+    -- --------------------------------------------------------------- Pri-IO_BIND
+    -- ctx |- IO_BIND : ∀A:Set. ∀B:Set. IO<A> -> (A -> IO<B>) -> IO<B>
+    Pri IO_BIND -> do
+      Done (All Set (Lam "A" (Just Set) (\a ->
+        All Set (Lam "B" (Just Set) (\b ->
+          All (IO a) (Lam "m" (Just (IO a)) (\_ ->
+            All (All a (Lam "_" (Just a) (\_ -> IO b))) (Lam "f" Nothing (\_ ->
+              IO b)))))))))
+
+    -- ctx |- s : Char[]
+    -- ---------------------------- Pri-IO_PRINT
+    -- ctx |- IO_PRINT s : IO<Unit>
+    Pri IO_PRINT -> do
+      Done (All (Lst (Num CHR_T)) (Lam "s" Nothing (\_ -> IO Uni)))
+    
+    -- ctx |- c : Char
+    -- -------------------------------- Pri-IO_PUTC
+    -- ctx |- IO_PUTC c : IO<Unit>
+    Pri IO_PUTC -> do
+      Done (All (Num CHR_T) (Lam "c" Nothing (\_ -> IO Uni)))
+
+    -- ctx |-
+    -- -------------------------------- Pri-IO_GETC
+    -- ctx |- IO_GETC : IO<Char>
+    Pri IO_GETC -> do
+      Done (IO (Num CHR_T))
+
+    -- ctx |- s : Char[]
+    -- -------------------------------- Pri-IO_READ_FILE
+    -- ctx |- IO_READ_FILE s : IO<Char[]>
+    Pri IO_READ_FILE -> do
+      Done (All (Lst (Num CHR_T)) (Lam "path" Nothing (\_ -> IO (Lst (Num CHR_T)))))
+
+    -- ctx |- path    : Char[]
+    --        content : Char[]
+    -- -------------------------------------------- Pri-IO_WRITE_FILE
+    -- ctx |- IO_WRITE_FILE path content : IO<Unit>
+    Pri IO_WRITE_FILE -> do
+      Done (All (Lst (Num CHR_T)) (Lam "path" Nothing (\_ ->
+        All (Lst (Num CHR_T)) (Lam "content" Nothing (\_ ->
+          IO Uni)))))
+
     -- ctx |- s : Char[]
     -- ctx |- x : T
     -- ------------------ Log
@@ -434,7 +536,7 @@ infer d span book@(Book defs names) ctx term =
 
     -- Not supported in infer
     Pat _ _ _ -> do
-      error "Pat not supported in infer"
+      Fail $ Unsupported span (normalCtx book ctx) (Just "Sugared Pat constructors not supported in type checking")
 
 -- Infer the result type of a binary numeric operation
 inferOp2Type :: Int -> Span -> Book -> Ctx -> NOp2 -> Term -> Term -> Result Term
@@ -935,10 +1037,19 @@ check d span book ctx term      goal =
     (Op2 op a b, _) -> do
       ta <- infer d span book ctx a
       tb <- infer d span book ctx b
-      tr <- inferOp2Type d span book ctx op ta tb
-      if equal d book tr goal
-        then Done ()
-        else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book tr) Nothing
+      -- Early check: if either operand is definitely not valid for operations, fail immediately
+      let aForced = force book ta
+      let bForced = force book tb
+      case (aForced, bForced) of
+        (ta', _) | not (isValidForOp2 ta') ->
+          Fail $ TypeMismatch (getLeftOperandSpan span) (normalCtx book ctx) (normal book (Var "Num/Bit/Nat" 0)) (normal book ta) Nothing
+        (_, tb') | not (isValidForOp2 tb') ->
+          Fail $ TypeMismatch (getSpan span b) (normalCtx book ctx) (normal book (Var "Num/Bit/Nat" 0)) (normal book tb) Nothing
+        _ -> do
+          tr <- inferOp2Type d span book ctx op ta tb
+          if equal d book tr goal
+            then Done ()
+            else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book tr) Nothing
 
     -- ctx |- a : ta
     -- inferOp1Type op ta = tr
@@ -1009,7 +1120,7 @@ check d span book ctx term      goal =
 
     -- Not supported
     (Pat _ _ _, _) -> do
-      error "not-supported"
+      Fail $ Unsupported span (normalCtx book ctx) (Just "Sugared Pat constructors not supported in type checking")
 
     -- ctx |- s : Char[]
     -- ctx |- x : T

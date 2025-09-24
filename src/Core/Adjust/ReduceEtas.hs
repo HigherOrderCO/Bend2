@@ -158,6 +158,7 @@ reduceEtas d span term =
   Zer           -> Zer
   Suc t'        -> Suc (reduceEtas d span t')
   NatM z s      -> NatM (reduceEtas d span z) (reduceEtas d span s)
+  IO t          -> IO (reduceEtas d span t)
   Lst ty        -> Lst (reduceEtas d span ty)
   Nil           -> Nil
   Con h t'      -> Con (reduceEtas d span h) (reduceEtas d span t')
@@ -248,6 +249,7 @@ resolveMatches span nam elim clause sym args t = case t of
   Zer          -> Zer
   Suc t'       -> Suc (resolveMatches span nam elim clause sym args t')
   NatM z s     -> NatM (resolveMatches span nam elim clause sym args z) (resolveMatches span nam elim clause sym args s)
+  IO t         -> IO (resolveMatches span nam elim clause sym args t)
   Lst ty       -> Lst (resolveMatches span nam elim clause sym args ty)
   Nil          -> Nil
   Con h t'     -> Con (resolveMatches span nam elim clause sym args h) (resolveMatches span nam elim clause sym args t')
@@ -338,6 +340,7 @@ isEtaLong d span nam t = case t of
   Zer         -> NONE
   Suc t'      -> isEtaLong d span nam t'
   NatM z s    -> isEtaLong d span nam z <+> isEtaLong d span nam s
+  IO t        -> isEtaLong d span nam t
   Lst ty      -> isEtaLong d span nam ty
   Nil         -> NONE
   Con h t'    -> isEtaLong d span nam h <+> isEtaLong d span nam t'

@@ -68,6 +68,7 @@ import Data.Maybe (fromMaybe)
 
 import Debug.Trace
 
+import Control.Exception (throw)
 import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
@@ -86,27 +87,23 @@ import Core.WHNF
 -- book adjustment where recursive references aren't available yet.
 -- When called from adjustBook, enums have already been resolved at the book level.
 -- When called standalone (e.g., from parseTerm), enums are resolved here.
-adjust :: Book -> Term -> Term
-adjust book term =
-  -- trace ("done: " ++ show done) $
-  done
-  where
-    -- First resolve enums to their FQNs (needed for standalone use)
-    resolved = case resolveEnumsInTerm (extractEnums book) term of
-      Done t -> t
-      Fail e -> error $ show e
-    flat = flattenPats 0 noSpan book resolved
-    npat = desugarPats 0 noSpan flat
-    nfrk = desugarFrks book 0 npat
-    hoas = bind nfrk
-    done = reduceEtas 0 noSpan hoas
+adjust :: Book -> Term -> Result Term
+adjust book term = do
+  -- First resolve enums to their FQNs (needed for standalone use)
+  resolved <- resolveEnumsInTerm (extractEnums book) term
+  let flat = flattenPats 0 noSpan book resolved
+  npat <- desugarPats 0 noSpan flat
+  let nfrk = desugarFrks book 0 npat
+  let hoas = bind nfrk
+  let etas = reduceEtas 0 noSpan hoas
+  Done $ etas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
-adjustWithPats :: Book -> Term -> Term
-adjustWithPats book term =
-  ret
-  where
-    ret = bind (desugarFrks book 0 (flattenPats 0 noSpan book term))
+adjustWithPats :: Book -> Term -> Result Term
+adjustWithPats book term = do
+  let flat = flattenPats 0 noSpan book term
+  let frks = desugarFrks book 0 flat
+  Done $ bind frks
 
 -- The state for the adjustment process. It holds:
 -- 1. The book of already-adjusted definitions.
@@ -119,24 +116,26 @@ type AdjustState = (Book, S.Set Name)
 -- all definitions it depends on have already been adjusted.
 -- This is crucial for functions like `flatten` which may look up references.
 -- After adjusting all definitions, it checks for free variables.
-adjustBook :: Book -> Book
-adjustBook book@(Book defs names) =
+adjustBook :: Book -> Result Book
+adjustBook book@(Book defs names) = do
   -- First resolve all enums in the entire book
-  let resolvedBook = case resolveEnumsInBook book of
-        Done b -> b
-        Fail e -> error $ show e
-      adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjust) (M.keys defs)) (Book M.empty names, S.empty)
-  in adjustedBook -- checkFreeVarsInBook disabled: not in main branch
+  resolvedBook <- resolveEnumsInBook book
+  let adjustFn b t = case adjust b t of
+        Done t' -> t'
+        Fail e  -> throw (BendException e)
+  let adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
+  Done adjustedBook -- checkFreeVarsInBook disabled: not in main branch
 
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
-adjustBookWithPats :: Book -> Book
-adjustBookWithPats book@(Book defs names) =
+adjustBookWithPats :: Book -> Result Book
+adjustBookWithPats book@(Book defs names) = do
   -- First resolve all enums in the entire book
-  let resolvedBook = case resolveEnumsInBook book of
-        Done b -> b
-        Fail e -> error $ show e
-      adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustWithPats) (M.keys defs)) (Book M.empty names, S.empty)
-  in adjustedBook -- checkFreeVarsInBook disabled: not in main branch
+  resolvedBook <- resolveEnumsInBook book
+  let adjustFn b t = case adjustWithPats b t of
+        Done t' -> t'
+        Fail e  -> throw (BendException e)
+  let adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
+  Done adjustedBook -- checkFreeVarsInBook disabled: not in main branch
 
 -- | Checks all definitions in a book for free variables.
 -- This should be called after all adjustments are complete.
@@ -151,7 +150,7 @@ checkFreeVarsInBook book@(Book defs names) =
     [] -> book
     ((name, frees):_) -> 
       let freeName = S.elemAt 0 frees
-      in error $ "Unbound variable '" ++ freeName ++ "' in definition '" ++ name ++ "'."
+      in throw (BendException $ Undefined noSpan (Ctx []) freeName (Just $ "in definition '" ++ name ++ "'"))
 
 -- | The recursive worker function that adjusts a single definition.
 -- It takes a set of names currently in the recursion stack to detect cycles.

@@ -5,9 +5,11 @@
 module Core.Show where
 
 import Core.Type
+import Control.Exception (Exception)
 import Data.List (intercalate, unsnoc, isInfixOf, isPrefixOf)
 import Data.List.Split (splitOn)
 import Data.Maybe (fromMaybe)
+import Data.Typeable (Typeable)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Highlight (highlightError)
@@ -77,6 +79,9 @@ showPlain ctx term = case term of
   Var k i      -> showVar (ctxShadowed ctx) k i
   Ref k i      -> showName ctx k
   Sub t        -> showPlain ctx t
+
+  -- IO type
+  IO t         -> "IO<" ++ showPlain ctx t ++ ">"
 
   -- Binding forms
   Fix k f      -> showFix ctx k f
@@ -317,10 +322,17 @@ showPat ctx ts ms cs = "match " ++ unwords (map (showPlain ctx) ts) ++ " {" ++ m
 
 showPri :: PriF -> String
 showPri p = case p of
-  U64_TO_CHAR -> "U64_TO_CHAR"
-  CHAR_TO_U64 -> "CHAR_TO_U64" 
-  HVM_INC     -> "HVM_INC"
-  HVM_DEC     -> "HVM_DEC"
+  U64_TO_CHAR    -> "U64_TO_CHAR"
+  CHAR_TO_U64    -> "CHAR_TO_U64"
+  HVM_INC        -> "HVM_INC"
+  HVM_DEC        -> "HVM_DEC"
+  IO_PURE        -> "IO_PURE"
+  IO_BIND        -> "IO_BIND"
+  IO_PRINT       -> "IO_PRINT"
+  IO_PUTC        -> "IO_PUTC"
+  IO_GETC        -> "IO_GETC"
+  IO_READ_FILE   -> "IO_READ_FILE"
+  IO_WRITE_FILE  -> "IO_WRITE_FILE"
 
 showNum :: NTyp -> String
 showNum t = case t of
@@ -417,9 +429,10 @@ collectQualifiedNames = go S.empty
     go bound term = case term of
       Ref k _ -> if "::" `isInfixOf` k then S.insert k bound else bound
       Sym s -> if "::" `isInfixOf` s then S.insert s bound else bound
-      
+
       -- Traverse all subterms
       Sub t -> go bound t
+      IO t -> go bound t
       Fix _ f -> go bound (f (Var "_dummy" 0))
       Let _ t v f -> go (maybe bound (go bound) t) v `S.union` go bound (f (Var "_dummy" 0))
       Use _ v f -> go bound v `S.union` go bound (f (Var "_dummy" 0))
@@ -449,7 +462,7 @@ collectQualifiedNames = go S.empty
       SupM l f -> go bound l `S.union` go bound f
       Loc _ t -> go bound t
       Log s x -> go bound s `S.union` go bound x
-      Pat ts ms cs -> S.unions (map (go bound) ts) `S.union` 
+      Pat ts ms cs -> S.unions (map (go bound) ts) `S.union`
                      S.unions (map (go bound . snd) ms) `S.union`
                      S.unions [S.unions (map (go bound) ps) `S.union` go bound b | (ps, b) <- cs]
       Frk l a b -> go bound l `S.union` go bound a `S.union` go bound b
@@ -482,8 +495,9 @@ getShadowed term = S.fromList [k | (k, _) <- duplicates]
 adjustDepths :: Term -> Int -> Term
 adjustDepths term depth = case term of
   Var k i    -> Var k i
-  Ref k i    -> Ref k i  
+  Ref k i    -> Ref k i
   Sub t      -> Sub (adjustDepths t depth)
+  IO t       -> IO (adjustDepths t depth)
   Fix k f    -> Fix k (\x -> adjustDepths (f (Var k depth)) (depth + 1))
   Let k t v f -> Let k (fmap (\t' -> adjustDepths t' depth) t) (adjustDepths v depth) (\x -> adjustDepths (f (Var k depth)) (depth + 1))
   Use k v f  -> Use k (adjustDepths v depth) (\x -> adjustDepths (f (Var k depth)) (depth + 1))
@@ -531,7 +545,7 @@ adjustDepths term depth = case term of
   Loc s t    -> Loc s (adjustDepths t depth)
   Log s x    -> Log (adjustDepths s depth) (adjustDepths x depth)
   Pri p      -> Pri p
-  Pat ts ms cs -> Pat (map (\t -> adjustDepths t depth) ts) 
+  Pat ts ms cs -> Pat (map (\t -> adjustDepths t depth) ts)
                       [(k, adjustDepths v depth) | (k, v) <- ms]
                       [([adjustDepths p depth | p <- ps], adjustDepths t depth) | (ps, t) <- cs]
   Frk l a b  -> Frk (adjustDepths l depth) (adjustDepths a depth) (adjustDepths b depth)
@@ -548,7 +562,9 @@ instance Show Book where
     where showDefn k (_, x, t) = k ++ " : " ++ show t ++ " = " ++ showTerm False True x
 
 instance Show Span where
-  show span = "\n\x1b[1mLocation:\x1b[0m \x1b[2m(line " ++ show (fst $ spanBeg span) ++ ", column " ++ show (snd $ spanBeg span) ++ ")\x1b[0m\n" ++ highlightError (spanBeg span) (spanEnd span) (spanSrc span)
+  show span
+    | spanBeg span == (0,0) && spanEnd span == (0,0) && spanSrc span == "" = ""
+    | otherwise = "\n\x1b[1mLocation:\x1b[0m \x1b[2m(line " ++ show (fst $ spanBeg span) ++ ", column " ++ show (snd $ spanBeg span) ++ ")\x1b[0m\n" ++ highlightError (spanBeg span) (spanEnd span) (spanSrc span)
 
 showHint :: Maybe String -> String
 showHint Nothing = ""
@@ -565,6 +581,15 @@ instance Show Error where
     UnknownTermination term  -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
     ImportError span msg     -> "\x1b[1mImportError:\x1b[0m " ++ msg ++ show span
     AmbiguousEnum span ctx ctor fqns hint -> "\x1b[1mAmbiguousEnum:\x1b[0m &" ++ ctor ++ "\nCould be:\n" ++ unlines ["  - &" ++ fqn | fqn <- fqns] ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    CompilationError msg -> "\x1b[1mCompilationError:\x1b[0m " ++ msg
+
+-- Exception wrapper for Error
+newtype BendException = BendException Error
+
+instance Show BendException where
+  show (BendException e) = show e
+
+instance Exception BendException
 
 instance Show Ctx where
   show (Ctx ctx) = case lines of
