@@ -211,21 +211,48 @@ resolveMatches span nam elim clause sym args t = case t of
           (UniM u       , UNIM _      , [])    -> resolveMatches span nam elim clause sym args $ u
           (BitM fl tr   , BITM _      , [])    -> resolveMatches span nam elim clause sym args $ ([fl, tr] !! clause)
           (NatM z s     , NATM _ _    , [])    -> resolveMatches span nam elim clause sym args $ z
-          (NatM z s     , NATM _ _    , [p])   -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span s) s p
-          (EmpM         , EMPM _      , [])    -> resolveMatches span nam elim clause sym args EmpM
+          (NatM z s     , NATM _ _    , [p])   -> resolveMatches span nam elim clause sym args $ appArgs s args 0
+       -- (EmpM         , EMPM _      , [])    -> resolveMatches span nam elim clause sym args $ 
           (LstM nil cons, LSTM _ _    , [])    -> resolveMatches span nam elim clause sym args $ nil
-          (LstM nil cons, LSTM _ _    , [h,t]) -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span cons)  
-                                                                                                 (appInnerArg 1 (getSpan span cons) cons t) h
-          (SigM pair    , SIGM _ _    , [a,b]) -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span pair)
-                                                                                                 (appInnerArg 1 (getSpan span pair) pair b) a
+          (LstM nil cons, LSTM _ _    , [h,t]) -> resolveMatches span nam elim clause sym args $ appArgs cons args 0
+          (SigM pair    , SIGM _ _    , [a,b]) -> resolveMatches span nam elim clause sym args $ appArgs pair args 0
           (EqlM refl    , EQLM _      , [])    -> resolveMatches span nam elim clause sym args refl
-          (EnuM cs def  , ENUM _ _ _ _, [q])   -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span def) def q
+          (EnuM cs def  , ENUM _ _ _ _, [q])   -> resolveMatches span nam elim clause sym args $ appArgs def args 0
           (EnuM cs def  , ENUM _ _ _ _, [])    -> case lookup sym cs of
                                 Just branch  -> resolveMatches span nam elim clause sym args $ branch
-                                Nothing      -> resolveMatches span nam elim clause sym args $ appInnerArg 0 (getSpan span def) def (Var k i)
+                                Nothing      -> resolveMatches span nam elim clause sym args $ appArgs def [(Var k i)] 0
           _ -> App (resolveMatches span nam elim clause sym args f) (resolveMatches span nam elim clause sym args x)
         else   App (resolveMatches span nam elim clause sym args f) (resolveMatches span nam elim clause sym args x)
       _     -> App (resolveMatches span nam elim clause sym args f) (resolveMatches span nam elim clause sym args x)
+    where
+      appArgs :: Term -> [Term] -> Int -> Term
+      appArgs f [] _ = f
+      appArgs (Use k v b) args skip    = Use k v (\v -> (appArgs (b v) args skip))
+      appArgs (Let k mt v b) args skip = Let k mt v (\v -> (appArgs (b v) args skip))
+      appArgs (Chk x t) args skip      = Chk (appArgs t args skip) t
+      appArgs (Loc l t) args skip      = Loc l (appArgs t args skip)
+      appArgs (Log s t) args skip      = Log s (appArgs t args skip)
+      appArgs (App f x) args skip      = App (appArgs f args (skip+1)) x -- skip arguments consumed by x
+      appArgs f args@(arg:rest) skip@0 = case cut f of 
+        Lam k mt b  -> appArgs (b arg) rest skip
+        EqlM f      -> App (EqlM (appArgs f rest skip)) arg
+        UniM f      -> App (UniM (appArgs f rest skip)) arg
+        BitM f t    -> App (BitM (appArgs f rest skip) (appArgs f rest     skip)) arg
+        NatM z s    -> App (NatM (appArgs z rest skip) (appArgs s rest (skip+1))) arg
+        LstM n c    -> App (LstM (appArgs n rest skip) (appArgs c rest (skip+2))) arg
+        SigM g      -> App (SigM (appArgs g rest (skip+2))) arg
+        EnuM cs def -> App (EnuM (map (\(s,t) -> (s, appArgs t rest skip)) cs) (appArgs def rest (skip+1))) arg
+        _           -> foldl App f args 
+      appArgs f args@(arg:rest) skip = case cut f of 
+        Lam k mt b  -> Lam k mt (\x -> (appArgs (b x) args (skip-1)))
+        EqlM f      -> EqlM (appArgs f args (skip-1))
+        UniM f      -> UniM (appArgs f args (skip-1))
+        BitM f t    -> BitM (appArgs f args (skip-1)) (appArgs f args (skip-1))
+        NatM z s    -> NatM (appArgs z args (skip-1)) (appArgs s args (skip-1+1))
+        LstM n c    -> LstM (appArgs n args (skip-1)) (appArgs c args (skip-1+2))
+        SigM g      -> SigM (appArgs g args (skip-1+2))
+        EnuM cs def -> EnuM (map (\(s,t) -> (s, appArgs t args (skip-1))) cs) (appArgs def args (skip-1+1))
+        _           -> foldl App f args
   -- Not an eliminator application, just propagate deeper
   Lam k ty f   -> Lam k (fmap (resolveMatches span nam elim clause sym args) ty) (\x -> resolveMatches span nam elim clause sym args (f x))
   Var k i      -> Var k i
@@ -311,10 +338,10 @@ isEtaLong d span nam t = case t of
           EmpM        -> EMPM span <+> isEtaLong d span nam f
           UniM _      -> UNIM span <+> isEtaLong d span nam f
           BitM _ _    -> BITM span <+> isEtaLong d span nam f
-          NatM _ s    -> NATM span (getVarNames 1 (getSpan span s) s) <+> isEtaLong d span nam f
-          LstM _ c    -> LSTM span (getVarNames 2 (getSpan span c) c) <+> isEtaLong d span nam f
-          SigM g      -> SIGM span (getVarNames 2 (getSpan span g) g) <+> isEtaLong d span nam f
-          EnuM cs def -> (ENUM span (map fst cs) (isLam def) (getVarNames 1 span def)) <+> isEtaLong d span nam f
+          NatM _ s    -> NATM span (getVarNames s ["p"]    ) <+> isEtaLong d span nam f
+          LstM _ c    -> LSTM span (getVarNames c ["h","t"]) <+> isEtaLong d span nam f
+          SigM g      -> SIGM span (getVarNames g ["a","b"]) <+> isEtaLong d span nam f
+          EnuM cs def -> ENUM span (map fst cs) (isLam def) (getVarNames def ["t"]) <+> isEtaLong d span nam f
           _           -> isEtaLong d span nam f
         else
             isEtaLong d span nam f <+> isEtaLong d span nam x
@@ -420,76 +447,42 @@ _                <+> _                = NONE
 -- Returns: from          λp.s     , extracts ["p"] 
 --          from  NatM z (λp.s)    , extracts ["$noname", "p"]
 --          from (NatM z (λp.s)) x), extracts ["p"]
-getVarNames :: Int -> Span -> Term -> [String]
-getVarNames i' span term = go i' 0 term []
+getVarNames :: Term -> [String] -> [String]
+getVarNames term defs = go (length defs) 0 term [] defs
   where
-    def = "$noname"
-    combine :: [String] -> [String] -> [String]
-    combine a b = 
+    go :: Int -> Int -> Term -> [String] -> [String] -> [String]
+    go 0 j term nams defs = nams
+    -- go, not skipping the names of the arguments
+    go i 0 term nams defs@(def:rest) = case cut term of
+      App f x   -> go i 1 f nams defs
+      Lam k _ b -> (k   : go (i-1) 0 (b (Var "_" 0)) nams rest)
+      UniM f    -> (def : go (i-1) 0 f nams rest)
+      BitM f t  -> (def : combine (go (i-1) 0 f nams rest) (go (i-1) 0 t nams rest) rest)
+      NatM z s  -> (def : combine (go (i-1) 0 z nams rest) (go (i-1) 1 s nams rest) rest)
+      LstM n c  -> (def : combine (go (i-1) 0 n nams rest) (go (i-1) 2 c nams rest) rest)
+      EnuM c d  -> (def : go (i-1) 1 d nams rest)
+      SigM g    -> (def : go (i-1) 2 g nams rest)
+      EqlM f    -> (def : go (i-1) 0 f nams rest)
+      _ -> defs
+    -- go, but skip j arguments
+    go i j term nams defs@(def:rest) = case cut term of
+      App f x   -> go i j f nams defs
+      Lam k _ b -> go i (j-1) (b (Var "_" 0)) nams defs
+      UniM f    -> go i (j-1) f nams defs
+      BitM f t  -> combine (go i (j-1) f nams defs) (go i (j-1)   t nams defs) defs
+      NatM z s  -> combine (go i (j-1) z nams defs) (go i (j-1+1) s nams defs) defs
+      LstM n c  -> combine (go i (j-1) n nams defs) (go i (j-1+2) c nams defs) defs
+      EnuM c d  -> go i (j-1+1) d nams defs
+      SigM g    -> go i (j-1+2) g nams defs
+      EqlM f    -> go i (j-1) f nams defs
+      _ -> defs
+    go i j term nams [] = error "unreachable A" -- i > 0, no remaining defaults
+    combine :: [String] -> [String] -> [String] -> [String]
+    combine a b defs@(def:rest) = 
       case (a,b) of
       (a:as,b:bs) -> case (a,b) of
-        (a,b) | a == def -> b:(combine as bs)
-        (a,b)            -> a:(combine as bs)
+        (a,b) | a == def -> b:(combine as bs rest)
+        (a,b)            -> a:(combine as bs rest)
       _           -> a
-    -- go, but skip j arguments
-    go :: Int -> Int -> Term -> [String] -> [String]
-    go 0 j term nams = nams
-    go i j term nams | j > 0 = case cut term of
-      App f x   -> go i j f nams
-      Lam k _ b -> go i (j-1) (b (Var "_" 0)) nams
-      UniM f    -> go i (j-1) f nams
-      BitM f t  -> combine (go i (j-1) f nams) (go i (j-1) t nams)
-      NatM z s  -> combine (go i (j-1) z nams) (go i (j-1+1) s nams)
-      LstM n c  -> combine (go i (j-1) n nams) (go i (j-1+2) c nams)
-      EnuM c d  -> go i (j-1+1) d nams
-      SigM g    -> go i (j-1+2) g nams
-      EqlM f    -> go i (j-1) f nams
-      _ -> errorWithSpan span $ "Not enough arguments. Expected > " ++ show i' ++ ":"
-
-    -- go, getting the names of the arguments
-    go i 0 term nams = case cut term of
-      App f x   -> go i 1 f nams
-      Lam k _ b -> (k   : go (i-1) 0 (b (Var "_" 0)) nams)
-      UniM f    -> (def : go (i-1) 0 f nams)
-      BitM f t  -> (def : combine (go (i-1) 0 f nams) (go (i-1) 0 t nams))
-      NatM z s  -> (def : combine (go (i-1) 0 z nams) (go (i-1) 1 s nams))
-      LstM n c  -> (def : combine (go (i-1) 0 n nams) (go (i-1) 2 c nams))
-      EnuM c d  -> (def : go (i-1) 1 d nams)
-      SigM g    -> (def : go (i-1) 2 g nams)
-      EqlM f    -> (def : go (i-1) 0 f nams)
-      _ -> errorWithSpan span $ "Not enough arguments. Expected > " ++ show i' ++ ":"
-    go i j term nams = -- j < 0, unreachable
-           errorWithSpan span $ "Not enough arguments. Expected > " ++ show i' ++ ":"
-
--- Applies an argument deep inside nested eliminators/lambdas
--- 1) Parameter `i` counts how many eliminator layers to traverse
--- 2) When i=0, applies the current term to `arg'
--- 3) When i>0: descends into the eliminator's branches, adjusting for their arities
---    3.1) NatM's successor branch expects 1 extra arg, so skip it with adding one: (i-1+1)
---    3.2) LstM's cons branch expects 2 extra args, so skip it with adding two: (l-1+2)
---    3..) Same for SigM, and EnuM default
--- 4) App nodes increment `i` to track depth in the application spine
---
--- Returns: appInnerArg 0 0 span (λx.body) arg -> body[arg/x]
---          appInnerArg 1 0 span (NatM z (λp.s)) arg -> NatM (App z arg) (λp.s[p ~> arg])
-appInnerArg :: Int -> Span -> Term -> Term -> Term
-appInnerArg i span (Loc l t) arg = Loc l (appInnerArg i span t arg)
--- jymp over applied functions
-appInnerArg i span (App f x) arg = App (appInnerArg (i+1) span f arg) x
--- reduce lambdas
-appInnerArg 0 span (Lam _ _ b) arg = b arg
--- apply non-lambdas
-appInnerArg 0 span func arg = App func arg
--- go deeper for the next eliminator
-appInnerArg i span func arg = case func of
-  Lam k mt b  -> Lam k mt (\x -> appInnerArg (i-1) span (b x) arg) 
-  EmpM        -> EmpM
-  EqlM f      -> EqlM (appInnerArg (i-1) span f arg)
-  UniM f      -> UniM (appInnerArg (i-1) span f arg) 
-  BitM f t    -> BitM (appInnerArg (i-1) span f arg) (appInnerArg (i-1) span t arg)
-  NatM z s    -> NatM (appInnerArg (i-1) span z arg) (appInnerArg (i-1+1) span s arg)
-  LstM n c    -> LstM (appInnerArg (i-1) span n arg) (appInnerArg (i-1+2) span c arg)
-  SigM g      -> SigM (appInnerArg (i-1+2) span g arg)
-  EnuM cs def -> EnuM (map (\(s,t) -> (s, appInnerArg (i-1) span t arg)) cs) (appInnerArg (i-1+1) span def arg)
-  _                     -> errorWithSpan span $ "Not enough arguments."
-
+    combine [] [] [] = []
+    combine a  b  [] = error "unreachable B" -- called with go without enough defaults
