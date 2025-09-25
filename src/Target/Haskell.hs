@@ -13,11 +13,20 @@ import qualified Data.Map as M
 -- Main compilation function
 compile :: Book -> String -> String
 compile book@(Book defs _) mainFQN =
-  let compiledFns = map (compileDefn book) (M.toList defs)
-  in prelude mainFQN ++ intercalate "\n\n" compiledFns
+  let compiledFns = map (compileDefn book) (M.toList defs) in
+  if mainIsAny then
+    throw (Show.BendException $ CompilationError "The 'main' function returns a type which is not printable in Haskell. Tip: To compile to Haskell, 'main' can't return a dependent or non-primitive recursive type.")
+  else
+    prelude mainFQN ++ intercalate "\n\n" compiledFns
   where
     compileDefn :: Book -> (Name, Defn) -> String
     compileDefn book (name, (_, term, typ)) = compileFn book name term typ
+
+    mainIsAny = case M.lookup mainFQN defs of
+      Just (_, _, typ) -> case typeToHT book typ of
+        HAny -> True
+        _ -> False
+      Nothing -> False
 
 -- Prelude necessary for the compiled code to run
 prelude :: String -> String
@@ -165,7 +174,7 @@ typeToHT book t = case whnf book t of -- TODO: types with infinite normal form w
   Bit         -> HBit
   Nat         -> HNat
   Lst t       -> HLst (typeToHT book t)
-  IO t       -> HIo  (typeToHT book t)
+  IO t        -> HIo  (typeToHT book t)
   Enu ss      -> HEnu
   Num t       -> HNum t
   Sig a (Lam n _ f) -> HSig (typeToHT book a) (typeToHT book (f (Var n 0)))
