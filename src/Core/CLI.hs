@@ -1,4 +1,4 @@
-module Core.CLI 
+module Core.CLI
   ( parseFile
   , runMain
   , processFile
@@ -6,6 +6,7 @@ module Core.CLI
   , processFileToJS
   , processFileToHVM
   , processFileToHS
+  , processFileToKC
   , listDependencies
   , getGenDeps
   ) where
@@ -35,6 +36,7 @@ import Core.WHNF
 import qualified Target.JavaScript as JS
 import qualified Target.HVM as HVM
 import qualified Target.Haskell as HS
+import qualified Target.KolmoC as KC
 
 -- IO Runtime
 -- ==========
@@ -240,6 +242,24 @@ processFileToHS file = do
     -- putStrLn $ show bookChk
     let hsCode = HS.compile bookAdj
     putStrLn hsCode
+  case result of
+    Left (BendException e) -> do
+      hPutStrLn stderr $ show e
+      exitFailure
+    Right () -> return ()
+
+-- | Process a Bend file and compile to KolmoC
+processFileToKC :: FilePath -> IO ()
+processFileToKC file = do
+  book <- parseFile file
+  result <- try $ do
+    bookAdj <- case adjustBook book of
+      Done b -> return b
+      Fail e -> do
+        hPutStrLn stderr $ show e
+        exitFailure
+    let kcCode = KC.compile bookAdj
+    putStrLn kcCode
   case result of
     Left (BendException e) -> do
       hPutStrLn stderr $ show e
