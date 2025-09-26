@@ -442,4 +442,3 @@ checkTypeCompleteness constructors
     hasSup constructors = any (\case Sup _ _ _ -> True; _ -> False) constructors
     isEmp constructor = case constructor of Emp -> True; _ -> False
 
--- check constructor completeness (for non-custom-types)
