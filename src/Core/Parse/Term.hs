@@ -169,10 +169,10 @@ parseTermBefore op = do
 parseVar :: Parser Term
 parseVar = label "variable" $ do
   n <- name
-  -- Check for qualified reference (module::name)
+  -- Check for qualified reference (module::name) - no whitespace allowed around ::
   qualified <- option n $ try $ do
-    _ <- symbol "::"
-    qualifiedName <- name
+    _ <- string "::"  -- Use string instead of symbol to disallow whitespace
+    qualifiedName <- parseRawName  -- Parse name without whitespace handling
     return $ n ++ "::" ++ qualifiedName
   case qualified of
     "Set"           -> return Set
