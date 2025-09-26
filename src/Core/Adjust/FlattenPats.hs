@@ -40,7 +40,7 @@ import qualified Data.Set as S
 import Debug.Trace
 
 import Core.Bind
-import Core.Show
+import qualified Core.Show as Show
 import Core.Type
 import Core.WHNF
 
@@ -120,6 +120,7 @@ flattenPat :: Int -> Span -> Book -> Term -> Term
 flattenPat d span book pat =
   -- trace ("FLATTEN: " ++ show pat) $
   flattenPatGo d book pat where
+
     flattenPatGo d book pat@(Pat (s:ss) ms css@((((cut->Var k i):ps),rhs):cs)) | isVarCol css =
       -- trace (">> var: " ++ show pat) $
       flattenPats d span book $ Pat ss ms (joinVarCol (d+1) span book s (((Var k i:ps),rhs):cs))
@@ -156,7 +157,7 @@ flattenPat d span book pat =
 -- match y { with k=x case @A: F(k) ; case @B: F(k) }
 joinVarCol :: Int -> Span -> Book -> Term -> [Case] -> [Case]
 joinVarCol d span book k ((((cut->Var j _):ps),rhs):cs) = (ps, bindVarByName j k rhs) : joinVarCol d span book k cs
-joinVarCol d span book k ((((cut->ctr    ):ps),rhs):cs) = throw (BendException $ Unsupported span (Ctx []) (Just "Redundant pattern"))
+joinVarCol d span book k ((((cut->ctr    ):ps),rhs):cs) = throw (Show.BendException $ Unsupported span (Ctx []) (Just "Redundant pattern"))
 joinVarCol d span book k cs                             = cs
 
 -- Peels a constructor layer from a column
@@ -205,7 +206,7 @@ peelCtrCol d span book (cut->k) ((((cut->p):ps),rhs):cs) =
     (Sup l _ _, Var k _)   -> (((Var (k++"a") 0:Var (k++"b") 0:ps), bindVarByName k (Sup l (Var (k++"a") 0) (Var (k++"b") 0)) rhs) : picks , ((p:ps),rhs) : drops)
     (Rfl      , Rfl    )   -> ((ps, rhs) : picks , drops)
     (Rfl      , Var k _)   -> ((ps, bindVarByName k Rfl rhs) : picks , ((p:ps),rhs) : drops)
-    (Var _ _  , p      )   -> throw (BendException $ Unsupported span (Ctx []) (Just "Unsupported pattern-match shape. Support for it will be added in a future update."))
+    (Var _ _  , p      )   -> throw (Show.BendException $ Unsupported span (Ctx []) (Just "Unsupported pattern-match shape. Support for it will be added in a future update."))
     (k        , App f x)   -> callPatternSugar d span book k f x p ps rhs cs
     x                      -> (picks , ((p:ps),rhs) : drops)
   where (picks, drops) = peelCtrCol d span book k cs
@@ -222,7 +223,7 @@ callPatternSugar d span book k f x p ps rhs cs =
         ref     = case fn of
           Ref k i   -> Ref k i
           Var k _   -> Ref k 1
-          otherwise -> throw (BendException $ Unsupported span (Ctx []) (Just $ "Invalid call pattern: " ++ show (App f x)))
+          otherwise -> throw (Show.BendException $ Unsupported span (Ctx []) (Just $ "Invalid call pattern: " ++ show (App f x)))
 
 -- Simplify
 -- ========
@@ -299,3 +300,146 @@ ctrOf d (Sym s)     = (Sym s, [])
 ctrOf d (Sup l a b) = (Sup l (pat d a) (pat (d+1) b), [pat d a, pat (d+1) b])
 ctrOf d Rfl         = (Rfl , [])
 ctrOf d x           = (var d , [var d])
+
+-- Pattern Completeness Checker (Post-Flattening)
+-- ===============================================
+-- Checks that pattern matches on native types are complete
+-- This function is called AFTER flattening is complete
+
+-- Check pattern completeness on flattened terms
+checkPatternCompleteness :: Int -> Span -> Book -> Term -> Term
+checkPatternCompleteness d span book term = case term of
+  -- Check completeness for single-scrutinee patterns (result of flattening)
+  Pat [scrutinee] moves cases ->
+    if hasDefaultCase cases
+    then Pat [scrutinee] moves (map (checkCaseRhs d span book) cases)
+    else checkNativeTypeComplete d span book scrutinee cases
+
+  -- Recursively check other term types
+  Var n i       -> Var n i
+  Ref n i       -> Ref n i
+  Sub t         -> Sub (checkPatternCompleteness d span book t)
+  Fix n f       -> Fix n (\x -> checkPatternCompleteness (d+1) span book (f x))
+  Let k t v f   -> Let k (fmap (checkPatternCompleteness d span book) t) (checkPatternCompleteness d span book v) (\x -> checkPatternCompleteness (d+1) span book (f x))
+  Use k v f     -> Use k (checkPatternCompleteness d span book v) (\x -> checkPatternCompleteness (d+1) span book (f x))
+  Set           -> Set
+  Chk x t       -> Chk (checkPatternCompleteness d span book x) (checkPatternCompleteness d span book t)
+  Tst x         -> Tst (checkPatternCompleteness d span book x)
+  Emp           -> Emp
+  EmpM          -> EmpM
+  Uni           -> Uni
+  One           -> One
+  UniM f        -> UniM (checkPatternCompleteness d span book f)
+  Bit           -> Bit
+  Bt0           -> Bt0
+  Bt1           -> Bt1
+  BitM f t      -> BitM (checkPatternCompleteness d span book f) (checkPatternCompleteness d span book t)
+  Nat           -> Nat
+  Zer           -> Zer
+  Suc n         -> Suc (checkPatternCompleteness d span book n)
+  NatM z s      -> NatM (checkPatternCompleteness d span book z) (checkPatternCompleteness d span book s)
+  Lst t         -> Lst (checkPatternCompleteness d span book t)
+  IO t          -> IO (checkPatternCompleteness d span book t)
+  Nil           -> Nil
+  Con h t       -> Con (checkPatternCompleteness d span book h) (checkPatternCompleteness d span book t)
+  LstM n c      -> LstM (checkPatternCompleteness d span book n) (checkPatternCompleteness d span book c)
+  Enu s         -> Enu s
+  Sym s         -> Sym s
+  EnuM c e      -> EnuM [(s, checkPatternCompleteness d span book t) | (s, t) <- c] (checkPatternCompleteness d span book e)
+  Sig a b       -> Sig (checkPatternCompleteness d span book a) (checkPatternCompleteness d span book b)
+  Tup a b       -> Tup (checkPatternCompleteness d span book a) (checkPatternCompleteness d span book b)
+  SigM f        -> SigM (checkPatternCompleteness d span book f)
+  All a b       -> All (checkPatternCompleteness d span book a) (checkPatternCompleteness d span book b)
+  Lam n t f     -> Lam n (fmap (checkPatternCompleteness d span book) t) (\x -> checkPatternCompleteness (d+1) span book (f x))
+  App f x       -> App (checkPatternCompleteness d span book f) (checkPatternCompleteness d span book x)
+  Eql t a b     -> Eql (checkPatternCompleteness d span book t) (checkPatternCompleteness d span book a) (checkPatternCompleteness d span book b)
+  Rfl           -> Rfl
+  EqlM f        -> EqlM (checkPatternCompleteness d span book f)
+  Met i t x     -> Met i (checkPatternCompleteness d span book t) (map (checkPatternCompleteness d span book) x)
+  Era           -> Era
+  Sup l a b     -> Sup (checkPatternCompleteness d span book l) (checkPatternCompleteness d span book a) (checkPatternCompleteness d span book b)
+  SupM l f      -> SupM (checkPatternCompleteness d span book l) (checkPatternCompleteness d span book f)
+  Frk l a b     -> Frk (checkPatternCompleteness d span book l) (checkPatternCompleteness d span book a) (checkPatternCompleteness d span book b)
+  Rwt e f       -> Rwt (checkPatternCompleteness d span book e) (checkPatternCompleteness d span book f)
+  Num t         -> Num t
+  Val v         -> Val v
+  Op2 o a b     -> Op2 o (checkPatternCompleteness d span book a) (checkPatternCompleteness d span book b)
+  Op1 o a       -> Op1 o (checkPatternCompleteness d span book a)
+  Pri p         -> Pri p
+  Log s x       -> Log (checkPatternCompleteness d span book s) (checkPatternCompleteness d span book x)
+  Loc s t       -> Loc s (checkPatternCompleteness d span book t)
+  -- Multi-scrutinee patterns shouldn't exist after flattening
+  Pat _ _ _      -> term
+
+-- Recursively check completeness in case RHS
+checkCaseRhs :: Int -> Span -> Book -> Case -> Case
+checkCaseRhs d span book (pats, rhs) = (pats, checkPatternCompleteness d span book rhs)
+
+-- Check if any case has a variable pattern (making it complete by definition)
+hasDefaultCase :: [Case] -> Bool
+hasDefaultCase cases = any (\(pats, _) -> any isVar pats) cases
+  where isVar (cut -> Var _ _) = True
+        isVar _ = False
+
+-- Extract constructor heads from non-variable cases
+extractConstructorHeads :: [Case] -> [Term]
+extractConstructorHeads cases = [cut pat | ([pat], _) <- cases, not (isVar (cut pat))]
+  where isVar (Var _ _) = True
+        isVar _ = False
+
+-- Check completeness for native types only
+checkNativeTypeComplete :: Int -> Span -> Book -> Term -> [Case] -> Term
+checkNativeTypeComplete d span book scrutinee cases =
+  let constructors = extractConstructorHeads cases
+      (typeComplete, errorMsg) = checkTypeCompleteness constructors
+  in if typeComplete
+     then Pat [scrutinee] [] (map (checkCaseRhs d span book) cases)
+     else throw (Show.BendException $ IncompleteMatch span (Ctx []) errorMsg)
+
+-- Check if a set of constructors represents a complete pattern match for a native type
+checkTypeCompleteness :: [Term] -> (Bool, Maybe String)
+checkTypeCompleteness constructors
+  -- Bool type: has Bt0 or Bt1
+  | hasBt0 constructors || hasBt1 constructors =
+      if hasBt0 constructors && hasBt1 constructors
+      then (True, Nothing)
+      else let missing = if hasBt0 constructors then "True" else if hasBt1 constructors then "False" else "True, False"
+           in (False, Just $ "Missing Bool case: " ++ missing)
+
+  -- Nat type: has Zer or Suc
+  | hasZer constructors || hasSuc constructors =
+      if hasZer constructors && hasSuc constructors
+      then (True, Nothing)
+      else let missing = if hasZer constructors then "1n+" else if hasSuc constructors then "0n" else "0n, 1n+"
+           in (False, Just $ "Missing Nat case: " ++ missing)
+
+  -- List type: has Nil or Con
+  | hasNil constructors || hasCon constructors =
+      if hasNil constructors && hasCon constructors
+      then (True, Nothing)
+      else let missing = if hasNil constructors then "<>" else if hasCon constructors then "[]" else "[], <>"
+           in (False, Just $ "Missing List case: " ++ missing)
+
+  -- Single constructor types - just need that constructor
+  | hasOne constructors = (True, Nothing)
+  | hasTup constructors = (True, Nothing)
+  | hasRfl constructors = (True, Nothing)
+  | hasSup constructors = (True, Nothing)
+  | all isEmp constructors = (True, Nothing) -- Empty type
+
+  -- Not a native type we check - skip
+  | otherwise = (True, Nothing)
+  where
+    hasBt0 constructors = any (\case Bt0 -> True; _ -> False) constructors
+    hasBt1 constructors = any (\case Bt1 -> True; _ -> False) constructors
+    hasZer constructors = any (\case Zer -> True; _ -> False) constructors
+    hasSuc constructors = any (\case Suc _ -> True; _ -> False) constructors
+    hasNil constructors = any (\case Nil -> True; _ -> False) constructors
+    hasCon constructors = any (\case Con _ _ -> True; _ -> False) constructors
+    hasOne constructors = any (\case One -> True; _ -> False) constructors
+    hasTup constructors = any (\case Tup _ _ -> True; _ -> False) constructors
+    hasRfl constructors = any (\case Rfl -> True; _ -> False) constructors
+    hasSup constructors = any (\case Sup _ _ _ -> True; _ -> False) constructors
+    isEmp constructor = case constructor of Emp -> True; _ -> False
+
+-- check constructor completeness (for non-custom-types)
