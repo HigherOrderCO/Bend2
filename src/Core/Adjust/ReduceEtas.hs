@@ -174,7 +174,9 @@ reduceEtas d span term =
   Tup a b       -> Tup (reduceEtas d span a) (reduceEtas d span b)
   SigM f        -> SigM (reduceEtas d span f)
   All a b       -> All (reduceEtas d span a) (reduceEtas d span b)
-  App f x       -> App (reduceEtas d span f) (reduceEtas d span x)
+  App f x       -> case cut f of
+    Lam k _ b -> reduceEtas d span (b x)
+    _         -> App (reduceEtas d span f) (reduceEtas d span x)
   Eql ty a b    -> Eql (reduceEtas d span ty) (reduceEtas d span a) (reduceEtas d span b)
   Rfl           -> Rfl
   EqlM f        -> EqlM (reduceEtas d span f)

@@ -50,7 +50,7 @@ binder lv term ctx vars = case term of
   Tup a b     -> Tup (binder lv a ctx vars) (binder lv b ctx vars)
   SigM f      -> SigM (binder lv f ctx vars)
   All a b     -> All (binder lv a ctx vars) (binder lv b ctx vars)
-  Lam k t f   -> Lam k (fmap (\t -> binder lv t ctx vars) t) (\x -> binder (lv+1) (f (Sub x)) (ctx++[x]) (M.insert k x vars))
+  Lam k t f   -> Lam k Nothing (\x -> binder (lv+1) (f (Sub x)) (ctx++[x]) (M.insert k x vars))
   App f x     -> App (binder lv f ctx vars) (binder lv x ctx vars)
   Eql t a b   -> Eql (binder lv t ctx vars) (binder lv a ctx vars) (binder lv b ctx vars)
   Rfl         -> Rfl
