@@ -91,7 +91,8 @@ adjust book term = do
   -- First resolve enums to their FQNs (needed for standalone use)
   resolved <- resolveEnumsInTerm (extractEnums book) term
   let flat = flattenPats 0 noSpan book resolved
-  npat <- desugarPats 0 noSpan flat
+  let chkd = checkPatternCompleteness 0 noSpan book flat
+  npat <- desugarPats 0 noSpan chkd
   let nfrk = desugarFrks book 0 npat
   let etas = reduceEtas 0 nfrk
   Done $ bind etas
