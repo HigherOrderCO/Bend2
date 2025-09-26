@@ -49,6 +49,7 @@ import Core.Bind
 import Core.Type
 import Core.Show
 import Core.Equal
+import Core.FreeVars
 import Core.Rewrite
 import Core.WHNF
 import Core.Adjust.ReduceEtas
@@ -89,10 +90,13 @@ inferIndirect d span book ctx target term =
     findDefault x term = Nothing
 
 replaceUnconstrained :: Int -> Span -> Book -> Ctx -> Term -> Term -> Maybe Term -> Result Term
-replaceUnconstrained d span book ctx term target def = do
+replaceUnconstrained d span book ctx term target def = 
+  if "_unconstrained" `elem` (freeVars S.empty term)
+  then do
   case def of
     Just def -> return $ rewrite d book (Var "_unconstrained" 0) def term
     Nothing  -> Fail $ CantInfer (getSpan span target) (normalCtx book ctx) Nothing
+  else return term
 
 -- Core indirect inference traversal
 -- 1) At each term constructor, analyzes if/how 'var' appears
@@ -674,7 +678,9 @@ unifyTerms d book t1 t2 = case (t1, t2) of
 -- Returns: inferred type, or Fail if cannot infer
 infer :: Int -> Span -> Book -> Ctx -> Term -> Maybe Term -> Result Term
 infer d span book ctx term environment = 
-  case inferStructural d span book ctx term of
+  -- trace ("infer " ++ show term ++ " @ " ++ show environment) $ 
+  do
+  res <- case inferStructural d span book ctx term of
     Done t -> 
       -- trace ("infered " ++ show term ++ " :: " ++ show t) $ 
       return t
@@ -695,6 +701,8 @@ infer d span book ctx term environment =
           inferIndirect d span book ctx term env
         _        -> Fail $ CantInfer span (normalCtx book ctx) Nothing
     e -> e
+  -- trace ("inferred: " ++ show term ++ " :: " ++ show res) $ 
+  return res
 
 -- Direct structural type inference
 -- 1) Follows standard inference rules for each term constructor (e.g. term = Bit0 implies term : Bit)
@@ -1347,6 +1355,9 @@ check d span book ctx term      goal =
   -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal) ++ "\n- ctx:\n" ++ show ctx ++ "\n") $
   let nGoal = force book goal in
   case (term, nGoal) of
+    (Chk x t, _) | equal d book t nGoal -> do
+      _ <- check d span book ctx t Set
+      check d span book ctx x t
     -- ctx |-
     -- ------------------ Trust
     -- ctx |- trust x : T
@@ -1371,7 +1382,9 @@ check d span book ctx term      goal =
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
           return $ Let k (Just t') v' (\x -> bindVarByName k x f')
         Nothing -> do
-          t <- infer d span book ctx v Nothing
+          t <- case infer d span book ctx v Nothing of
+            Done t -> return t
+            _      -> infer (d+1) span book ctx (Var k d) (Just (f (Var k d)))
           t' <- check d span book ctx t Set
           v' <- cutChk <$> check d span book ctx v t
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
