@@ -67,6 +67,90 @@ reWrap _        z = z
 
 -- Type Checker
 -- ------------
+
+-- Type inference with fallback to indirect inference
+-- 1) First attempts structural inference (inferStructural)
+-- 2) For lambdas without type annotations, uses inferIndirect
+-- 3) For other failures, uses environment hint (with inferIndirect) if provided
+--
+-- Returns: inferred type, or Fail if cannot infer
+infer :: Int -> Span -> Book -> Ctx -> Term -> Maybe Term -> Result Term
+infer d span book ctx term environment = 
+  -- trace ("infer " ++ show term ++ " @ " ++ show environment) $ 
+  -- trace ("infer " ++ show term ++ " @ " ++ show environment ++ "\nctx:\n" ++ show ctx) $ 
+  do
+  res <- case inferStructural d span book ctx term of
+    Done t -> 
+      -- trace ("infered " ++ show term ++ " :: " ++ show t) $ 
+      return t
+    Fail (CantInfer _ _ _) -> case cut term of
+      Lam k mt b -> case mt of
+        Just t -> do -- already tried by inferStructural
+          Fail $ CantInfer span (normalCtx book ctx) Nothing
+        Nothing -> do
+          bT' <- 
+            -- trace ("asked for " ++ show (b (Var k d))) $ 
+            infer (d+1) span book (extend ctx k (Var k d) (Var ("?"++show d) (-1))) (b (Var k d)) Nothing
+          -- traceM $ "inferred Lam: " ++ show term ++ " :: " ++ show bT'
+          b' <- check (d+1) span book (extend ctx k (Var k d) (Var ("?"++show d) (-1))) (b (Var k d)) bT'
+          -- kT  <- getVarConstraint (d+1) span book ctx (Var k d) (b (Var k d))
+          -- kT  <- getVarConstraint (d+1) span book ctx (Var k d) b'
+          kT  <- getVarConstraint (d+1) span book (extend ctx k (Var k d) (Var ("?"++show d) (-1))) (Var k d) b'
+          let bT = bindVarByName ("?"++show d) kT bT'
+          let res' = All kT (Lam k Nothing (\v -> bindVarByIndex d v bT))
+          -- check d span book ctx term res'
+          res <- check d span book ctx res' Set
+          return $ reduceEtas d span res
+          -- Fail $ CantInfer span (normalCtx book ctx) Nothing
+      _ -> case environment of 
+        Just env -> do
+          -- res <- inferIndirect d span book ctx term env
+          -- trace ("infered " ++ show term ++ " :: " ++ show res) $ return res
+          inferIndirect d span book ctx term env
+        _        -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+    e -> e
+  -- traceM ("-inferred: " ++ show term ++ " :: " ++ show res)
+  return res
+
+getVarConstraint :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
+getVarConstraint d span book ctx target@(Var k i) environment = 
+  -- trace ("get constraint for " ++ show target ++ " @ " ++ show environment ++ "\nctx: " ++ show ctx) $ 
+  case cut environment of
+    App f x | eql False d book x target -> do
+      fT <- 
+        -- trace ("for " ++ show target ++ " @ " ++ show environment ++ " -> infer " ++ show f ++ "\nctx:\n"++show ctx) $ 
+        infer d span book ctx f Nothing
+      case cut $ whnf book $ fT of
+        (All xT _) -> 
+          -- trace ("returning constraint " ++ show target ++ " :: " ++ show xT) $
+          return xT
+        _ -> 
+          -- trace ("couldn't infer env: " ++ show target ++ " @ " ++ show environment ) $ 
+          getVarConstraint d span book ctx target f
+    App f x -> 
+      -- trace "IIIIIIIIIIIIIIIIIII"  $ 
+      combineConstraints (getVarConstraint d span book ctx target f) (getVarConstraint d span book ctx target x)
+    Lam k' mt b -> 
+      -- trace "JJJJJJJJJJJJJJJJJJJJJJ" $ 
+      -- getVarConstraint (d+1) span book ctx target (b (Var k' d))
+      -- getVarConstraint (d+1) span book (extend ctx k' (Var k' d) (Var ("?"++show d) (-1))) target (b (Var k' d))
+      case mt of
+        Just t  -> getVarConstraint (d+1) span book (extend ctx k' (Var k' d) t) target (b (Var k' d))
+        Nothing ->  getVarConstraint (d+1) span book ctx target (b (Var k' d))
+    _ -> do
+      Fail $ 
+        -- trace "2222" $ 
+        CantInfer span (normalCtx book ctx) Nothing
+    where
+      combineConstraints t1 t2 = case t1 of
+        Done _ -> t1
+        _      -> t2
+getVarConstraint d span book ctx target environment = do
+  Fail $ 
+    -- trace "3333" $
+    CantInfer span (normalCtx book ctx) Nothing
+
+
 --
 -- Indirect type inference by usage analysis
 -- 1) Traverses term looking for uses of variable 'var'
@@ -670,39 +754,6 @@ unifyTerms d book t1 t2 = case (t1, t2) of
   -- Otherwise, conflict
   _ -> Nothing
 
--- Type inference with fallback to indirect inference
--- 1) First attempts structural inference (inferStructural)
--- 2) For lambdas without type annotations, uses inferIndirect
--- 3) For other failures, uses environment hint (with inferIndirect) if provided
---
--- Returns: inferred type, or Fail if cannot infer
-infer :: Int -> Span -> Book -> Ctx -> Term -> Maybe Term -> Result Term
-infer d span book ctx term environment = 
-  -- trace ("infer " ++ show term ++ " @ " ++ show environment) $ 
-  do
-  res <- case inferStructural d span book ctx term of
-    Done t -> 
-      -- trace ("infered " ++ show term ++ " :: " ++ show t) $ 
-      return t
-    Fail (CantInfer _ _ _) -> case cut term of
-      Lam k mt b -> case mt of
-        Just t -> do -- already tried by inferStructural
-          Fail $ CantInfer span (normalCtx book ctx) Nothing
-        Nothing -> do
-          t <- inferIndirect (d+1) span book ctx (Var k d) (b (Var k d))
-          bT <- inferStructural (d+1) span book (extend ctx k (Var k d) t) (b (Var k d)) -- could this be infer?
-          let res = All t (Lam k (Just t) (\v -> bindVarByIndex d v bT))
-          -- trace ("infered " ++ show term ++ " :: " ++ show res) $ return res
-          return $ All t (Lam k (Just t) (\v -> bindVarByIndex d v bT))
-      _ -> case environment of 
-        Just env -> do
-          -- res <- inferIndirect d span book ctx term env
-          -- trace ("infered " ++ show term ++ " :: " ++ show res) $ return res
-          inferIndirect d span book ctx term env
-        _        -> Fail $ CantInfer span (normalCtx book ctx) Nothing
-    e -> e
-  -- trace ("inferred: " ++ show term ++ " :: " ++ show res) $ 
-  return res
 
 -- Direct structural type inference
 -- 1) Follows standard inference rules for each term constructor (e.g. term = Bit0 implies term : Bit)
@@ -713,6 +764,7 @@ infer d span book ctx term environment =
 -- Returns: inferred type based on term structure
 inferStructural :: Int -> Span -> Book -> Ctx -> Term -> Result Term
 inferStructural d span book@(Book defs names) ctx term =
+  -- trace ("-infer structural: " ++ show term) $ 
   case term of
 
     -- x : T in ctx
@@ -1122,12 +1174,20 @@ inferStructural d span book@(Book defs names) ctx term =
         --           Fail $ CantInfer (getSpan span term) (normalCtx book ctx)
         --     _ -> Fail $ CantInfer (getSpan span term) (normalCtx book ctx)
 
-        f -> do
+        f -> 
+          -- trace ("inferring app: " ++ show term ++ "\nctx:\n" ++ show ctx) $ 
+          do
           fT <- inferStructural d span book ctx f
-          case force book fT of
+          case 
+            -- trace ("in " ++ show term ++ " , f :: " ++ show fT) $
+            force book fT of
             All fA fB -> do
-              _ <- check d span book ctx x fA
-              return (App fB x)
+              _ <- 
+                -- trace ("must check: " ++ show x ++ " :: " ++ show fA) $ 
+                check d span book ctx x fA
+              return $ 
+                -- trace ("infered that " ++ show term ++ " :: " ++ show (App fB x)) $
+                (App fB x)
             _ -> do
               Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book fT) Nothing
 
@@ -1470,7 +1530,8 @@ check d span book ctx term      goal =
     -- ctx |- λx. f : ∀x:A. B
     (Lam k t f, All a b) -> do
       f' <- check (d+1) span book (extend ctx k (Var k d) a) (f (Var k d)) (App b (Var k d))
-      return $ Lam k t (\v -> bindVarByIndex d v f')
+      -- return $ Lam k t (\v -> bindVarByIndex d v f')
+      return $ Lam k (Just $ reduceEtas d span a) (\v -> bindVarByIndex d v f')
 
     -- ctx |- 
     -- --------------------------------- EmpM-Eql-Zer-Suc
@@ -2082,7 +2143,12 @@ verify d span book ctx term goal = do
     -- trace ("-verify: " ++ show term ++ " :: " ++ show t ++ " == " ++ show goal) $
     equal d book t goal
     then do 
-      return term
+    -- trace ("-verify TRUE: " ++ show term ++ " :: " ++ show t ++ " == " ++ show goal) $
+      -- return term
+      case term of
+        -- Lam k mt b -> return $ Chk (Lam k mt b) t
+        _ -> return term
     else 
+    -- trace ("-verify FALSE: " ++ show term ++ " :: " ++ show t ++ " == " ++ show goal ++ " ||||||||| " ++ show (equal d book t goal)) $
       Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book t) Nothing
 
