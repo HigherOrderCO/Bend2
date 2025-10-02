@@ -100,9 +100,9 @@ doSubsts substitutions term = case go substitutions term of
 
 infer :: Int -> Span -> Book -> Ctx -> Term -> Maybe Term -> Result Term
 infer d span book ctx term environment = 
-  trace ("infer " ++ show term ++ " @ " ++ show environment) $ 
+  -- trace ("infer " ++ show term ++ " @ " ++ show environment) $ 
   do
-  (typeWithNewVars, constraints) <- inferWithConstraints d span book ctx (cut term)
+  (typeWithNewVars, constraints, _) <- inferWithConstraints d span book ctx (cut term) (-1)
   (_, substs) <- getSubsts d span book ctx constraints []
   let termType = doSubsts substs typeWithNewVars
   if any (\case ('?':_) -> True; _ -> False) (S.toList (freeVars S.empty termType))
@@ -114,7 +114,7 @@ inferVarInEnv :: Int -> Span -> Book -> Ctx -> Name -> Body -> Result Term
 inferVarInEnv d span book ctx k environment = 
   -- trace ("infer in env " ++ show (Var k d) ++ " @ " ++ show (environment (Var k d))) $ 
   do
-  (typeWithNewVars, constraints) <- inferWithConstraints d span book ctx (Lam k Nothing environment)
+  (typeWithNewVars, constraints, _) <- inferWithConstraints d span book ctx (Lam k Nothing environment) (-1)
   case typeWithNewVars of
     All kT _ -> do
       (_, substs) <- getSubsts d span book ctx constraints []
@@ -122,63 +122,63 @@ inferVarInEnv d span book ctx k environment =
       return termType
     _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
 
-inferWithConstraints :: Int -> Span -> Book -> Ctx -> Term -> Result (Term, [Constraint])
-inferWithConstraints d span book ctx term@(Loc _ t) = inferWithConstraints d span book ctx t
-inferWithConstraints d span book ctx term@(Bit) = return (Set, [])
-inferWithConstraints d span book ctx term@(Bt0) = return (Bit, [])
-inferWithConstraints d span book ctx term@(Bt1) = return (Bit, [])
-inferWithConstraints d span book ctx term@(Nat) = return (Set, [])
-inferWithConstraints d span book ctx term@(Suc n) = 
+inferWithConstraints :: Int -> Span -> Book -> Ctx -> Term -> Int -> Result (Term, [Constraint], Int)
+inferWithConstraints d span book ctx term@(Loc _ t) idx = inferWithConstraints d span book ctx t idx
+inferWithConstraints d span book ctx term@(Bit) idx = return (Set, [], idx)
+inferWithConstraints d span book ctx term@(Bt0) idx = return (Bit, [], idx)
+inferWithConstraints d span book ctx term@(Bt1) idx = return (Bit, [], idx)
+inferWithConstraints d span book ctx term@(Nat) idx = return (Set, [], idx)
+inferWithConstraints d span book ctx term@(Suc n) idx = 
   do
-  (nT, n_cnstr) <- inferWithConstraints d span book ctx n
-  return (Nat, [Constr nT Nat] ++ n_cnstr)
--- inferWithConstraints d span book ctx term@(Suc n) = 
+  (nT, n_cnstr, idx1) <- inferWithConstraints d span book ctx n idx
+  return (Nat, [Constr nT Nat] ++ n_cnstr, idx1)
+-- inferWithConstraints d span book ctx term@(Suc n) idx = 
 --   -- trace ("infer constraints VAR: " ++ show term) $ do
 --   case check d span book ctx n Nat of
---     Done n' -> return (Nat, [])
+--     Done n' -> return (Nat, [], idx)
 --     _       -> Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Var ('?':_) i) = return (Set, [])
-inferWithConstraints d span book ctx term@(Var k i) =
+inferWithConstraints d span book ctx term@(Var ('?':_) i) idx = return (Set, [], idx)
+inferWithConstraints d span book ctx term@(Var k i) idx =
   -- trace ("infer constraints VAR: " ++ show term) $ 
   do
   let Ctx ks = ctx
   if i < length ks && i >= 0
     then let (_, _, typ) = ks !! i
-         in return (typ, [])
+         in return (typ, [], idx)
     else Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Ref k i) =
+inferWithConstraints d span book ctx term@(Ref k i) idx =
   -- trace ("infer constraints REF: " ++ show term) $ 
   do
   case getDefn book k of
-    Just (_, _, typ) -> return (typ, [])
+    Just (_, _, typ) -> return (typ, [], idx)
     Nothing          -> Fail $ Undefined span (normalCtx book ctx) k Nothing
-inferWithConstraints d span book ctx term@(Lam k (Just t) body) = 
+inferWithConstraints d span book ctx term@(Lam k (Just t) body) idx = 
   do
-  let new_ctx = extend ctx k (Var k d) (Var ("?"++k) (-d-1))
-  (bodyType, inner_constraints) <- inferWithConstraints (d+1) span book new_ctx (body (Var k d))
-  let termType = All (Var ("?"++k) (-d-1)) (Lam k Nothing (\v -> bindVarByIndex d v bodyType))
-  return (termType, inner_constraints ++ [])
-inferWithConstraints d span book ctx term@(Lam k Nothing body) = 
+  let new_ctx = extend ctx k (Var k d) (Var ("?"++k) idx)
+  (bodyType, inner_constraints, idx1) <- inferWithConstraints (d+1) span book new_ctx (body (Var k d)) (idx-1)
+  let termType = All (Var ("?"++k) idx) (Lam k Nothing (\v -> bindVarByIndex d v bodyType))
+  return (termType, inner_constraints ++ [], idx1)
+inferWithConstraints d span book ctx term@(Lam k Nothing body) idx = 
   -- trace ("infer constraints LAM: " ++ show term) $ 
   do
-  let new_ctx = extend ctx k (Var k d) (Var ("?"++k) (-d-1))
-  (bodyType, inner_constraints) <- inferWithConstraints (d+1) span book new_ctx (body (Var k d))
-  let termType = All (Var ("?"++k) (-d-1)) (Lam k Nothing (\v -> bindVarByIndex d v bodyType))
-  return (termType, inner_constraints ++ [])
-inferWithConstraints d span book ctx term@(App f x) = 
+  let new_ctx = extend ctx k (Var k d) (Var ("?"++k) idx)
+  (bodyType, inner_constraints, idx1) <- inferWithConstraints (d+1) span book new_ctx (body (Var k d)) (idx-1)
+  let termType = All (Var ("?"++k) idx) (Lam k Nothing (\v -> bindVarByIndex d v bodyType))
+  return (termType, inner_constraints ++ [], idx1)
+inferWithConstraints d span book ctx term@(App f x) idx = 
   -- trace ("infer constraints APP " ++ show term) $ 
   do
-    case inferWithConstraints d span book ctx f of
-      Done (cut -> All aT bT, f_ctrs) -> do
-        (xT, x_ctrs) <- inferWithConstraints d span book ctx x
+    case inferWithConstraints d span book ctx f idx of
+      Done (cut -> All aT bT, f_ctrs, idx1) -> do
+        (xT, x_ctrs, idx2) <- inferWithConstraints d span book ctx x idx1
         case cut bT of
-          Lam _ _ bT' -> return $ ((bT' x), [Constr xT aT] ++ f_ctrs ++ x_ctrs) -- TODO: correct?
-          _           -> return $ (App bT x, [Constr xT aT] ++ f_ctrs ++ x_ctrs)
-      Done (cut -> App f' x', f_ctrs) -> do
+          Lam _ _ bT' -> return $ ((bT' x), [Constr xT aT] ++ f_ctrs ++ x_ctrs, idx2) -- TODO: correct?
+          _           -> return $ (App bT x, [Constr xT aT] ++ f_ctrs ++ x_ctrs, idx2)
+      Done (cut -> App f' x', f_ctrs, idx1) -> do
         let typ = appToFirstArg (App f' x') x
-        (xT, x_ctrs) <- inferWithConstraints d span book ctx x
+        (xT, x_ctrs, idx2) <- inferWithConstraints d span book ctx x idx1
         let aT = get_aT d f'
-        return $ (typ, [Constr aT xT] ++ f_ctrs ++ x_ctrs)
+        return $ (typ, [Constr aT xT] ++ f_ctrs ++ x_ctrs, idx2)
         where
           appToFirstArg (Loc l t)    x = appToFirstArg t x
           appToFirstArg (App g y)    x = App (appToFirstArg g x) y
@@ -196,212 +196,212 @@ inferWithConstraints d span book ctx term@(App f x) =
                                      else error $ "conflict:" ++ show term ++ " :: " ++ show faT ++ "\n         " ++ show term ++ " :: " ++ show taT
           get_aT d (All aT bT)  = aT
           get_aT d t = error $ "undefined get_aT " ++ show d ++ " " ++ show t
-      Done (f_typ, f_ctrs) ->
-        trace ("failed infer constraints APP 1: " ++ show term ++ " :: " ++ show f_typ) $
+      Done (f_typ, f_ctrs, idx1) ->
+        -- trace ("failed infer constraints APP 1: " ++ show term ++ " :: " ++ show f_typ) $
         Fail $ CantInfer span (normalCtx book ctx) Nothing
       Fail e -> 
-        trace ("failed infer constraints APP 2: " ++ show term ++ "error: " ++ show e) $ 
+        -- trace ("failed infer constraints APP 2: " ++ show term ++ "error: " ++ show e) $ 
         Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Sub x) = 
+inferWithConstraints d span book ctx term@(Sub x) idx = 
   do
-  inferWithConstraints d span book ctx x
-inferWithConstraints d span book ctx term@(Let k (Just t) v f) = 
+  inferWithConstraints d span book ctx x idx
+inferWithConstraints d span book ctx term@(Let k (Just t) v f) idx = 
   do
-  (tT, t_cnstr) <- inferWithConstraints d span book ctx t
-  (vT, v_cnstr) <- inferWithConstraints d span book ctx v
+  (tT, t_cnstr, idx1) <- inferWithConstraints d span book ctx t idx
+  (vT, v_cnstr, idx2) <- inferWithConstraints d span book ctx v idx1
   let new_ctx = extend ctx k (Var k d) t
-  (fT, f_cnstr) <- inferWithConstraints (d+1) span book new_ctx (f (Var k d))
-  return (fT, [Constr tT Set, Constr vT t] ++ t_cnstr ++ v_cnstr ++ f_cnstr)
-inferWithConstraints d span book ctx term@(Let k Nothing v f) = 
+  (fT, f_cnstr, idx3) <- inferWithConstraints (d+1) span book new_ctx (f (Var k d)) idx2
+  return (fT, [Constr tT Set, Constr vT t] ++ t_cnstr ++ v_cnstr ++ f_cnstr, idx3)
+inferWithConstraints d span book ctx term@(Let k Nothing v f) idx = 
   do
-  (vT, v_cnstr) <- inferWithConstraints d span book ctx v
+  (vT, v_cnstr, idx1) <- inferWithConstraints d span book ctx v idx
   let new_ctx = extend ctx k (Var k d) vT
-  (fT, f_cnstr) <- inferWithConstraints (d+1) span book new_ctx (f (Var k d))
-  return (fT, v_cnstr ++ f_cnstr)
-inferWithConstraints d span book ctx term@(Use k v f) = 
+  (fT, f_cnstr, idx2) <- inferWithConstraints (d+1) span book new_ctx (f (Var k d)) idx1
+  return (fT, v_cnstr ++ f_cnstr, idx2)
+inferWithConstraints d span book ctx term@(Use k v f) idx = 
   do
-  inferWithConstraints d span book ctx (f v)
-inferWithConstraints d span book ctx term@(Fix k f) = 
+  inferWithConstraints d span book ctx (f v) idx
+inferWithConstraints d span book ctx term@(Fix k f) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Chk v t) = 
+inferWithConstraints d span book ctx term@(Chk v t) idx = 
   do
-  (tT, t_cnstr) <- inferWithConstraints d span book ctx t
-  (vT, v_cnstr) <- inferWithConstraints d span book ctx v
-  return (t, [Constr tT Set, Constr vT t] ++ t_cnstr ++ v_cnstr)
-inferWithConstraints d span book ctx term@(Tst x) = 
+  (tT, t_cnstr, idx1) <- inferWithConstraints d span book ctx t idx
+  (vT, v_cnstr, idx2) <- inferWithConstraints d span book ctx v idx1
+  return (t, [Constr tT Set, Constr vT t] ++ t_cnstr ++ v_cnstr, idx2)
+inferWithConstraints d span book ctx term@(Tst x) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Set) = 
-  return (Set, [])
-inferWithConstraints d span book ctx term@(Emp) = 
-  return (Set, [])
-inferWithConstraints d span book ctx term@(EmpM) = 
+inferWithConstraints d span book ctx term@(Set) idx = 
+  return (Set, [], idx)
+inferWithConstraints d span book ctx term@(Emp) idx = 
+  return (Set, [], idx)
+inferWithConstraints d span book ctx term@(EmpM) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Uni) = 
-  return (Set, [])
-inferWithConstraints d span book ctx term@(One) = 
-  return (Uni, [])
-inferWithConstraints d span book ctx term@(UniM f) = 
+inferWithConstraints d span book ctx term@(Uni) idx = 
+  return (Set, [], idx)
+inferWithConstraints d span book ctx term@(One) idx = 
+  return (Uni, [], idx)
+inferWithConstraints d span book ctx term@(UniM f) idx = 
   do
-  (fT, f_cnstr) <- inferWithConstraints d span book ctx f
-  return (All Uni (UniM fT), f_cnstr)
-inferWithConstraints d span book ctx term@(BitM f t) = 
+  (fT, f_cnstr, idx1) <- inferWithConstraints d span book ctx f idx
+  return (All Uni (UniM fT), f_cnstr, idx1)
+inferWithConstraints d span book ctx term@(BitM f t) idx = 
   do
-  (fT, f_cnstr) <- inferWithConstraints d span book ctx f
-  (tT, t_cnstr) <- inferWithConstraints d span book ctx t
-  return (All Bit (BitM fT tT), f_cnstr ++ t_cnstr)
-inferWithConstraints d span book ctx term@(Zer) = 
-  return (Nat, [])
-inferWithConstraints d span book ctx term@(NatM z s) = 
+  (fT, f_cnstr, idx1) <- inferWithConstraints d span book ctx f idx
+  (tT, t_cnstr, idx2) <- inferWithConstraints d span book ctx t idx1
+  return (All Bit (BitM fT tT), f_cnstr ++ t_cnstr, idx2)
+inferWithConstraints d span book ctx term@(Zer) idx = 
+  return (Nat, [], idx)
+inferWithConstraints d span book ctx term@(NatM z s) idx = 
   do
-  (zT, z_cnstr) <- inferWithConstraints d span book ctx z
+  (zT, z_cnstr, idx1) <- inferWithConstraints d span book ctx z idx
   case cut s of
     Lam p mtp bp -> do
       let new_ctx = extend ctx p (Var p d) Nat
-      (sT, s_cnstr) <- inferWithConstraints (d+1) span book new_ctx (bp (Var p d))
-      return (All Nat (NatM zT (Lam p (Just Nat) (\_ -> sT))), z_cnstr ++ s_cnstr)
+      (sT, s_cnstr, idx2) <- inferWithConstraints (d+1) span book new_ctx (bp (Var p d)) idx1
+      return (All Nat (NatM zT (Lam p (Just Nat) (\_ -> sT))), z_cnstr ++ s_cnstr, idx2)
     _ -> do
-      (sT, s_cnstr) <- inferWithConstraints d span book ctx s
-      return (All Nat (NatM zT sT), z_cnstr ++ s_cnstr)
-inferWithConstraints d span book ctx term@(Lst t) = 
+      (sT, s_cnstr, idx2) <- inferWithConstraints d span book ctx s idx1
+      return (All Nat (NatM zT sT), z_cnstr ++ s_cnstr, idx2)
+inferWithConstraints d span book ctx term@(Lst t) idx = 
   do
-  (tT, t_cnstr) <- inferWithConstraints d span book ctx t
-  return (Set, [Constr tT Set] ++ t_cnstr)
-inferWithConstraints d span book ctx term@(Nil) = 
+  (tT, t_cnstr, idx1) <- inferWithConstraints d span book ctx t idx
+  return (Set, [Constr tT Set] ++ t_cnstr, idx1)
+inferWithConstraints d span book ctx term@(Nil) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Con h t) = 
+inferWithConstraints d span book ctx term@(Con h t) idx = 
   do
-  (hT, h_cnstr) <- inferWithConstraints d span book ctx h
-  (tT, t_cnstr) <- inferWithConstraints d span book ctx t
-  return (Lst hT, [Constr tT (Lst hT)] ++ h_cnstr ++ t_cnstr)
-inferWithConstraints d span book ctx term@(LstM n c) = 
+  (hT, h_cnstr, idx1) <- inferWithConstraints d span book ctx h idx
+  (tT, t_cnstr, idx2) <- inferWithConstraints d span book ctx t idx1
+  return (Lst hT, [Constr tT (Lst hT)] ++ h_cnstr ++ t_cnstr, idx2)
+inferWithConstraints d span book ctx term@(LstM n c) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Enu s) = 
-  return (Set, [])
-inferWithConstraints d span book@(Book defs names) ctx term@(Sym s) = 
+inferWithConstraints d span book ctx term@(Enu s) idx = 
+  return (Set, [], idx)
+inferWithConstraints d span book@(Book defs names) ctx term@(Sym s) idx = 
   do
   let bookEnums = [ Enu tags | (k, (_, (Sig (Enu tags) _), Set)) <- M.toList defs ]
   case find isEnuWithTag bookEnums of
-    Just t  -> return (t, [])
+    Just t  -> return (t, [], idx)
     Nothing -> Fail $ Undefined span (normalCtx book ctx) ("@" ++ s) Nothing
   where
     isEnuWithTag (Enu tags) = s `elem` tags
     isEnuWithTag _ = False
-inferWithConstraints d span book ctx term@(EnuM cs e) = 
+inferWithConstraints d span book ctx term@(EnuM cs e) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Sig a b) = 
+inferWithConstraints d span book ctx term@(Sig a b) idx = 
   do
-  (aT, a_cnstr) <- inferWithConstraints d span book ctx a
-  (bT, b_cnstr) <- inferWithConstraints d span book ctx b
-  return (Set, [Constr aT Set, Constr bT (All a (Lam "_" Nothing (\_ -> Set)))] ++ a_cnstr ++ b_cnstr)
-inferWithConstraints d span book@(Book defs names) ctx term@(Tup (cut -> Sym s) b) = 
+  (aT, a_cnstr, idx1) <- inferWithConstraints d span book ctx a idx
+  (bT, b_cnstr, idx2) <- inferWithConstraints d span book ctx b idx1
+  return (Set, [Constr aT Set, Constr bT (All a (Lam "_" Nothing (\_ -> Set)))] ++ a_cnstr ++ b_cnstr, idx2)
+inferWithConstraints d span book@(Book defs names) ctx term@(Tup (cut -> Sym s) b) idx = 
   do
   let candidates = [ t | (k, (_, t@(Sig (Enu tags) _), Set)) <- M.toList defs, s `elem` tags ]
   case candidates of
     [t] -> do
-      (tT, t_cnstr) <- inferWithConstraints d span book ctx t
-      (termT, term_cnstr) <- inferWithConstraints d span book ctx term
-      return (t, [Constr tT Set, Constr termT t] ++ t_cnstr ++ term_cnstr)
+      (tT, t_cnstr, idx1) <- inferWithConstraints d span book ctx t idx
+      (termT, term_cnstr, idx2) <- inferWithConstraints d span book ctx term idx1
+      return (t, [Constr tT Set, Constr termT t] ++ t_cnstr ++ term_cnstr, idx2)
     _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Tup a b) = 
+inferWithConstraints d span book ctx term@(Tup a b) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(SigM f) = 
+inferWithConstraints d span book ctx term@(SigM f) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(All a b) = 
+inferWithConstraints d span book ctx term@(All a b) idx = 
   do
-  (aT, a_cnstr) <- inferWithConstraints d span book ctx a
-  (bT, b_cnstr) <- inferWithConstraints d span book ctx b
-  return (Set, [Constr aT Set, Constr bT (All a (Lam "_" Nothing (\_ -> Set)))] ++ a_cnstr ++ b_cnstr)
-inferWithConstraints d span book ctx term@(Eql t a b) = 
+  (aT, a_cnstr, idx1) <- inferWithConstraints d span book ctx a idx
+  (bT, b_cnstr, idx2) <- inferWithConstraints d span book ctx b idx1
+  return (Set, [Constr aT Set, Constr bT (All a (Lam "_" Nothing (\_ -> Set)))] ++ a_cnstr ++ b_cnstr, idx2)
+inferWithConstraints d span book ctx term@(Eql t a b) idx = 
   do
-  (tT, t_cnstr) <- inferWithConstraints d span book ctx t
-  (aT, a_cnstr) <- inferWithConstraints d span book ctx a
-  (bT, b_cnstr) <- inferWithConstraints d span book ctx b
-  return (Set, [Constr tT Set, Constr aT t, Constr bT t] ++ t_cnstr ++ a_cnstr ++ b_cnstr)
-inferWithConstraints d span book ctx term@(Rfl) = 
+  (tT, t_cnstr, idx1) <- inferWithConstraints d span book ctx t idx
+  (aT, a_cnstr, idx2) <- inferWithConstraints d span book ctx a idx1
+  (bT, b_cnstr, idx3) <- inferWithConstraints d span book ctx b idx2
+  return (Set, [Constr tT Set, Constr aT t, Constr bT t] ++ t_cnstr ++ a_cnstr ++ b_cnstr, idx3)
+inferWithConstraints d span book ctx term@(Rfl) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(EqlM f) = 
+inferWithConstraints d span book ctx term@(EqlM f) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Rwt e f) = 
+inferWithConstraints d span book ctx term@(Rwt e f) idx = 
   do
-  (eT, e_cnstr) <- inferWithConstraints d span book ctx e
+  (eT, e_cnstr, idx1) <- inferWithConstraints d span book ctx e idx
   case force book eT of
     Eql t a b -> do
       let rewrittenCtx = rewriteCtx d book a b ctx
-      (fT, f_cnstr) <- inferWithConstraints d span book rewrittenCtx f
-      return (fT, e_cnstr ++ f_cnstr)
+      (fT, f_cnstr, idx2) <- inferWithConstraints d span book rewrittenCtx f idx1
+      return (fT, e_cnstr ++ f_cnstr, idx2)
     _ -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Eql (Var "_" 0) (Var "_" 0) (Var "_" 0))) (normal book eT) Nothing
-inferWithConstraints d span book ctx term@(Era) = 
+inferWithConstraints d span book ctx term@(Era) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Sup l a b) = 
+inferWithConstraints d span book ctx term@(Sup l a b) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(SupM l f) = 
+inferWithConstraints d span book ctx term@(SupM l f) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Frk l a b) = 
+inferWithConstraints d span book ctx term@(Frk l a b) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Met n t c) = 
+inferWithConstraints d span book ctx term@(Met n t c) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Num t) = 
-  return (Set, [])
-inferWithConstraints d span book ctx term@(Val (U64_V v)) = 
-  return (Num U64_T, [])
-inferWithConstraints d span book ctx term@(Val (I64_V v)) = 
-  return (Num I64_T, [])
-inferWithConstraints d span book ctx term@(Val (F64_V v)) = 
-  return (Num F64_T, [])
-inferWithConstraints d span book ctx term@(Val (CHR_V v)) = 
-  return (Num CHR_T, [])
-inferWithConstraints d span book ctx term@(Op2 op a b) = 
+inferWithConstraints d span book ctx term@(Num t) idx = 
+  return (Set, [], idx)
+inferWithConstraints d span book ctx term@(Val (U64_V v)) idx = 
+  return (Num U64_T, [], idx)
+inferWithConstraints d span book ctx term@(Val (I64_V v)) idx = 
+  return (Num I64_T, [], idx)
+inferWithConstraints d span book ctx term@(Val (F64_V v)) idx = 
+  return (Num F64_T, [], idx)
+inferWithConstraints d span book ctx term@(Val (CHR_V v)) idx = 
+  return (Num CHR_T, [], idx)
+inferWithConstraints d span book ctx term@(Op2 op a b) idx = 
   do
-  (aT, a_cnstr) <- inferWithConstraints d span book ctx a
-  (bT, b_cnstr) <- inferWithConstraints d span book ctx b
+  (aT, a_cnstr, idx1) <- inferWithConstraints d span book ctx a idx
+  (bT, b_cnstr, idx2) <- inferWithConstraints d span book ctx b idx1
   case inferOp2Type d span book ctx op aT bT of
-    Done resultType -> return (resultType, a_cnstr ++ b_cnstr)
+    Done resultType -> return (resultType, a_cnstr ++ b_cnstr, idx2)
     Fail e -> Fail e
-inferWithConstraints d span book ctx term@(Op1 op a) = 
+inferWithConstraints d span book ctx term@(Op1 op a) idx = 
   do
-  (aT, a_cnstr) <- inferWithConstraints d span book ctx a
+  (aT, a_cnstr, idx1) <- inferWithConstraints d span book ctx a idx
   case inferOp1Type d span book ctx op aT of
-    Done resultType -> return (resultType, a_cnstr)
+    Done resultType -> return (resultType, a_cnstr, idx1)
     Fail e -> Fail e
-inferWithConstraints d span book ctx term@(Pri U64_TO_CHAR) = 
-  return (All (Num U64_T) (Lam "x" Nothing (\_ -> Num CHR_T)), [])
-inferWithConstraints d span book ctx term@(Pri CHAR_TO_U64) = 
-  return (All (Num CHR_T) (Lam "x" Nothing (\_ -> Num U64_T)), [])
-inferWithConstraints d span book ctx term@(Pri HVM_INC) = 
+inferWithConstraints d span book ctx term@(Pri U64_TO_CHAR) idx = 
+  return (All (Num U64_T) (Lam "x" Nothing (\_ -> Num CHR_T)), [], idx)
+inferWithConstraints d span book ctx term@(Pri CHAR_TO_U64) idx = 
+  return (All (Num CHR_T) (Lam "x" Nothing (\_ -> Num U64_T)), [], idx)
+inferWithConstraints d span book ctx term@(Pri HVM_INC) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Pri HVM_DEC) = 
+inferWithConstraints d span book ctx term@(Pri HVM_DEC) idx = 
   Fail $ CantInfer span (normalCtx book ctx) Nothing
-inferWithConstraints d span book ctx term@(Log s x) = 
+inferWithConstraints d span book ctx term@(Log s x) idx = 
   do
-  (sT, s_cnstr) <- inferWithConstraints d span book ctx s
-  (xT, x_cnstr) <- inferWithConstraints d span book ctx x
-  return (xT, [Constr sT (Lst (Num CHR_T))] ++ s_cnstr ++ x_cnstr)
-inferWithConstraints d span book ctx term@(IO t) = 
+  (sT, s_cnstr, idx1) <- inferWithConstraints d span book ctx s idx
+  (xT, x_cnstr, idx2) <- inferWithConstraints d span book ctx x idx1
+  return (xT, [Constr sT (Lst (Num CHR_T))] ++ s_cnstr ++ x_cnstr, idx2)
+inferWithConstraints d span book ctx term@(IO t) idx = 
   do
-  (tT, t_cnstr) <- inferWithConstraints d span book ctx t
-  return (Set, [Constr tT Set] ++ t_cnstr)
-inferWithConstraints d span book ctx term@(Pri IO_PURE) = 
+  (tT, t_cnstr, idx1) <- inferWithConstraints d span book ctx t idx
+  return (Set, [Constr tT Set] ++ t_cnstr, idx1)
+inferWithConstraints d span book ctx term@(Pri IO_PURE) idx = 
   return (All Set (Lam "A" (Just Set) (\a ->
-    All a (Lam "x" (Just a) (\_ -> IO a)))), [])
-inferWithConstraints d span book ctx term@(Pri IO_BIND) = 
+    All a (Lam "x" (Just a) (\_ -> IO a)))), [], idx)
+inferWithConstraints d span book ctx term@(Pri IO_BIND) idx = 
   return (All Set (Lam "A" (Just Set) (\a ->
     All Set (Lam "B" (Just Set) (\b ->
       All (IO a) (Lam "m" (Just (IO a)) (\_ ->
         All (All a (Lam "_" (Just a) (\_ -> IO b))) (Lam "f" Nothing (\_ ->
-          IO b)))))))), [])
-inferWithConstraints d span book ctx term@(Pri IO_PRINT) = 
-  return (All (Lst (Num CHR_T)) (Lam "s" Nothing (\_ -> IO Uni)), [])
-inferWithConstraints d span book ctx term@(Pri IO_PUTC) = 
-  return (All (Num CHR_T) (Lam "c" Nothing (\_ -> IO Uni)), [])
-inferWithConstraints d span book ctx term@(Pri IO_GETC) = 
-  return (IO (Num CHR_T), [])
-inferWithConstraints d span book ctx term@(Pri IO_READ_FILE) = 
-  return (All (Lst (Num CHR_T)) (Lam "path" Nothing (\_ -> IO (Lst (Num CHR_T)))), [])
-inferWithConstraints d span book ctx term@(Pri IO_WRITE_FILE) = 
+          IO b)))))))), [], idx)
+inferWithConstraints d span book ctx term@(Pri IO_PRINT) idx = 
+  return (All (Lst (Num CHR_T)) (Lam "s" Nothing (\_ -> IO Uni)), [], idx)
+inferWithConstraints d span book ctx term@(Pri IO_PUTC) idx = 
+  return (All (Num CHR_T) (Lam "c" Nothing (\_ -> IO Uni)), [], idx)
+inferWithConstraints d span book ctx term@(Pri IO_GETC) idx = 
+  return (IO (Num CHR_T), [], idx)
+inferWithConstraints d span book ctx term@(Pri IO_READ_FILE) idx = 
+  return (All (Lst (Num CHR_T)) (Lam "path" Nothing (\_ -> IO (Lst (Num CHR_T)))), [], idx)
+inferWithConstraints d span book ctx term@(Pri IO_WRITE_FILE) idx = 
   return (All (Lst (Num CHR_T)) (Lam "path" Nothing (\_ ->
     All (Lst (Num CHR_T)) (Lam "content" Nothing (\_ ->
-      IO Uni)))), [])
-inferWithConstraints d span book ctx term@(Pat p s b) = 
+      IO Uni)))), [], idx)
+inferWithConstraints d span book ctx term@(Pat p s b) idx = 
   error "Pat not supported in infer"
 
 -- Infer the result type of a binary numeric operation
@@ -487,7 +487,7 @@ check d span book ctx (Loc l t) goal = do
   t' <- check d l book ctx t goal 
   return $ Loc l t'
 check d span book ctx term      goal =
-  trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal)) $
+  -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal)) $
   -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal) ++ " ::: span: " ++ show span) $
   -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal) ++ "\n- ctx:\n" ++ show ctx ++ "\n") $
   let nGoal = force book goal in
@@ -530,12 +530,12 @@ check d span book ctx term      goal =
             _      -> inferVarInEnv d span book ctx k f
           -- t' <- reduceEtas d span <$> check d span book ctx t Set
           t' <- check d span book ctx (reduceEtas d span t) Set
-          traceM $ "CHECKED THAT 1 " ++ show t ++ " -> " ++ show t' ++ " :: " ++ show Set
-          traceM $ "WILL CHECK IF 1 " ++ show v ++ " :: " ++ show t'
+          -- traceM $ "CHECKED THAT 1 " ++ show t ++ " -> " ++ show t' ++ " :: " ++ show Set
+          -- traceM $ "WILL CHECK IF 1 " ++ show v ++ " :: " ++ show t'
           v' <- cutChk <$> check d span book ctx v t'
-          traceM $ "CHECKED THAT 2 " ++ show v ++ " -> " ++ show v' ++ " :: " ++ show t'
+          -- traceM $ "CHECKED THAT 2 " ++ show v ++ " -> " ++ show v' ++ " :: " ++ show t'
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
-          traceM $ "CHECKED THAT 3 " ++ show (f (Var k d)) ++ " -> " ++ show v' ++ " :: " ++ show goal
+          -- traceM $ "CHECKED THAT 3 " ++ show (f (Var k d)) ++ " -> " ++ show v' ++ " :: " ++ show goal
           return $ Let k (Just t') v' (\x -> bindVarByName k x f')
 
     -- ctx |- f(v) : T
@@ -1099,12 +1099,16 @@ check d span book ctx term      goal =
       goal' <- check d span book ctx goal Set
       check d span book ctx (Let fn_name (Just (All Uni (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
 
-    (App fn@(cut -> BitM f t) x, _) -> trace ("APP BITM: " ++ show term ++ " :: " ++ show goal) $ do
+    (App fn@(cut -> BitM f t) x, _) -> 
+      -- trace ("APP BITM: " ++ show term ++ " :: " ++ show goal) $ 
+      do
       let fn_name = "$aux_"++show d
       x'    <- check d span book ctx x Bit
       goal' <- check d span book ctx goal Set
       res <- check d span book ctx (Let fn_name (Just (All Bit (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
-      return $ trace ("checked that " ++ show term ++ " -> " ++ show res) $ res
+      return 
+        -- $ trace ("checked that " ++ show term ++ " -> " ++ show res) $ 
+        res
     
     (App fn@(cut -> NatM z s) x, _) -> do
       let fn_name = "$aux_"++show d
