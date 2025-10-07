@@ -4,7 +4,7 @@ import Control.Monad (unless)
 import qualified Data.Map as M
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, getGenDeps, processFileToCore, processFileToHS)
+import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, getGenDeps, processFileToCore, processFileToHS, processFileToKolmoC)
 import Core.Adjust.ReduceEtas
 
 -- | Show usage information
@@ -16,6 +16,7 @@ showUsage = do
   putStrLn "  --to-javascript    Compile to JavaScript"
   putStrLn "  --to-hvm           Compile to HVM"
   putStrLn "  --to-haskell       Compile to Haskell"
+  putStrLn "  --to-kolmoc        Compile to KolmoC"
   putStrLn "  --list-dependencies List all dependencies (recursive)"
   putStrLn "  --get-gen-deps      Get dependencies for code generation"
   putStrLn "  --show-core        Returns the book of Core terms"
@@ -31,6 +32,8 @@ main = do
     [file, "--to-hvm"] | ".bend.py" `isSuffixOf` file -> processFileToHVM file
     [file, "--to-haskell"] | ".bend"    `isSuffixOf` file -> processFileToHS file
     [file, "--to-haskell"] | ".bend.py" `isSuffixOf` file -> processFileToHS file
+    [file, "--to-kolmoc"] | ".bend"    `isSuffixOf` file -> processFileToKolmoC file
+    [file, "--to-kolmoc"] | ".bend.py" `isSuffixOf` file -> processFileToKolmoC file
     [file, "--list-dependencies"] | ".bend"    `isSuffixOf` file -> listDependencies file
     [file, "--list-dependencies"] | ".bend.py" `isSuffixOf` file -> listDependencies file
     [file, "--get-gen-deps"] | ".bend"    `isSuffixOf` file -> getGenDeps file
