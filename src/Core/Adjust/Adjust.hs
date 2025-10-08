@@ -95,7 +95,7 @@ adjust book term = do
   npat <- desugarPats 0 noSpan chkd
   let nfrk = desugarFrks book 0 npat
   let hoas = bind nfrk
-  let etas = reduceEtas 0 noSpan hoas
+  let etas = reduceEtas 0 noSpan book hoas
   return $ 
     trace ("-hoas: " ++ show hoas) $
     trace ("-etas: " ++ show etas) $

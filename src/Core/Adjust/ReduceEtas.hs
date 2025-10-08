@@ -93,104 +93,104 @@ import Control.Applicative
 --
 -- Returns  : term in the form λ{A(a1..):λ{B:..}; ..}
 -- Important: this does not changes `SupM` eliminators.
-reduceEtas :: Int -> Span -> Term -> Term
-reduceEtas d span (Loc l term) = Loc l (reduceEtas d l term)
-reduceEtas d span term = 
+reduceEtas :: Int -> Span -> Book -> Term -> Term
+reduceEtas d span book (Loc l term) = Loc l (reduceEtas d l book term)
+reduceEtas d span book term = 
   case term of
   Lam k mty f ->
       -- The "$" prefix ensures `nam` won't clash with user variables
       let nam = "$"++show d in
-      let eta = isEtaLong d span nam (f (Var nam d)) in
+      let eta = isEtaLong d span book nam (f (Var nam d)) in
       case eta of
         EMPM spa -> Loc spa $ EmpM
         EQLM spa -> Loc spa $ EqlM refl 
             where
-            refl = reduceEtas d span $ bindVarByName nam Rfl (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+            refl = reduceEtas d span book $ bindVarByName nam Rfl (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
         UNIM spa -> Loc spa $ UniM u
             where
-            u    = reduceEtas d span $ bindVarByName nam One (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+            u    = reduceEtas d span book $ bindVarByName nam One (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
         BITM spa -> Loc spa $ BitM fl tr 
             where
-            fl   = reduceEtas d span $ bindVarByName nam Bt0 (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
-            tr   = reduceEtas d span $ bindVarByName nam Bt1 (resolveMatches span nam eta 1 "" [] (f (Var nam d)))
-        NATM spa nams@[p] -> Loc spa $ NatM z s 
+            fl   = reduceEtas d span book $ bindVarByName nam Bt0 (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+            tr   = reduceEtas d span book $ bindVarByName nam Bt1 (resolveMatches span nam eta 1 "" [] (f (Var nam d)))
+        NATM spa nams@[p] anns@[pAnn] -> Loc spa $ trace ("- annotations in " ++ show term ++ " == " ++ show anns) $ NatM z s 
             where
-            z    = reduceEtas d span $ bindVarByName nam Zer (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
-            s    = reduceEtas d span $ (Lam p (Just Nat) (\q -> 
-                                       bindVarByName nam (Suc q) (resolveMatches span nam eta 1 "" [Sub q] (f (Var nam d)))))
-        LSTM spa nams@[h,t] -> Loc spa $ LstM nil cons 
+            z    = reduceEtas d span book $ bindVarByName nam Zer (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+            s    = reduceEtas d span book $ (Lam p pAnn (\q -> 
+                                             bindVarByName nam (Suc q) (resolveMatches span nam eta 1 "" [Sub q] (f (Var nam d)))))
+        LSTM spa nams@[h,t] anns@[hAnn, tAnn] -> Loc spa $ trace ("- annotations in " ++ show term ++ " == " ++ show anns) $  LstM nil cons 
             where
-            nil  = reduceEtas d span $ bindVarByName nam Nil (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
-            cons = reduceEtas d span $ (Lam h Nothing (\h ->
-                                        Lam t Nothing (\t ->
-                                       bindVarByName nam (Con h t) (resolveMatches span nam eta 1 "" [Sub h, Sub t] (f (Var nam d))))))
-        SIGM spa nams@[a,b] -> Loc spa $ SigM pair
+            nil  = reduceEtas d span book $ bindVarByName nam Nil (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+            cons = reduceEtas d span book $ (Lam h hAnn (\h ->
+                                             Lam t tAnn (\t ->
+                                             bindVarByName nam (Con h t) (resolveMatches span nam eta 1 "" [Sub h, Sub t] (f (Var nam d))))))
+        SIGM spa nams@[a,b] anns@[aAnn, bAnn] -> Loc spa $ SigM pair
             where
-            pair = reduceEtas d span $ (Lam a Nothing (\a ->
-                                        Lam b Nothing (\b ->
-                                       bindVarByName nam (Tup a b) (resolveMatches span nam eta 0 "" [Sub a, Sub b] (f (Var nam d))))))
-        ENUM spa syms compl nams@[de] -> Loc spa $ EnuM cases def 
+            pair = reduceEtas d span book $ (Lam a aAnn (\a ->
+                                             Lam b bAnn (\b ->
+                                             bindVarByName nam (Tup a b) (resolveMatches span nam eta 0 "" [Sub a, Sub b] (f (Var nam d))))))
+        ENUM spa syms compl nams@[de] anns@[deAnn] -> Loc spa $ EnuM cases def 
           where
-          cases = map (\sym -> (sym, reduceEtas d span $ bindVarByName nam (Sym sym) (resolveMatches span nam eta 0 sym [] (f (Var nam d))))) syms
+          cases = map (\sym -> (sym, reduceEtas d span book $ bindVarByName nam (Sym sym) (resolveMatches span nam eta 0 sym [] (f (Var nam d))))) syms
           def = if compl
-                then reduceEtas d span (Lam de Nothing (\q -> bindVarByName nam q (resolveMatches span nam eta (-1) "" [Sub q] (f (Var nam d)))))
+                then reduceEtas d span book (Lam de deAnn (\q -> bindVarByName nam q (resolveMatches span nam eta (-1) "" [Sub q] (f (Var nam d)))))
                 else One
-        _ -> Lam k mty (\x -> reduceEtas (d+1) span (f x))
+        _ -> Lam k mty (\x -> reduceEtas (d+1) span book (f x))
         -- SUPM lab -> not reduced
   Var n i       -> Var n i
   Ref n i       -> Ref n i
   Sub t'        -> Sub t'
-  Fix n f       -> Fix n (\v -> reduceEtas (d+1) span (f v))
-  Let n mty v f -> Let n (fmap (reduceEtas d span) mty) (reduceEtas d span v) (\v' -> reduceEtas (d+1) span (f v'))
-  Use n v f     -> Use n (reduceEtas d span v) (\v' -> reduceEtas (d+1) span (f v'))
+  Fix n f       -> Fix n (\v -> reduceEtas (d+1) span book (f v))
+  Let n mty v f -> Let n (fmap (reduceEtas d span book) mty) (reduceEtas d span book v) (\v' -> reduceEtas (d+1) span book (f v'))
+  Use n v f     -> Use n (reduceEtas d span book v) (\v' -> reduceEtas (d+1) span book (f v'))
   Set           -> Set
-  Chk t' ty     -> Chk (reduceEtas d span t') (reduceEtas d span ty)
+  Chk t' ty     -> Chk (reduceEtas d span book t') (reduceEtas d span book ty)
   Emp           -> Emp
   EmpM          -> EmpM
   Uni           -> Uni
   One           -> One
-  UniM f        -> UniM (reduceEtas d span f)
+  UniM f        -> UniM (reduceEtas d span book f)
   Bit           -> Bit
   Bt0           -> Bt0
   Bt1           -> Bt1
-  BitM f g      -> BitM (reduceEtas d span f) (reduceEtas d span g)
+  BitM f g      -> BitM (reduceEtas d span book f) (reduceEtas d span book g)
   Nat           -> Nat
   Zer           -> Zer
-  Suc t'        -> Suc (reduceEtas d span t')
-  NatM z s      -> NatM (reduceEtas d span z) (reduceEtas d span s)
-  IO t          -> IO (reduceEtas d span t)
-  Lst ty        -> Lst (reduceEtas d span ty)
+  Suc t'        -> Suc (reduceEtas d span book t')
+  NatM z s      -> NatM (reduceEtas d span book z) (reduceEtas d span book s)
+  IO t          -> IO (reduceEtas d span book t)
+  Lst ty        -> Lst (reduceEtas d span book ty)
   Nil           -> Nil
-  Con h t'      -> Con (reduceEtas d span h) (reduceEtas d span t')
-  LstM nil c    -> LstM (reduceEtas d span nil) (reduceEtas d span c)
+  Con h t'      -> Con (reduceEtas d span book h) (reduceEtas d span book t')
+  LstM nil c    -> LstM (reduceEtas d span book nil) (reduceEtas d span book c)
   Enu ss        -> Enu ss
   Sym s         -> Sym s
-  EnuM cs def   -> EnuM [(s, reduceEtas d span v) | (s,v) <- cs] (reduceEtas d span def)
+  EnuM cs def   -> EnuM [(s, reduceEtas d span book v) | (s,v) <- cs] (reduceEtas d span book def)
   Num nt        -> Num nt
   Val nv        -> Val nv
-  Op2 o a b     -> Op2 o (reduceEtas d span a) (reduceEtas d span b)
-  Op1 o a       -> Op1 o (reduceEtas d span a)
-  Sig a b       -> Sig (reduceEtas d span a) (reduceEtas d span b)
-  Tup a b       -> Tup (reduceEtas d span a) (reduceEtas d span b)
-  SigM f        -> SigM (reduceEtas d span f)
-  All a b       -> All (reduceEtas d span a) (reduceEtas d span b)
+  Op2 o a b     -> Op2 o (reduceEtas d span book a) (reduceEtas d span book b)
+  Op1 o a       -> Op1 o (reduceEtas d span book a)
+  Sig a b       -> Sig (reduceEtas d span book a) (reduceEtas d span book b)
+  Tup a b       -> Tup (reduceEtas d span book a) (reduceEtas d span book b)
+  SigM f        -> SigM (reduceEtas d span book f)
+  All a b       -> All (reduceEtas d span book a) (reduceEtas d span book b)
   App f x       -> case cut f of
-    Lam k _ b -> reduceEtas d span (b x)
-    _         -> App (reduceEtas d span f) (reduceEtas d span x)
-  Eql ty a b    -> Eql (reduceEtas d span ty) (reduceEtas d span a) (reduceEtas d span b)
+    Lam k _ b -> reduceEtas d span book (b x)
+    _         -> App (reduceEtas d span book f) (reduceEtas d span book x)
+  Eql ty a b    -> Eql (reduceEtas d span book ty) (reduceEtas d span book a) (reduceEtas d span book b)
   Rfl           -> Rfl
-  EqlM f        -> EqlM (reduceEtas d span f)
-  Rwt e f       -> Rwt (reduceEtas d span e) (reduceEtas d span f)
-  Met n ty args -> Met n (reduceEtas d span ty) (map (reduceEtas d span) args)
+  EqlM f        -> EqlM (reduceEtas d span book f)
+  Rwt e f       -> Rwt (reduceEtas d span book e) (reduceEtas d span book f)
+  Met n ty args -> Met n (reduceEtas d span book ty) (map (reduceEtas d span book) args)
   Era           -> Era
-  Sup l a b     -> Sup (reduceEtas d span l) (reduceEtas d span a) (reduceEtas d span b)
-  SupM l f      -> SupM (reduceEtas d span l) (reduceEtas d span f)
+  Sup l a b     -> Sup (reduceEtas d span book l) (reduceEtas d span book a) (reduceEtas d span book b)
+  SupM l f      -> SupM (reduceEtas d span book l) (reduceEtas d span book f)
 --Loc s t'      -> Loc s (reduceEtas d span t')
-  Log s x       -> Log (reduceEtas d span s) (reduceEtas d span x)
+  Log s x       -> Log (reduceEtas d span book s) (reduceEtas d span book x)
   Pri p         -> Pri p
-  Pat ss ms cs  -> Pat (map (reduceEtas d span) ss) [(k, reduceEtas d span v) | (k,v) <- ms] [(map (reduceEtas d span) ps, reduceEtas d span rhs) | (ps,rhs) <- cs]
-  Frk l a b     -> Frk (reduceEtas d span l) (reduceEtas d span a) (reduceEtas d span b)
-  Tst x         -> Tst (reduceEtas d span x)
+  Pat ss ms cs  -> Pat (map (reduceEtas d span book) ss) [(k, reduceEtas d span book v) | (k,v) <- ms] [(map (reduceEtas d span book) ps, reduceEtas d span book rhs) | (ps,rhs) <- cs]
+  Frk l a b     -> Frk (reduceEtas d span book l) (reduceEtas d span book a) (reduceEtas d span book b)
+  Tst x         -> Tst (reduceEtas d span book x)
 
 -- Substitution of eliminator applications with their clauses
 -- 1) Finds App nodes where f is an eliminator and x is 'nam'
@@ -210,17 +210,17 @@ resolveMatches span nam elim clause sym args t = case t of
     case cut x of
       (Var k i) -> if k == nam
         then case (cut f, elim, args) of
-          (UniM u       , UNIM _      , [])    -> resolveMatches span nam elim clause sym args $ u
-          (BitM fl tr   , BITM _      , [])    -> resolveMatches span nam elim clause sym args $ ([fl, tr] !! clause)
-          (NatM z s     , NATM _ _    , [])    -> resolveMatches span nam elim clause sym args $ z
-          (NatM z s     , NATM _ _    , [p])   -> resolveMatches span nam elim clause sym args $ appArgs s args 0
-       -- (EmpM         , EMPM _      , [])    -> resolveMatches span nam elim clause sym args $ 
-          (LstM nil cons, LSTM _ _    , [])    -> resolveMatches span nam elim clause sym args $ nil
-          (LstM nil cons, LSTM _ _    , [h,t]) -> resolveMatches span nam elim clause sym args $ appArgs cons args 0
-          (SigM pair    , SIGM _ _    , [a,b]) -> resolveMatches span nam elim clause sym args $ appArgs pair args 0
-          (EqlM refl    , EQLM _      , [])    -> resolveMatches span nam elim clause sym args refl
-          (EnuM cs def  , ENUM _ _ _ _, [q])   -> resolveMatches span nam elim clause sym args $ appArgs def args 0
-          (EnuM cs def  , ENUM _ _ _ _, [])    -> case lookup sym cs of
+          (UniM u       , UNIM _        , [])    -> resolveMatches span nam elim clause sym args $ u
+          (BitM fl tr   , BITM _        , [])    -> resolveMatches span nam elim clause sym args $ ([fl, tr] !! clause)
+          (NatM z s     , NATM _ _ _    , [])    -> resolveMatches span nam elim clause sym args $ z
+          (NatM z s     , NATM _ _ _    , [p])   -> resolveMatches span nam elim clause sym args $ appArgs s args 0
+       -- (EmpM         , EMPM _        , [])    -> resolveMatches span nam elim clause sym args $ 
+          (LstM nil cons, LSTM _ _ _    , [])    -> resolveMatches span nam elim clause sym args $ nil
+          (LstM nil cons, LSTM _ _ _    , [h,t]) -> resolveMatches span nam elim clause sym args $ appArgs cons args 0
+          (SigM pair    , SIGM _ _ _    , [a,b]) -> resolveMatches span nam elim clause sym args $ appArgs pair args 0
+          (EqlM refl    , EQLM _        , [])    -> resolveMatches span nam elim clause sym args refl
+          (EnuM cs def  , ENUM _ _ _ _ _, [q])   -> resolveMatches span nam elim clause sym args $ appArgs def args 0
+          (EnuM cs def  , ENUM _ _ _ _ _, [])    -> case lookup sym cs of
                                 Just branch  -> resolveMatches span nam elim clause sym args $ branch
                                 Nothing      -> resolveMatches span nam elim clause sym args $ appArgs def [(Var k i)] 0
           _ -> App (resolveMatches span nam elim clause sym args f) (resolveMatches span nam elim clause sym args x)
@@ -326,96 +326,106 @@ resolveMatches span nam elim clause sym args t = case t of
 --
 -- Returns: from λx. (λ{0:Z; S:...}(x), λ{0:W; S:...}(x)) 
 -- the label NATM [pred_name_from_S]
-isEtaLong :: Int -> Span -> Name -> Term -> ElimLabel
-isEtaLong d span nam (Loc spa t) = isEtaLong d spa nam t
-isEtaLong d span nam t = case t of
+isEtaLong :: Int -> Span -> Book -> Name -> Term -> ElimLabel
+isEtaLong d span book nam (Loc spa t) = isEtaLong d spa book nam t
+isEtaLong d span book nam t = case t of
   Lam k mt f  -> case mt of
-    Just t  -> if k == nam then isEtaLong d span nam t else isEtaLong d span nam t <+> isEtaLong (d+1) span nam (f (Var k d))
-    Nothing -> if k == nam then NONE else isEtaLong (d+1) span nam (f (Var k d))
+    Just t  -> if k == nam then isEtaLong d span book nam t else combLabels d book (isEtaLong d span book nam t) (isEtaLong (d+1) span book nam (f (Var k d)))
+    Nothing -> if k == nam then NONE else isEtaLong (d+1) span book nam (f (Var k d))
   App f x     ->
     case cut x of
       (Var k _) -> if k == nam
         then
           case cut f of
        -- SupM l _    -> not eliminated
-          EqlM _      -> EQLM span <+> isEtaLong d span nam f
-          EmpM        -> EMPM span <+> isEtaLong d span nam f
-          UniM _      -> UNIM span <+> isEtaLong d span nam f
-          BitM _ _    -> BITM span <+> isEtaLong d span nam f
-          NatM _ s    -> NATM span (getVarNames s ["p"]    ) <+> isEtaLong d span nam f
-          LstM _ c    -> LSTM span (getVarNames c ["h","t"]) <+> isEtaLong d span nam f
-          SigM g      -> SIGM span (getVarNames g ["a","b"]) <+> isEtaLong d span nam f
-          EnuM cs def -> ENUM span (map fst cs) (isLam def) (getVarNames def ["t"]) <+> isEtaLong d span nam f
-          _           -> isEtaLong d span nam f
+          EqlM _      -> combLabels d book (EQLM span) (isEtaLong d span book nam f)
+          EmpM        -> combLabels d book (EMPM span) (isEtaLong d span book nam f)
+          UniM _      -> combLabels d book (UNIM span) (isEtaLong d span book nam f)
+          BitM _ _    -> combLabels d book (BITM span) (isEtaLong d span book nam f)
+          NatM _ s    -> case getAnnotations d book f [] of
+            Just anns -> combLabels d book (NATM span (getVarNames s ["p"]  ) anns) (isEtaLong d span book nam f)
+            _ -> STOP
+          LstM _ c    -> case getAnnotations d book f [] of
+            Just anns -> combLabels d book (LSTM span (getVarNames c ["h","t"]) anns) (isEtaLong d span book nam f)
+            _ -> STOP
+          SigM g      -> case getAnnotations d book f [] of
+            Just anns -> combLabels d book (SIGM span (getVarNames g ["a","b"]) anns) (isEtaLong d span book nam f)
+            _ -> STOP
+          EnuM cs def -> case getAnnotations d book f [] of
+            Just anns -> combLabels d book (ENUM span (map fst cs) (isLam def) (getVarNames def ["t"]) anns) (isEtaLong d span book nam f)
+            _ -> STOP
+          _           -> isEtaLong d span book nam f
         else
-            isEtaLong d span nam f <+> isEtaLong d span nam x
-      _ -> isEtaLong d span nam f <+> isEtaLong d span nam x
+            combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam x)
+      _ -> combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam x)
   Var _ _     -> NONE
   Ref _ _     -> NONE
-  Sub t'      -> isEtaLong d span nam t'
-  Fix k f     -> isEtaLong (d+1) span nam (f (Var k d))
-  Let k t v f -> let def = isEtaLong d span nam v <+> isEtaLong (d+1) span nam (f (Var k d)) in fromMaybe def (fmap (\typ -> def <+> isEtaLong d span nam typ) t)
-  Use k v f   -> isEtaLong d span nam v <+> isEtaLong (d+1) span nam (f (Var k d))
+  Sub t'      -> isEtaLong d span book nam t'
+  Fix k f     -> isEtaLong (d+1) span book nam (f (Var k d))
+  Let k t v f -> let def = combLabels d book (isEtaLong d span book nam v) (isEtaLong (d+1) span book nam (f (Var k d))) 
+                 in fromMaybe def (fmap (\typ -> combLabels d book def (isEtaLong d span book nam typ)) t)
+  Use k v f   -> combLabels d book (isEtaLong d span book nam v) (isEtaLong (d+1) span book nam (f (Var k d)))
   Set         -> NONE
-  Chk t' ty   -> isEtaLong d span nam t' <+> isEtaLong d span nam ty
+  Chk t' ty   -> combLabels d book (isEtaLong d span book nam t') (isEtaLong d span book nam ty)
   Emp         -> NONE
   EmpM        -> NONE
   Uni         -> NONE
   One         -> NONE
-  UniM f      -> isEtaLong d span nam f
+  UniM f      -> isEtaLong d span book nam f
   Bit         -> NONE
   Bt0         -> NONE
   Bt1         -> NONE
-  BitM f g    -> isEtaLong d span nam f <+> isEtaLong d span nam g
+  BitM f g    -> combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam g)
   Nat         -> NONE
   Zer         -> NONE
-  Suc t'      -> isEtaLong d span nam t'
-  NatM z s    -> isEtaLong d span nam z <+> isEtaLong d span nam s
-  IO t        -> isEtaLong d span nam t
-  Lst ty      -> isEtaLong d span nam ty
+  Suc t'      -> isEtaLong d span book nam t'
+  NatM z s    -> combLabels d book (isEtaLong d span book nam z) (isEtaLong d span book nam s)
+  IO t        -> isEtaLong d span book nam t
+  Lst ty      -> isEtaLong d span book nam ty
   Nil         -> NONE
-  Con h t'    -> isEtaLong d span nam h <+> isEtaLong d span nam t'
-  LstM nil c  -> isEtaLong d span nam nil <+> isEtaLong d span nam c
+  Con h t'    -> combLabels d book (isEtaLong d span book nam h) (isEtaLong d span book nam t')
+  LstM nil c  -> combLabels d book (isEtaLong d span book nam nil) (isEtaLong d span book nam c)
   Enu _       -> NONE
   Sym _       -> NONE
-  EnuM cs def -> foldr (<+>) (isEtaLong d span nam def) (map (isEtaLong d span nam . snd) cs)
+  EnuM cs def -> foldr (combLabels d book) (isEtaLong d span book nam def) (map (isEtaLong d span book nam . snd) cs)
   Num _       -> NONE
   Val _       -> NONE
-  Op2 _ a b   -> isEtaLong d span nam a <+> isEtaLong d span nam b
-  Op1 _ a     -> isEtaLong d span nam a
-  Sig a b     -> isEtaLong d span nam a <+> isEtaLong d span nam b
-  Tup a b     -> isEtaLong d span nam a <+> isEtaLong d span nam b
-  SigM f      -> isEtaLong d span nam f
-  All a b     -> isEtaLong d span nam a <+> isEtaLong d span nam b
-  Eql ty a b  -> isEtaLong d span nam ty <+> isEtaLong d span nam a <+> isEtaLong d span nam b
+  Op2 _ a b   -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
+  Op1 _ a     -> isEtaLong d span book nam a
+  Sig a b     -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
+  Tup a b     -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
+  SigM f      -> isEtaLong d span book nam f
+  All a b     -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
+  Eql ty a b  -> foldr (combLabels d book) NONE [isEtaLong d span book nam ty, isEtaLong d span book nam a, isEtaLong d span book nam b]
   Rfl         -> NONE
-  EqlM f      -> isEtaLong d span nam f
-  Rwt e f     -> isEtaLong d span nam e <+> isEtaLong d span nam f
-  Met _ ty cx -> isEtaLong d span nam ty <+> foldr (<+>) NONE (map (isEtaLong d span nam) cx)
+  EqlM f      -> isEtaLong d span book nam f
+  Rwt e f     -> combLabels d book (isEtaLong d span book nam e) (isEtaLong d span book nam f)
+  Met _ ty cx -> combLabels d book (isEtaLong d span book nam ty) (foldr (combLabels d book) NONE (map (isEtaLong d span book nam) cx))
   Era         -> NONE
-  Sup l a b   -> isEtaLong d span nam l <+> isEtaLong d span nam a <+> isEtaLong d span nam b
-  SupM l f    -> isEtaLong d span nam l <+> isEtaLong d span nam f
-  -- Loc _ t'    -> isEtaLong d span nam t'
-  Log s x     -> isEtaLong d span nam s <+> isEtaLong d span nam x
+  Sup l a b   -> foldr (combLabels d book) NONE [isEtaLong d span book nam l, isEtaLong d span book nam a, isEtaLong d span book nam b]
+  SupM l f    -> combLabels d book (isEtaLong d span book nam l) (isEtaLong d span book nam f)
+  -- Loc _ t'    -> isEtaLong d span book nam t'
+  Log s x     -> combLabels d book (isEtaLong d span book nam s) (isEtaLong d span book nam x)
   Pri _       -> NONE
-  Pat ss ms cs -> foldr (<+>) NONE (map (isEtaLong d span nam) ss ++ map (isEtaLong d span nam . snd) ms ++ concatMap (\(ps, rhs) -> map (isEtaLong d span nam) ps ++ [isEtaLong d span nam rhs]) cs)
-  Frk l a b   -> isEtaLong d span nam l <+> isEtaLong d span nam a <+> isEtaLong d span nam b
-  Tst x       -> isEtaLong d span nam x
+  Pat ss ms cs -> foldr (combLabels d book) NONE (map (isEtaLong d span book nam) ss ++ map (isEtaLong d span book nam . snd) ms ++ concatMap (\(ps, rhs) -> map (isEtaLong d span book nam) ps ++ [isEtaLong d span book nam rhs]) cs)
+  Frk l a b   -> foldr (combLabels d book) NONE [isEtaLong d span book nam l, isEtaLong d span book nam a, isEtaLong d span book nam b]
+  Tst x       -> isEtaLong d span book nam x
 
 -- Auxiliary definitions / Utils
 -- ------------------------------
 
 -- SUPM not reduced
 data ElimLabel
-  = UNIM Span                        -- Span of the original eliminator
-  | BITM Span                        -- Span of the original eliminator
-  | NATM Span [String]               -- Span of the original eliminator, [predName]
-  | EMPM Span                        -- Span of the original eliminator
-  | LSTM Span [String]               -- Span of the original eliminator, [headName,tailName]
-  | SIGM Span [String]               -- Span of the original eliminator, [fstName , sndName]
-  | EQLM Span                        -- Span of the original eliminator
-  | ENUM Span [String] Bool [String] -- Span of the original eliminator, [symbolNames], isNotComplete, [defaultArgName]
+  = UNIM Span                                     -- Span of the original eliminator
+  | BITM Span                                     -- Span of the original eliminator
+  | NATM Span [String] [Maybe Term]               -- Span of the original eliminator, [predName], [clause arg annotations]
+  | EMPM Span                                     -- Span of the original eliminator
+  | LSTM Span [String] [Maybe Term]               -- Span of the original eliminator, [headName,tailName], [clause arg annotations]
+  | SIGM Span [String] [Maybe Term]               -- Span of the original eliminator, [fstName , sndName], [clause arg annotations]
+  | EQLM Span                                     -- Span of the original eliminator
+  | ENUM Span [String] Bool [String] [Maybe Term] -- Span of the original eliminator, [symbolNames], isNotComplete, [defaultArgName], [clause arg annotations]
   | NONE
+  | STOP
   deriving Show -- SUPM not reduced
 
 -- Combines eliminator labels from multiple λ{..}(nam) occurrences
@@ -426,18 +436,41 @@ data ElimLabel
 --
 -- Returns: NATM [p] <+> NATM [q] -> NATM [p]
 --          NATM [p] <+> BITM      -> NONE
-(<+>) :: ElimLabel -> ElimLabel -> ElimLabel
-NONE             <+> x                = x
-x                <+> NONE             = x
-UNIM l1          <+> UNIM l2          = UNIM l1
-BITM l1          <+> BITM l2          = BITM l1
-NATM l1 s1       <+> NATM l2 s2       = NATM l1 s1
-EMPM l1          <+> EMPM l2          = EMPM l1
-LSTM l1 s1       <+> LSTM l2 s2       = LSTM l1 s1
-SIGM l1 s1       <+> SIGM l2 s2       = SIGM l1 s1
-EQLM l1          <+> EQLM l2          = EQLM l1
-ENUM l1 s1 b1 d1 <+> ENUM l2 s2 b2 d2 = ENUM l1 (s1 `union` s2) (b1 && b2) d1
-_                <+> _                = NONE
+combLabels :: Int -> Book -> ElimLabel -> ElimLabel -> ElimLabel
+combLabels d book lab1 lab2 = case (lab1, lab2) of
+  (STOP, x)                      -> STOP
+  (x, STOP)                      -> STOP
+  (NONE, x)                      -> x
+  (x, NONE)                      -> x
+  (UNIM l1, UNIM l2)             -> UNIM l1
+  (BITM l1, BITM l2)             -> BITM l1
+  (EMPM l1, EMPM l2)             -> EMPM l1
+  (EQLM l1, EQLM l2)             -> EQLM l1
+  (NATM l1 s1 a1, NATM l2 s2 a2) -> case (combAnns a1 a2) of
+    Just a -> NATM l1 s1 a
+    _      -> STOP
+  (LSTM l1 s1 a1, LSTM l2 s2 a2) -> case (combAnns a1 a2) of 
+    Just a -> LSTM l1 s1 a
+    _      -> STOP
+  (SIGM l1 s1 a1, SIGM l2 s2 a2) -> case (combAnns a1 a2) of 
+    Just a -> SIGM l1 s1 a
+    _      -> STOP
+  (ENUM l1 s1 b1 d1 a1, ENUM l2 s2 b2 d2 a2) -> case (combAnns a1 a2) of 
+    Just a -> ENUM l1 (s1 `union` s2) (b1 && b2) d1 a
+    _      -> STOP
+  (_, _)                               -> STOP
+  where combAnns [] [] = Just []
+        combAnns (Nothing:as) (b:bs)                  = do
+          rest <- combAnns as bs
+          Just $ b:rest
+        combAnns (a:as) (Nothing:bs)                  = do
+          rest <- combAnns as bs
+          Just $ a:rest
+        combAnns (Just a:as) (Just b:bs) | eql False d book a b = do
+          rest <- combAnns as bs
+          Just $ (Just a):rest
+        combAnns _ _ = Nothing
+
 
 -- Extracts variable names from eliminator/lambda branches
 -- 1) Traverses i' layers deep to find lambda-bound names
@@ -493,8 +526,11 @@ getVarNames term defs = go (length defs) 0 term [] defs
 
 
 getAnnotations :: Int -> Book -> Term -> [Maybe Term] -> Maybe [Maybe Term]
-getAnnotations d book term defs = case term of
-  NatM z s -> go d 1 0 s [] []
+getAnnotations d book term defs = case cut term of
+  NatM _ s -> go d 1 0 s [] [Nothing]
+  EnuM _ e -> go d 1 0 e [] [Nothing]
+  LstM _ c -> go d 2 0 c [] [Nothing, Nothing]
+  SigM g   -> go d 2 0 g [] [Nothing, Nothing]
   _ -> Nothing  -- or however you want to handle non-NatM cases
   where
     go :: Int -> Int -> Int -> Term -> [Maybe Term] -> [Maybe Term] -> Maybe [Maybe Term]
@@ -565,16 +601,12 @@ getAnnotations d book term defs = case term of
         (a:as,Nothing:bs) -> do
           rest' <- combine as bs rest
           return (a : rest')
-        (Just a:as,Just b:bs) | eql False d book a b -> do
+        (Just a:as, Just b:bs) | eql False d book a b -> do
           rest' <- combine as bs rest
           return (Just a : rest')
         _ -> Nothing
     combine [] [] [] = Just []
     combine a b [] = Nothing -- called with go without enough defaults
-
-
-
-
 
 
 
