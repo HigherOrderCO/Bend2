@@ -4,6 +4,7 @@ module Target.KolmoC.Type where
 
 import Data.Word (Word32)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import GHC.Generics (Generic)
 import Core.Type (Term, Book, NOp2(..), NVal(..), PriF(..))
 
@@ -85,6 +86,9 @@ data KCore
 
   -- Primitives (for operations that don't map directly)
   | KPri String [KCore] -- Primitive operations with args
+
+  -- Metavariables/Generators
+  | KGen Nick KCore KCore KCore -- ?N ctx : typ #seed (program generator)
   deriving (Show, Eq, Generic)
 
 -- Binary operations that KolmoC supports
@@ -127,4 +131,6 @@ data CompileCtx = CompileCtx
   , ctxDefs :: KBook          -- Accumulated KolmoC definitions
   , ctxFresh :: Int           -- Fresh name counter
   , ctxWarnings :: [String]   -- Accumulated warnings
+  , ctxMetas :: S.Set Name    -- Metavariable names (for uppercase refs)
+  , ctxInEql :: Bool          -- Are we inside an Eql type? (use lowercase refs)
   }

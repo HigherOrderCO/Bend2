@@ -46,6 +46,10 @@ library
                       Target.HVM,
                       Target.Haskell,
                       Target.JavaScript,
+                      Target.KolmoC,
+                      Target.KolmoC.Type,
+                      Target.KolmoC.Compile,
+                      Target.KolmoC.Show,
                       Package.Index
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
