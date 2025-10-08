@@ -94,8 +94,12 @@ adjust book term = do
   let chkd = checkPatternCompleteness 0 noSpan book flat
   npat <- desugarPats 0 noSpan chkd
   let nfrk = desugarFrks book 0 npat
-  let etas = reduceEtas 0 nfrk
-  Done $ bind etas
+  let hoas = bind nfrk
+  let etas = reduceEtas 0 noSpan hoas
+  return $ 
+    trace ("-hoas: " ++ show hoas) $
+    trace ("-etas: " ++ show etas) $
+    etas
 
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
