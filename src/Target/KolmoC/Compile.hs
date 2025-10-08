@@ -213,11 +213,12 @@ termToKCore ctx term = case cut term of
     kf <- termToKCore ctx f
     -- EqlM is a match on equality, just apply the function
     return kf
-  Rwt e f     -> do
-    ke <- termToKCore ctx e
-    kf <- termToKCore ctx f
-    -- TODO: fix, we should have 3 args
-    return $ KRwt ke KSet kf  -- Using Set as placeholder for P
+  -- Rewrite: Bend's `rewrite e f` where e : T{a==b}
+  -- At runtime, KolmoC erases rewrites: ~e:P;f → f
+  -- The motive P is implicit in Bend (derived from the goal during type checking)
+  -- Since we don't have access to the goal here, and KolmoC erases rewrites anyway,
+  -- we just compile to the body f directly. This is semantically correct.
+  Rwt e f     -> termToKCore ctx f
 
   -- Empty
   Emp         -> return KEmp
