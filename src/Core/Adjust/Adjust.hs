@@ -83,6 +83,7 @@ import Core.Show
 import Core.Type
 import Core.WHNF
 import GHC.IO (unsafePerformIO)
+import System.IO (hPutStrLn, stderr)
 
 -- | Adjusts a single term, simplifying pattern matching and other constructs.
 -- It uses a book of already-adjusted definitions for context during flattening.

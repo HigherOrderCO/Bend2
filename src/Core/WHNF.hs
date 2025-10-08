@@ -358,7 +358,7 @@ lhs_to_list (LHS k l) = case k of
 
 deref :: Book -> String -> Int -> LHS -> Term -> Term
 deref book k i lhs body =
-  case body of
+  case cut body of
     EmpM ->
       Lam "x" Nothing $ \x -> derefUndo book k i lhs EmpM x
     UniM f ->
