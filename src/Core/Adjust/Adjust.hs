@@ -102,8 +102,8 @@ adjust book term = do
   let hoas = bind nfrk
   let etas = reduceEtas 0 noSpan book hoas
   return $ 
-    trace ("-hoas: " ++ show hoas) $
-    trace ("-etas: " ++ show etas) $
+    -- trace ("-hoas: " ++ show hoas) $
+    -- trace ("-etas: " ++ show etas) $
     etas
 
 annotateSplitBook :: Book -> IO (Book, Bool)

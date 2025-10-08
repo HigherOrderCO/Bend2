@@ -1166,16 +1166,13 @@ check d span book ctx term      goal =
     -- ctx |- rewrite e f : goal
     (Rwt e f, _) -> do
       eT <- infer d span book ctx e
-      eT <- infer d span book ctx e
       case force book eT of
         Eql t a b -> do
           let rewrittenCtx  = rewriteCtx d book a b ctx
           let rewrittenGoal = rewrite d book a b goal
           f' <- check d span book rewrittenCtx f rewrittenGoal
-          -- e' <- check d span book ctx e eT
-          -- check d span book rewrittenCtx f rewrittenGoal
-          -- return $ Rwt e' f'
-          return $ Rwt e f'
+          e' <- check d span book ctx e eT
+          return $ Rwt e' f'
         _ ->
           Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Eql (Var "_" 0) (Var "_" 0) (Var "_" 0))) (normal book eT) Nothing
 
