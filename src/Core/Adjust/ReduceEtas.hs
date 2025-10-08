@@ -61,7 +61,8 @@
 --               then it uses resolveMatches to produce its output
 -- isEtaLong nam -> at each subterm f(x), if x is the variable 'nam'
 --               from the lambda given from reduceEtas, and f is a λ{..}, 
---               then return a label encoding which kinda of λ{..}.
+--               then return a label encoding which kind of λ{..}. Store information about
+--               clause argument types, and return STOP if incompatible information is found
 -- resolveMatches -> given elim label, at each term f(x), if `f` is λ{..} 
 --               of a kind matching the elim label, then replace this application by
 --               the the clause of f that corresponds to the one determined by reduceEtas
@@ -113,12 +114,12 @@ reduceEtas d span book term =
             where
             fl   = reduceEtas d span book $ bindVarByName nam Bt0 (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
             tr   = reduceEtas d span book $ bindVarByName nam Bt1 (resolveMatches span nam eta 1 "" [] (f (Var nam d)))
-        NATM spa nams@[p] anns@[pAnn] -> Loc spa $ trace ("- annotations in " ++ show term ++ " == " ++ show anns) $ NatM z s 
+        NATM spa nams@[p] anns@[pAnn] -> Loc spa $ NatM z s 
             where
             z    = reduceEtas d span book $ bindVarByName nam Zer (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
             s    = reduceEtas d span book $ (Lam p pAnn (\q -> 
                                              bindVarByName nam (Suc q) (resolveMatches span nam eta 1 "" [Sub q] (f (Var nam d)))))
-        LSTM spa nams@[h,t] anns@[hAnn, tAnn] -> Loc spa $ trace ("- annotations in " ++ show term ++ " == " ++ show anns) $  LstM nil cons 
+        LSTM spa nams@[h,t] anns@[hAnn, tAnn] -> Loc spa $ LstM nil cons 
             where
             nil  = reduceEtas d span book $ bindVarByName nam Nil (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
             cons = reduceEtas d span book $ (Lam h hAnn (\h ->
@@ -336,25 +337,21 @@ isEtaLong d span book nam t = case t of
     case cut x of
       (Var k _) -> if k == nam
         then
-          case cut f of
+          case (cut f, getAnnotations d book f) of
        -- SupM l _    -> not eliminated
-          EqlM _      -> combLabels d book (EQLM span) (isEtaLong d span book nam f)
-          EmpM        -> combLabels d book (EMPM span) (isEtaLong d span book nam f)
-          UniM _      -> combLabels d book (UNIM span) (isEtaLong d span book nam f)
-          BitM _ _    -> combLabels d book (BITM span) (isEtaLong d span book nam f)
-          NatM _ s    -> case getAnnotations d book f of
-            Just anns -> combLabels d book (NATM span (getVarNames s ["p"]  ) anns) (isEtaLong d span book nam f)
-            _ -> STOP
-          LstM _ c    -> case getAnnotations d book f of
-            Just anns -> combLabels d book (LSTM span (getVarNames c ["h","t"]) anns) (isEtaLong d span book nam f)
-            _ -> STOP
-          SigM g      -> case getAnnotations d book f of
-            Just anns -> combLabels d book (SIGM span (getVarNames g ["a","b"]) anns) (isEtaLong d span book nam f)
-            _ -> STOP
-          EnuM cs def -> case getAnnotations d book f of
-            Just anns -> combLabels d book (ENUM span (map fst cs) (isLam def) (getVarNames def ["t"]) anns) (isEtaLong d span book nam f)
-            _ -> STOP
-          _           -> isEtaLong d span book nam f
+          (EqlM _  , _)            -> combLabels d book (EQLM span) (isEtaLong d span book nam f)
+          (EmpM    , _)            -> combLabels d book (EMPM span) (isEtaLong d span book nam f)
+          (UniM _  , _)            -> combLabels d book (UNIM span) (isEtaLong d span book nam f)
+          (BitM _ _, _)            -> combLabels d book (BITM span) (isEtaLong d span book nam f)
+          (NatM _ s   , Just anns) -> combLabels d book (NATM span (getVarNames s ["p"]    ) anns) (isEtaLong d span book nam f)
+          (LstM _ c   , Just anns) -> combLabels d book (LSTM span (getVarNames c ["h","t"]) anns) (isEtaLong d span book nam f)
+          (SigM g     , Just anns) -> combLabels d book (SIGM span (getVarNames g ["a","b"]) anns) (isEtaLong d span book nam f)
+          (EnuM cs def, Just anns) -> combLabels d book (ENUM span (map fst cs) (isLam def) (getVarNames def ["t"]) anns) (isEtaLong d span book nam f)
+          (NatM _ s   , Nothing)   -> STOP
+          (LstM _ c   , Nothing)   -> STOP
+          (SigM g     , Nothing)   -> STOP
+          (EnuM cs def, Nothing)   -> STOP
+          (_,_)           -> isEtaLong d span book nam f
         else
             combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam x)
       _ -> combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam x)
@@ -429,13 +426,16 @@ data ElimLabel
   deriving Show -- SUPM not reduced
 
 -- Combines eliminator labels from multiple λ{..}(nam) occurrences
--- 1) NONE acts as identity: anything combined with NONE stays unchanged
--- 2) Same eliminator types combine by keeping first's parameters (NATM s1 <+> NATM s2 = NATM s1)
--- 3) Different eliminator types cancel to NONE (mixed patterns can't be eta-reduced)
--- 4) ENUMs merge their symbol lists and conjoin their completeness flags
+-- 1) STOP propagates: any combination with STOP yields STOP
+-- 2) NONE acts as identity: anything combined with NONE stays unchanged
+-- 3) Same eliminator types combine by keeping first's parameters
+--    - Simple types (UNIM/BITM/EMPM/EQLM): just keep first
+--    - Annotated types (NATM/LSTM/SIGM/ENUM): merge annotations via combAnns, STOP if incompatible
+--    - ENUM special case: also unions symbol sets and conjoins completeness flags
+-- 4) Different eliminator types yield STOP (mixed patterns can't be eta-reduced)
 --
--- Returns: NATM [p] <+> NATM [q] -> NATM [p]
---          NATM [p] <+> BITM      -> NONE
+-- Returns: NATM [p,q] <+> NATM [r,q] -> NATM [p,q]
+--          NATM [p,q] <+> BITM       -> STOP
 combLabels :: Int -> Book -> ElimLabel -> ElimLabel -> ElimLabel
 combLabels d book lab1 lab2 = case (lab1, lab2) of
   (STOP, x)                      -> STOP
