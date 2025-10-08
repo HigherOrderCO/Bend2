@@ -342,16 +342,16 @@ isEtaLong d span book nam t = case t of
           EmpM        -> combLabels d book (EMPM span) (isEtaLong d span book nam f)
           UniM _      -> combLabels d book (UNIM span) (isEtaLong d span book nam f)
           BitM _ _    -> combLabels d book (BITM span) (isEtaLong d span book nam f)
-          NatM _ s    -> case getAnnotations d book f [] of
+          NatM _ s    -> case getAnnotations d book f of
             Just anns -> combLabels d book (NATM span (getVarNames s ["p"]  ) anns) (isEtaLong d span book nam f)
             _ -> STOP
-          LstM _ c    -> case getAnnotations d book f [] of
+          LstM _ c    -> case getAnnotations d book f of
             Just anns -> combLabels d book (LSTM span (getVarNames c ["h","t"]) anns) (isEtaLong d span book nam f)
             _ -> STOP
-          SigM g      -> case getAnnotations d book f [] of
+          SigM g      -> case getAnnotations d book f of
             Just anns -> combLabels d book (SIGM span (getVarNames g ["a","b"]) anns) (isEtaLong d span book nam f)
             _ -> STOP
-          EnuM cs def -> case getAnnotations d book f [] of
+          EnuM cs def -> case getAnnotations d book f of
             Just anns -> combLabels d book (ENUM span (map fst cs) (isLam def) (getVarNames def ["t"]) anns) (isEtaLong d span book nam f)
             _ -> STOP
           _           -> isEtaLong d span book nam f
@@ -525,8 +525,8 @@ getVarNames term defs = go (length defs) 0 term [] defs
     combine a  b  [] = error "unreachable B" -- called with go without enough defaults
 
 
-getAnnotations :: Int -> Book -> Term -> [Maybe Term] -> Maybe [Maybe Term]
-getAnnotations d book term defs = case cut term of
+getAnnotations :: Int -> Book -> Term -> Maybe [Maybe Term]
+getAnnotations d book term = case cut term of
   NatM _ s -> go d 1 0 s [] [Nothing]
   EnuM _ e -> go d 1 0 e [] [Nothing]
   LstM _ c -> go d 2 0 c [] [Nothing, Nothing]
