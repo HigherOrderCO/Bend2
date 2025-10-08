@@ -29,6 +29,7 @@ library
                       Core.Check,
                       Core.Deps,
                       Core.Equal,
+                      Core.Adjust.SplitAnnotate,
                       Core.Adjust.ReduceEtas,
                       Core.Adjust.FlattenPats,
                       Core.Adjust.DesugarPats,

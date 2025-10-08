@@ -62,6 +62,8 @@
 module Core.Adjust.Adjust where
 
 import Control.Monad.State
+import Control.Monad (unless, foldM)
+import Data.Maybe (fromJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
@@ -73,12 +75,14 @@ import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ReduceEtas
 import Core.Adjust.ResolveEnums
+import Core.Adjust.SplitAnnotate
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
 import Core.Show
 import Core.Type
 import Core.WHNF
+import GHC.IO (unsafePerformIO)
 
 -- | Adjusts a single term, simplifying pattern matching and other constructs.
 -- It uses a book of already-adjusted definitions for context during flattening.
@@ -100,6 +104,30 @@ adjust book term = do
     trace ("-hoas: " ++ show hoas) $
     trace ("-etas: " ++ show etas) $
     etas
+
+annotateSplitBook :: Book -> IO (Book, Bool)
+annotateSplitBook book@(Book defs names) = do
+  let orderedDefs = [(name, fromJust (M.lookup name defs)) | name <- names]
+  (annotatedDefs, success) <- foldM checkAndAccumulate ([], True) orderedDefs
+  -- unless success exitFailure
+  -- return $ Book (M.fromList (reverse annotatedDefs)) names
+  return (Book (M.fromList (reverse annotatedDefs)) names, success)
+  where
+    checkAndAccumulate (accDefs, accSuccess) (name, (inj, term, typ)) = do
+      let checkResult = do 
+            typ'  <- check 0 noSpan book (Ctx []) typ Set
+            term' <- check 0 noSpan book (Ctx []) term typ'
+            -- traceM $ "chec: " ++ show term'
+            return (inj, term', typ')
+      case checkResult of
+        Done (inj', term', typ') -> do
+          -- putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
+          return ((name, (inj', term', typ')) : accDefs, accSuccess)
+        Fail e -> do
+          -- hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
+          -- hPutStrLn stderr $ show e
+          -- Keep original term when check fails
+          return ((name, (inj, term, typ)) : accDefs, False)
 
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
@@ -127,8 +155,10 @@ adjustBook book@(Book defs names) = do
   let adjustFn b t = case adjust b t of
         Done t' -> t'
         Fail e  -> throw (BendException e)
-  let adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
-  Done adjustedBook -- checkFreeVarsInBook disabled: not in main branch
+  let adjustedBook  = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
+  let (annSplitBook, success) = unsafePerformIO $ annotateSplitBook adjustedBook 
+  Done annSplitBook
+  -- Done adjustedBook
 
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
 adjustBookWithPats :: Book -> Result Book

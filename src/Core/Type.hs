@@ -256,6 +256,16 @@ cut (Loc _ t) = cut t
 cut (Chk x _) = cut x
 cut t         = t
 
+cutChk :: Term -> Term
+cutChk (Loc l x) = Loc l (cutChk x)
+cutChk (Chk x t) = x
+cutChk x         = x
+
+cutLoc :: Term -> Term
+cutLoc (Chk x t) = Chk (cutLoc x) t
+cutLoc (Loc l t) = cutLoc t
+cutLoc x         = x
+
 unlam :: Name -> Int -> (Term -> Term) -> Term
 unlam k d f = f (Var k d)
 
@@ -271,6 +281,12 @@ collectApps f                args = (f, args)
 
 noSpan :: Span
 noSpan = Span (0,0) (0,0) "" ""
+
+getSpan :: Span -> Term -> Span
+getSpan fallback term@(Loc l t) = case t of
+  Loc _ _ -> getSpan fallback t
+  _       -> l
+getSpan fallback _         = fallback
 
 flattenTup :: Term -> [Term]
 flattenTup (Tup l r) = l : flattenTup (cut r)
