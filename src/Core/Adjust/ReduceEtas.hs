@@ -175,9 +175,12 @@ reduceEtas d span book term =
   Tup a b       -> Tup (reduceEtas d span book a) (reduceEtas d span book b)
   SigM f        -> SigM (reduceEtas d span book f)
   All a b       -> All (reduceEtas d span book a) (reduceEtas d span book b)
-  App f x       -> case cut f of
-    Lam k _ b -> reduceEtas d span book (b x)
-    _         -> App (reduceEtas d span book f) (reduceEtas d span book x)
+  App f x -> case cut f of
+    Lam k Nothing b -> reduceEtas d span book (b x)
+    _ -> let f' = reduceEtas d span book f in
+         case cut f' of
+           Lam k Nothing b -> reduceEtas d span book (b x)
+           _ -> App f' (reduceEtas d span book x)
   Eql ty a b    -> Eql (reduceEtas d span book ty) (reduceEtas d span book a) (reduceEtas d span book b)
   Rfl           -> Rfl
   EqlM f        -> EqlM (reduceEtas d span book f)
@@ -503,7 +506,7 @@ getVarNames term defs = go (length defs) 0 term [] defs
       _ -> defs
     -- go, but skip j arguments
     go i j term nams defs@(def:rest) = case cut term of
-      App f x   -> go i j f nams defs -- TODO: review j here
+      App f x   -> go i (j+1) f nams defs
       Lam k _ b -> go i (j-1) (b (Var "_" 0)) nams defs
       UniM f    -> go i (j-1) f nams defs
       BitM f t  -> combine (go i (j-1) f nams defs) (go i (j-1)   t nams defs) defs
@@ -571,7 +574,7 @@ getAnnotations d book term = case cut term of
       _ -> Just defs
     -- go, but skip j arguments
     go d i j term anns defs@(def:rest) = case cut term of
-      App f x   -> go d i j f anns defs -- TODO: check
+      App f x   -> go d i (j+1) f anns defs
       Lam k _ b -> go (d+1) i (j-1) (b (Var k d)) anns defs
       UniM f    -> go d i (j-1) f anns defs
       BitM f t  -> do
