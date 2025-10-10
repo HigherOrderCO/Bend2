@@ -84,11 +84,22 @@ import Control.Applicative
 expandElimApps :: Int -> Span -> Book -> Term -> Term
 expandElimApps d span book term = case term of
   App f x -> case (cut f, cut x) of
-    -- SigM case: expand when applied to a tuple
+    (UniM f, One) -> 
+      expandElimApps d span book f
+    (BitM f t, Bt0) -> 
+      expandElimApps d span book f
+    (BitM f t, Bt1) -> 
+      expandElimApps d span book t
+    (NatM z s, Zer) -> 
+      expandElimApps d span book z
+    (NatM z s, Suc n) -> 
+      expandElimApps d span book (App s n)
+    (LstM n c, Nil) -> 
+      expandElimApps d span book n
+    (LstM n c, Con h t) -> 
+      expandElimApps d span book (App (App c h) t)
     (SigM g, Tup a b) -> 
       expandElimApps d span book (App (App g a) b)
-    
-    -- Default: recurse on both parts
     _ -> App (expandElimApps d span book f) (expandElimApps d span book x)
   
   -- Recursive cases for all other constructors

@@ -104,9 +104,9 @@ adjust book term = do
   let etas = reduceEtas 0 noSpan book elim
   -- let etas = reduceEtas 0 noSpan book hoas
   return $ 
-    -- trace ("-hoas: " ++ show hoas) $
+    trace ("-hoas: " ++ show hoas) $
     -- trace ("-elim: " ++ show elim) $
-    -- trace ("-etas: " ++ show etas) $
+    trace ("-etas: " ++ show etas) $
     etas
 
 annotateSplitBook :: Book -> IO (Book, Bool)
@@ -128,8 +128,8 @@ annotateSplitBook book@(Book defs names) = do
           -- putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
           return ((name, (inj', term', typ')) : accDefs, accSuccess)
         Fail e -> do
-          -- hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
-          -- hPutStrLn stderr $ show e
+          hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
+          hPutStrLn stderr $ show e
           -- Keep original term when check fails
           return ((name, (inj, term, typ)) : accDefs, False)
 

@@ -447,6 +447,7 @@ infer d span book ctx term =
     initialState = TypeState [] M.empty (-1) False
     computation = do
       typeWithMetas <- inferGo d span book ctx term
+      -- traceM $ "-infered: " ++ show term ++ " :: " ++ show typeWithMetas
       solveConstraints d span book ctx
       s <- gets subst
       finalType <- applySubst d s typeWithMetas
@@ -458,7 +459,9 @@ infer d span book ctx term =
 
 -- The core inference that generates constraints
 inferGo :: Int -> Span -> Book -> Ctx -> Term -> TypeM Term
-inferGo d span book@(Book defs names) ctx term = case term of
+inferGo d span book@(Book defs names) ctx term = 
+  -- trace ("-inferGo " ++ show term) $ 
+  case term of
 
   -- Variables - hard error, must be in context
   Var k i -> do
@@ -470,7 +473,7 @@ inferGo d span book@(Book defs names) ctx term = case term of
   -- References - hard error if undefined
   Ref k i -> case getDefn book k of
     Just (_, _, typ) -> return typ
-    Nothing -> throwError (Undefined span (normalCtx book ctx) k Nothing)
+    Nothing -> trace "AAAAA" $ throwError (Undefined span (normalCtx book ctx) k Nothing)
 
   -- Sub
   Sub x -> inferGo d span book ctx x
@@ -523,7 +526,9 @@ inferGo d span book@(Book defs names) ctx term = case term of
   One -> return Uni
 
   -- Unit eliminator - soft fail
-  UniM f -> softFail span book ctx Nothing
+  UniM f -> do
+    fT <- inferGo d span book ctx f
+    return (All Uni (Lam "_" (Just Uni) (\_ -> fT)))
 
   -- Bool type
   Bit -> return Set
@@ -535,7 +540,11 @@ inferGo d span book@(Book defs names) ctx term = case term of
   Bt1 -> return Bit
 
   -- Bool eliminator - soft fail
-  BitM f t -> softFail span book ctx Nothing
+  BitM f t -> do
+    fT <- inferGo d span book ctx f
+    tT <- inferGo d span book ctx t
+    addConstraint (Constr fT tT)
+    return (All Bit (Lam "_" (Just Bit) (\_ -> fT)))
 
   -- Nat type
   Nat -> return Set
@@ -549,8 +558,12 @@ inferGo d span book@(Book defs names) ctx term = case term of
     addConstraint (Constr nT Nat)
     return Nat
 
-  -- Nat eliminator - soft fail
-  NatM z s -> softFail span book ctx Nothing
+  -- Nat eliminator
+  NatM z s -> do
+    zT <- inferGo d span book ctx z
+    sT <- inferGo d span book ctx s
+    addConstraint (Constr sT (All Nat (Lam "_" (Just Nat) (\_ -> zT))))
+    return (All Nat (Lam "_" (Just Nat) (\_ -> zT)))
 
   -- IO type
   IO t -> do
@@ -584,20 +597,57 @@ inferGo d span book@(Book defs names) ctx term = case term of
         return (Lst elemType)
 
   -- List eliminator - soft fail
-  LstM n c -> softFail span book ctx Nothing
+  LstM n c -> do
+    nT <- inferGo d span book ctx n
+    cT <- inferGo d span book ctx c
+    hT <- freshMeta "v"
+    addConstraint (Constr cT (All hT (Lam "_" (Just hT) (\_ -> All (Lst hT) (Lam "_" (Just (Lst hT)) (\_ -> nT))))))
+    return $ All (Lst hT) (Lam "_" (Just (Lst hT)) (\_ -> nT))
 
   -- Enum type
   Enu s -> return Set
 
+  -- -- Enum symbol
+  -- Sym s -> do
+  --   let bookEnums = [ Enu tags | (k, (_, (Sig (Enu tags) _), Set)) <- M.toList defs ]
+  --   case find isEnuWithTag bookEnums of
+  --     Just t -> return t
+  --     Nothing -> throwError (Undefined span (normalCtx book ctx) ("@" ++ s) Nothing)
+  --   where
+  --     isEnuWithTag (Enu tags) = s `elem` tags
+  --     isEnuWithTag _ = False
+  --
   -- Enum symbol
   Sym s -> do
-    let bookEnums = [ Enu tags | (k, (_, (Sig (Enu tags) _), Set)) <- M.toList defs ]
+    let bookEnums = concatMap extractValidEnum (M.toList defs)
     case find isEnuWithTag bookEnums of
       Just t -> return t
       Nothing -> throwError (Undefined span (normalCtx book ctx) ("@" ++ s) Nothing)
     where
       isEnuWithTag (Enu tags) = s `elem` tags
       isEnuWithTag _ = False
+      
+      -- Extract Enum only if it's the first arg of the first Sig, 
+      -- with only Lams and eliminators in between
+      extractValidEnum (k, (_, term, typ)) = extractFromTerm term
+      
+      extractFromTerm :: Term -> [Term]
+      extractFromTerm t = case cut t of
+        -- Found it: Sig with Enu as first argument
+        Sig (Enu tags) _ -> [Enu tags]
+        
+        -- Can go through these constructors
+        Lam _ _ f -> extractFromTerm (f (Var "_" 0))
+        EmpM -> []  -- Eliminator, but terminal
+        UniM f -> extractFromTerm f
+        BitM f t -> extractFromTerm f ++ extractFromTerm t
+        NatM z s -> extractFromTerm z ++ extractFromTerm s
+        LstM n c -> extractFromTerm n ++ extractFromTerm c
+        EnuM cs def -> concatMap (extractFromTerm . snd) cs ++ extractFromTerm def
+        SigM f -> extractFromTerm f
+        
+        -- Stop at anything else
+        _ -> []
 
   -- Enum eliminator
   EnuM cs e -> do
@@ -674,7 +724,9 @@ inferGo d span book@(Book defs names) ctx term = case term of
   Tup a b -> do
     aT <- inferGo d span book ctx a
     bT <- inferGo d span book ctx b
-    return (Sig aT (Lam "_" Nothing (\_ -> bT)))
+    bFunc <- freshMeta "b"
+    addConstraint (Constr bT (App bFunc a))
+    return (Sig aT bFunc)
 
   -- Sigma eliminator - soft fail
   SigM f -> softFail span book ctx Nothing
@@ -693,6 +745,7 @@ inferGo d span book@(Book defs names) ctx term = case term of
     addConstraint (Constr tT Set)
     let new_ctx = extend ctx k (Var k d) t
     bodyType <- inferGo (d+1) span book new_ctx (body (Var k d))
+    -- traceM $ "AAAAAAAAAAA " ++ show t
     return (All t (Lam k (Just t) (\v -> bindVarByIndex d v bodyType)))
 
   -- Lambda without type annotation
@@ -704,22 +757,24 @@ inferGo d span book@(Book defs names) ctx term = case term of
 
   -- Application
   App f x -> do
-    fT <- inferGo d span book ctx f
-    case force book fT of
-      All aT bT -> do
+    case infer d span book ctx f of
+      Done fT' -> case force book fT' of
+        All a b -> do
+          case check d span book ctx x a of
+            Done x' -> return $ App b x
+            Fail e -> throwError e
+        _ -> fallback
+      _ -> fallback
+    where
+      fallback = do
+        fT <- inferGo d span book ctx f
         xT <- inferGo d span book ctx x
-        addConstraint (Constr xT aT)
-        case bT of
-          Lam _ _ body -> return (body x)
-          _ -> return (App bT x)
-      _ -> do
-        -- Function type unknown, create metavariables
-        xT <- inferGo d span book ctx x
-        resultMeta <- freshMeta "result"
-        funBodyMeta <- freshMeta "funbody"
-        addConstraint (Constr fT (All xT funBodyMeta))
-        addConstraint (Constr resultMeta (App funBodyMeta x))
-        return resultMeta
+        bT <- freshMeta "B"
+        addConstraint (Constr fT (All xT bT))
+        cstr <- gets constraints
+        -- TODO: capability of solving constraints as bellow (see examples/main/VecInd)
+        -- traceM $ "f(x): " ++ show term ++ "\nfT: " ++ show fT ++ "\nxT: " ++ show xT ++ "\nbT: " ++ show bT ++ "\n:: " ++ show (App bT x) ++ "\n@ " ++ show cstr ++ "\nctx:\n" ++ show ctx
+        return $ App bT x
 
   -- Equality type
   Eql t a b -> do
@@ -745,8 +800,9 @@ inferGo d span book@(Book defs names) ctx term = case term of
         let rewrittenCtx = rewriteCtx d book a b ctx
         inferGo d span book rewrittenCtx f
       _ -> do
-        let eqlType = Eql (Var "_" 0) (Var "_" 0) (Var "_" 0)
-        throwError (trace "AAAAAAAA" $ TypeMismatch span (normalCtx book ctx) (normal book eqlType) (normal book eT) Nothing)
+        -- let eqlType = Eql (Var "_" 0) (Var "_" 0) (Var "_" 0)
+        -- throwError $ TypeMismatch span (normalCtx book ctx) (normal book eqlType) (normal book eT) Nothing)
+        softFail span book ctx Nothing
 
   -- Location
   Loc l t -> inferGo d l book ctx t
@@ -912,6 +968,7 @@ check d span book ctx (Loc l t) goal = do
   return $ Loc l t'
 check d span book ctx term      goal =
   -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal)) $
+  -- trace ("- check: " ++ show d ++ " " ++ show term ++ " :: " ++ show (normal book goal) ++ "\n-ctx: " ++ show ctx) $
   let nGoal = force book goal in
   case (term, nGoal) of
     (All a b, Set) -> do
@@ -1085,7 +1142,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for UniM
     (UniM f, _) -> do
-      Fail $ trace ("HHHHH " ++ show term ++ " :: " ++ show (force book goal)) $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Uni (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Uni (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- f : R({==})
     -- ------------------------------------------------------ BitM-Eql-Bt0-Bt0
@@ -1212,7 +1269,7 @@ check d span book ctx term      goal =
     (Sym s, Enu y) -> do
       if s `elem` y
         then return term
-        else Fail $ trace "BBBBBBB" $ TypeMismatch span (normalCtx book ctx) (normal book (Enu y)) (normal book (Sym s)) Nothing
+        else Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Enu y)) (normal book (Sym s)) Nothing
 
     -- s ∈ tags, s == s1, s1 == s2
     -- -------------------------------- Sym-Eql
@@ -1259,11 +1316,11 @@ check d span book ctx term      goal =
               return $ EnuM cs' df'
             else return (EnuM cs' (Lam "_" Nothing (\_ -> One)))
         (h:t) -> do
-          Fail $ trace "CCCCCCCCCC" $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu [h, "..."]) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+          Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu [h, "..."]) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- Type mismatch for EnuM
     (EnuM cs df, _) -> do
-      Fail $ trace "AAAA" $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu []) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu []) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- f : ∀xp:A{x1==x2}. ∀yp:B(x1){y1==y2}. R((xp,yp))
     -- ------------------------------------------------------- SigM-Eql
@@ -1445,7 +1502,7 @@ check d span book ctx term      goal =
           e' <- check d span book ctx e eT
           return $ Rwt e' f'
         _ ->
-          Fail $ trace "AAAAAAAA" $ TypeMismatch span (normalCtx book ctx) (normal book (Eql (Var "_" 0) (Var "_" 0) (Var "_" 0))) (normal book eT) Nothing
+          Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Eql (Var "_" 0) (Var "_" 0) (Var "_" 0))) (normal book eT) Nothing
 
     -- Not supported
     (Pat _ _ _, _) -> do
@@ -1579,10 +1636,10 @@ check d span book ctx term      goal =
 verify :: Int -> Span -> Book -> Ctx -> Term -> Term -> Result Term
 verify d span book ctx term goal = do
   t <- 
-    -- trace ("-ver: " ++ show term ++ " :: " ++ show goal) $ 
+    -- trace ("-verify: " ++ show term ++ " :: " ++ show goal) $ 
     infer d span book ctx term
   if
     -- trace ("-verify: " ++ show term ++ " :: " ++ show t ++ " == " ++ show goal) $
     equal d book t goal
     then return term
-    else Fail $ trace "GGGGGGG" $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book t) Nothing
+    else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book t) Nothing
