@@ -252,71 +252,61 @@ instance Show Constraint where
 -- Substitution maps metavariable names to terms
 type Subst = M.Map String Term
 
--- Unification state: tracks substitutions and fresh index counter
-data UnifyState = UnifyState
-  { subst :: Subst
-  , nextIdx :: Int -- For generating fresh metavariables
-  , depth :: Int   -- For tracking binding depth
+data TypeState = TypeState
+  { constraints :: [Constraint]  -- Accumulated constraints
+  , subst :: Subst              -- Current substitutions
+  , nextIdx :: Int               -- For generating fresh metavariables
+  , gatherOnly :: Bool
   }
 
--- Unification monad: uses your Result and Error types
-type UnifyM = ExceptT Error (State UnifyState)
+type TypeM = ExceptT Error (State TypeState)
 
--- Add a substitution to the state
-addSubst :: String -> Term -> UnifyM Subst
-addSubst k t = do
-  s <- gets subst
-  let s' = M.insert k t s
-  modify (\state -> state { subst = s' })
-  return s'
+-- Add constraint
+addConstraint :: Constraint -> TypeM ()
+addConstraint c = modify $ \s -> s { constraints = c : constraints s }
 
--- Occurs check to prevent infinite types
-occursCheck :: Span -> Book -> Ctx -> String -> Term -> UnifyM ()
+-- Generate fresh metavariable
+freshMeta :: String -> TypeM Term
+freshMeta prefix = do
+  idx <- gets nextIdx
+  modify $ \s -> s { nextIdx = idx - 1 }
+  return $ Var ("?" ++ prefix ++ show idx) idx
+
+-- Add substitution
+addSubst :: String -> Term -> TypeM ()
+addSubst k t = modify $ \s -> s { subst = M.insert k t (subst s) }
+
+-- Occurs check
+occursCheck :: Span -> Book -> Ctx -> String -> Term -> TypeM ()
 occursCheck span book ctx k t =
   when (k `S.member` freeVars S.empty t) $
     throwError $ CantInfer span (normalCtx book ctx)
       (Just $ "Occurs check failed: " ++ k ++ " in " ++ show (normal book t))
 
--- Generate a fresh metavariable
-freshMeta :: String -> UnifyM Term
-freshMeta prefix = do
-  s <- get
-  let idx = nextIdx s
-  put s { nextIdx = idx - 1 }
-  return $ Var ("?" ++ prefix ++ show idx) idx
+solveConstraints :: Int -> Span -> Book -> Ctx -> TypeM ()
+solveConstraints d span book ctx = do
+  cs <- gets constraints
+  mapM_ solveOne cs
+  where
+    solveOne (Constr t1 t2) = do
+      s <- gets subst
+      t1' <- applySubst d s t1
+      t2' <- applySubst d s t2
+      unifyTerm d span book ctx t1' t2'
 
--- Run unification: takes constraints and a term, returns the solved term and substitution
-runUnify :: Int -> Span -> Book -> Ctx -> [Constraint] -> Term -> Int -> Result (Term, Subst)
-runUnify d span book ctx constraints term idx = do
-  let initialState = UnifyState M.empty idx d
-  case runState (runExceptT (unify d span book ctx constraints term)) initialState of
-    (Left err, finalState) -> trace ("failed " ++ show term ++ " || " ++ show (subst finalState)) $  Fail err
-    (Right t, finalState) -> trace ("success " ++ show term) $ Done (t, subst finalState)
+-- Add this after your other helper functions
+softFail :: Span -> Book -> Ctx -> Maybe String -> TypeM Term
+softFail span book ctx msg = do
+  gathering <- gets gatherOnly
+  if gathering
+    then freshMeta "unknown"
+    else throwError (CantInfer span (normalCtx book ctx) msg)
 
--- Main unification function: solves constraints and applies substitutions
-unify :: Int -> Span -> Book -> Ctx -> [Constraint] -> Term -> UnifyM Term
-unify d span book ctx constraints term = do
-  subst <- unifyConstraints d span book ctx constraints
-  applySubst d subst term
-
--- Solve a list of constraints, building a substitution
-unifyConstraints :: Int -> Span -> Book -> Ctx -> [Constraint] -> UnifyM Subst
-unifyConstraints d span book ctx constraints = do
-  subst <- gets subst
-  foldM (unifyOne d span book ctx) subst constraints
-
--- Solve a single constraint, updating the substitution
-unifyOne :: Int -> Span -> Book -> Ctx -> Subst -> Constraint -> UnifyM Subst
-unifyOne d span book ctx subst (Constr t1 t2) = do
-  t1' <- applySubst d subst t1
-  t2' <- applySubst d subst t2
-  unifyTerm d span book ctx t1' t2'
-
--- Unify two terms, returning an updated substitution
-unifyTerm :: Int -> Span -> Book -> Ctx -> Term -> Term -> UnifyM Subst
+-- Unify two terms, updating the substitution map
+unifyTerm :: Int -> Span -> Book -> Ctx -> Term -> Term -> TypeM ()
 unifyTerm d span book ctx t1 t2 = case (force book t1, force book t2) of
   -- Base case: equal terms
-  (t1', t2') | equal 0 book t1' t2' -> gets subst
+  (t1', t2') | equal 0 book t1' t2' -> return ()
   -- Metavariable cases
   (Var k@('?':_) i, t) | not (k `S.member` freeVars S.empty t) -> do
     occursCheck span book ctx k t
@@ -326,24 +316,24 @@ unifyTerm d span book ctx t1 t2 = case (force book t1, force book t2) of
     addSubst k t
   -- Structural decomposition
   (All a1 b1, All a2 b2) -> do
-    subst' <- unifyOne d span book ctx M.empty (Constr a1 a2)
+    unifyTerm d span book ctx a1 a2
     x <- freshMeta "x"
-    unifyOne d span book ctx subst' (Constr (App b1 x) (App b2 x))
+    unifyTerm d span book ctx (App b1 x) (App b2 x)
   (App f1 x1, App f2 x2) -> do
-    subst' <- unifyOne d span book ctx M.empty (Constr f1 f2)
-    unifyOne d span book ctx subst' (Constr x1 x2)
+    unifyTerm d span book ctx f1 f2
+    unifyTerm d span book ctx x1 x2
   -- Placeholder for complex cases (e.g., App ?k x ≡ t)
-  _ -> trace ("failed to unify term " ++ show t1 ++ " and " ++ show t2) $ throwError $ CantInfer span (normalCtx book ctx)
+  _ -> throwError $ CantInfer span (normalCtx book ctx)
     (Just $ "Unsolvable constraint: " ++ show t1 ++ " == " ++ show t2)
 
-applySubst :: Int -> Subst -> Term -> UnifyM Term
+applySubst :: Int -> Subst -> Term -> TypeM Term
 applySubst d subst term = case term of
   Var k@('?':_) i -> case (M.lookup k subst) of
     Just term' -> 
-      trace (show term ++ " -> " ++ show term' ++ " || under " ++ show subst) $ 
+      -- trace (show term ++ " -> " ++ show term' ++ " || under " ++ show subst) $ 
       applySubst d subst term'
     Nothing    -> 
-      trace (show term ++ " -> " ++ show term ++ " || under " ++ show subst) $ 
+      -- trace (show term ++ " -> " ++ show term ++ " || under " ++ show subst) $ 
       return term
   Var k i -> return term
   Ref k i -> return term
@@ -397,7 +387,7 @@ applySubst d subst term = case term of
     a' <- applySubst d subst a
     b' <- applySubst d subst b
     return $
-      trace (show (All a b) ++ " -> " ++ show (All a' b') ++ " under " ++ show subst) $ 
+      -- trace (show (All a b) ++ " -> " ++ show (All a' b') ++ " under " ++ show subst) $ 
       All a' b'
   Lam k mt b -> do
     mt' <- traverse (applySubst d subst) mt
@@ -422,341 +412,358 @@ applySubst d subst term = case term of
   Frk l a b -> Frk <$> applySubst d subst l <*> applySubst d subst a <*> applySubst d subst b
   IO t -> IO <$> applySubst d subst t
 
-inferLetVarType :: Int -> Span -> Book -> Ctx -> Term -> (Term -> Term) -> Int -> Result Term
-inferLetVarType d span book ctx v f idx = do
-  let vMeta = Var ("?" ++ show idx ++ "_type") idx
-  let new_ctx = extend ctx "tmp" (Var "tmp" d) vMeta
-  (fT, f_constraints, idx1) <- inferGo (d+1) span book new_ctx (f (Var "tmp" d)) (idx-1)
-  (vT, v_constraints, idx2) <- inferGo d span book ctx v idx1
-  (res, subst) <- runUnify d span book ctx (Constr vT vMeta : v_constraints ++ f_constraints) vMeta idx2
-  return res
+inferLetVarType :: Int -> Span -> Book -> Ctx -> Term -> (Term -> Term) -> Result Term
+inferLetVarType d span book ctx v f = 
+  case runState (runExceptT computation) initialState of
+    (Left err, _) -> Fail err
+    (Right t, _) -> Done t
+  where
+    initialState = TypeState [] M.empty (-1) False
+    computation = do
+      vMeta <- freshMeta "vartype"
+      let new_ctx = extend ctx "tmp" (Var "tmp" d) vMeta
+      
+      -- Set gathering mode for body exploration
+      modify (\s -> s { gatherOnly = True })
+      _ <- inferGo (d+1) span book new_ctx (f (Var "tmp" d))
+      modify (\s -> s { gatherOnly = False })
+      
+      -- Try to infer v normally (non-gathering mode)
+      vT <- inferGo d span book ctx v
+      addConstraint (Constr vT vMeta)
+      
+      solveConstraints d span book ctx
+      s <- gets subst
+      applySubst d s vMeta
 
 -- -- Main inference function that will apply constraints at the end
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
-infer d span book ctx term = do
-  (typeWithMetas, constraints, idx1) <- inferGo d span book ctx term (-1)
-  (solvedType, _) <- runUnify d span book ctx constraints typeWithMetas idx1
-  if any (\case ('?':_) -> True; _ -> False) (S.toList (freeVars S.empty solvedType))
-    then Fail $ CantInfer span (normalCtx book ctx) (Just "Unresolved metavariables remain")
-    else Done solvedType
-
-
--- -- Main inference function that will apply constraints at the end
--- infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
--- infer d span book ctx term = do
---   (typeWithMetas, constraints, _) <- inferGo d span book ctx term (-1)
---
---   -- Apply constraints to solve metavariables
---   (solvedType, remainingConstraints) <- applyConstraints d span book ctx constraints typeWithMetas (-1)
---
---   -- Check if any metavariables remain unsolved
---   if any (\case ('?':_) -> True; _ -> False) (S.toList (freeVars S.empty solvedType))
---   then Fail $ CantInfer span (normalCtx book ctx) Nothing
---   else return solvedType
-
+infer d span book ctx term = 
+  case runState (runExceptT computation) initialState of
+    (Left err, _) -> Fail err
+    (Right t, _)  -> Done t
+  where
+    initialState = TypeState [] M.empty (-1) False
+    computation = do
+      typeWithMetas <- inferGo d span book ctx term
+      solveConstraints d span book ctx
+      s <- gets subst
+      finalType <- applySubst d s typeWithMetas
+      if any (\case ('?':_) -> True; _ -> False) (S.toList (freeVars S.empty finalType))
+        then throwError $ CantInfer span (normalCtx book ctx) (Just "Unresolved metavariables remain")
+        else return finalType
 
 -- The core inference that generates constraints
-inferGo :: Int -> Span -> Book -> Ctx -> Term -> Int -> Result (Term, [Constraint], Int)
-inferGo d span book@(Book defs names) ctx term idx = case term of
+inferGo :: Int -> Span -> Book -> Ctx -> Term -> TypeM Term
+inferGo d span book@(Book defs names) ctx term = case term of
 
-  -- Variables
+  -- Variables - hard error, must be in context
   Var k i -> do
     let Ctx ks = ctx
     if i < length ks && i >= 0
-      then let (_, _, typ) = ks !! i in return (typ, [], idx)
-      else Fail $ CantInfer span (normalCtx book ctx) Nothing
+      then let (_, _, typ) = ks !! i in return typ
+      else throwError (CantInfer span (normalCtx book ctx) Nothing)
 
-  -- References
-  Ref k i -> do
-    case getDefn book k of
-      Just (_, _, typ) -> return (typ, [], idx)
-      Nothing -> Fail $ Undefined span (normalCtx book ctx) k Nothing
+  -- References - hard error if undefined
+  Ref k i -> case getDefn book k of
+    Just (_, _, typ) -> return typ
+    Nothing -> throwError (Undefined span (normalCtx book ctx) k Nothing)
 
   -- Sub
-  Sub x -> inferGo d span book ctx x idx
+  Sub x -> inferGo d span book ctx x
 
   -- Let with type annotation
   Let k (Just t) v f -> do
-    (tT, t_constraints, idx1) <- inferGo d span book ctx t idx
-    (vT, v_constraints, idx2) <- inferGo d span book ctx v idx1
+    tT <- inferGo d span book ctx t
+    addConstraint (Constr tT Set)
+    vT <- inferGo d span book ctx v
+    addConstraint (Constr vT t)
     let new_ctx = extend ctx k (Var k d) t
-    (fT, f_constraints, idx3) <- inferGo (d+1) span book new_ctx (f (Var k d)) idx2
-    return (fT, 
-            Constr tT Set : Constr vT t : t_constraints ++ v_constraints ++ f_constraints,
-            idx3)
+    inferGo (d+1) span book new_ctx (f (Var k d))
 
   -- Let without type annotation
   Let k Nothing v f -> do
-    (vT, v_constraints, idx1) <- inferGo d span book ctx v idx
+    vT <- inferGo d span book ctx v
     let new_ctx = extend ctx k (Var k d) vT
-    (fT, f_constraints, idx2) <- inferGo (d+1) span book new_ctx (f (Var k d)) idx1
-    return (fT, v_constraints ++ f_constraints, idx2)
+    inferGo (d+1) span book new_ctx (f (Var k d))
 
   -- Use
-  Use k v f -> inferGo d span book ctx (f v) idx
+  Use k v f -> inferGo d span book ctx (f v)
 
-  -- Fix
-  Fix k f -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Fix - soft fail
+  Fix k f -> softFail span book ctx Nothing
 
   -- Check annotation
   Chk v t -> do
-    (tT, t_constraints, idx1) <- inferGo d span book ctx t idx
-    (vT, v_constraints, idx2) <- inferGo d span book ctx v idx1
-    return (t, 
-            Constr tT Set : Constr vT t : t_constraints ++ v_constraints,
-            idx2)
+    tT <- inferGo d span book ctx t
+    addConstraint (Constr tT Set)
+    vT <- inferGo d span book ctx v
+    addConstraint (Constr vT t)
+    return t
 
-  -- Trust
-  Tst _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Trust - soft fail
+  Tst _ -> softFail span book ctx Nothing
 
   -- Set
-  Set -> return (Set, [], idx)
+  Set -> return Set
 
   -- Empty type
-  Emp -> return (Set, [], idx)
+  Emp -> return Set
 
-  -- Empty eliminator
-  EmpM -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Empty eliminator - soft fail
+  EmpM -> softFail span book ctx Nothing
 
   -- Unit type
-  Uni -> return (Set, [], idx)
+  Uni -> return Set
 
   -- Unit value
-  One -> return (Uni, [], idx)
+  One -> return Uni
 
-  -- Unit eliminator
-  UniM f -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Unit eliminator - soft fail
+  UniM f -> softFail span book ctx Nothing
 
   -- Bool type
-  Bit -> return (Set, [], idx)
+  Bit -> return Set
 
   -- Bool false
-  Bt0 -> return (Bit, [], idx)
+  Bt0 -> return Bit
 
   -- Bool true
-  Bt1 -> return (Bit, [], idx)
+  Bt1 -> return Bit
 
-  -- Bool eliminator
-  BitM f t -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Bool eliminator - soft fail
+  BitM f t -> softFail span book ctx Nothing
 
   -- Nat type
-  Nat -> return (Set, [], idx)
+  Nat -> return Set
 
   -- Nat zero
-  Zer -> return (Nat, [], idx)
+  Zer -> return Nat
 
   -- Nat successor
   Suc n -> do
-    (nT, n_constraints, idx1) <- inferGo d span book ctx n idx
-    return (Nat, Constr nT Nat : n_constraints, idx1)
+    nT <- inferGo d span book ctx n
+    addConstraint (Constr nT Nat)
+    return Nat
 
-  -- Nat eliminator
-  NatM z s -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Nat eliminator - soft fail
+  NatM z s -> softFail span book ctx Nothing
 
   -- IO type
   IO t -> do
-    (tT, t_constraints, idx1) <- inferGo d span book ctx t idx
-    return (Set, Constr tT Set : t_constraints, idx1)
+    tT <- inferGo d span book ctx t
+    addConstraint (Constr tT Set)
+    return Set
 
   -- List type
   Lst t -> do
-    (tT, t_constraints, idx1) <- inferGo d span book ctx t idx
-    return (Set, Constr tT Set : t_constraints, idx1)
+    tT <- inferGo d span book ctx t
+    addConstraint (Constr tT Set)
+    return Set
 
-  -- List nil
-  Nil -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- List nil - soft fail but we know it's a list
+  Nil -> do
+    elemType <- freshMeta "elem"
+    return (Lst elemType)
 
-  -- List cons
-  Con h t -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- List cons - soft fail but gather constraints
+  Con h t -> do
+    hT <- inferGo d span book ctx h
+    tT <- inferGo d span book ctx t
+    case force book tT of
+      Lst elemT -> do
+        addConstraint (Constr hT elemT)
+        return tT
+      _ -> do
+        elemType <- freshMeta "elem"
+        addConstraint (Constr tT (Lst elemType))
+        addConstraint (Constr hT elemType)
+        return (Lst elemType)
 
-  -- List eliminator
-  LstM n c -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- List eliminator - soft fail
+  LstM n c -> softFail span book ctx Nothing
 
   -- Enum type
-  Enu s -> return (Set, [], idx)
+  Enu s -> return Set
 
   -- Enum symbol
   Sym s -> do
     let bookEnums = [ Enu tags | (k, (_, (Sig (Enu tags) _), Set)) <- M.toList defs ]
     case find isEnuWithTag bookEnums of
-      Just t -> return (t, [], idx)
-      Nothing -> Fail $ Undefined span (normalCtx book ctx) ("@" ++ s) Nothing
+      Just t -> return t
+      Nothing -> throwError (Undefined span (normalCtx book ctx) ("@" ++ s) Nothing)
     where
       isEnuWithTag (Enu tags) = s `elem` tags
       isEnuWithTag _ = False
 
-  -- Enum eliminator
-  EnuM cs e -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Enum eliminator - soft fail
+  EnuM cs e -> softFail span book ctx Nothing
 
   -- Sigma type
   Sig a b -> do
-    (aT, a_constraints, idx1) <- inferGo d span book ctx a idx
-    (bT, b_constraints, idx2) <- inferGo d span book ctx b idx1
-    return (Set, 
-            Constr aT Set : Constr bT (All a (Lam "_" Nothing (\_ -> Set))) : 
-            a_constraints ++ b_constraints,
-            idx2)
+    aT <- inferGo d span book ctx a
+    addConstraint (Constr aT Set)
+    bT <- inferGo d span book ctx b
+    addConstraint (Constr bT (All a (Lam "_" Nothing (\_ -> Set))))
+    return Set
 
   -- Tuple
   Tup a b -> do
-    (aT, a_constraints, idx1) <- inferGo d span book ctx a idx
-    (bT, b_constraints, idx2) <- inferGo d span book ctx b idx1
-    return (Sig aT (Lam "_" Nothing (\_ -> bT)),
-            a_constraints ++ b_constraints,
-            idx2)
+    aT <- inferGo d span book ctx a
+    bT <- inferGo d span book ctx b
+    return (Sig aT (Lam "_" Nothing (\_ -> bT)))
 
-  -- Sigma eliminator
-  SigM f -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Sigma eliminator - soft fail
+  SigM f -> softFail span book ctx Nothing
 
   -- Pi type
   All a b -> do
-    (aT, a_constraints, idx1) <- inferGo d span book ctx a idx
-    (bT, b_constraints, idx2) <- inferGo d span book ctx b idx1
-    return (Set, 
-            Constr aT Set : Constr bT (All a (Lam "_" Nothing (\_ -> Set))) : 
-            a_constraints ++ b_constraints,
-            idx2)
+    aT <- inferGo d span book ctx a
+    addConstraint (Constr aT Set)
+    bT <- inferGo d span book ctx b
+    addConstraint (Constr bT (All a (Lam "_" Nothing (\_ -> Set))))
+    return Set
 
   -- Lambda with type annotation
   Lam k (Just t) body -> do
-    (tT, t_constraints, idx1) <- inferGo d span book ctx t idx
+    tT <- inferGo d span book ctx t
+    addConstraint (Constr tT Set)
     let new_ctx = extend ctx k (Var k d) t
-    (bodyType, body_constraints, idx2) <- inferGo (d+1) span book new_ctx (body (Var k d)) idx1
-    return (All t (Lam k (Just t) (\v -> bindVarByIndex d v bodyType)),
-            Constr tT Set : t_constraints ++ body_constraints,
-            idx2)
+    bodyType <- inferGo (d+1) span book new_ctx (body (Var k d))
+    return (All t (Lam k (Just t) (\v -> bindVarByIndex d v bodyType)))
 
   -- Lambda without type annotation
   Lam k Nothing body -> do
-    let argMeta = Var ("?" ++ k) idx
+    argMeta <- freshMeta k
     let new_ctx = extend ctx k (Var k d) argMeta
-    (bodyType, body_constraints, idx1) <- inferGo (d+1) span book new_ctx (body (Var k d)) (idx-1)
-    return (All argMeta (Lam k Nothing (\v -> bindVarByIndex d v bodyType)),
-            body_constraints,
-            idx1)
+    bodyType <- inferGo (d+1) span book new_ctx (body (Var k d))
+    return (All argMeta (Lam k Nothing (\v -> bindVarByIndex d v bodyType)))
 
   -- Application
   App f x -> do
-    (fT, f_constraints, idx1) <- inferGo d span book ctx f idx
+    fT <- inferGo d span book ctx f
     case force book fT of
       All aT bT -> do
-        (xT, x_constraints, idx2) <- inferGo d span book ctx x idx1
+        xT <- inferGo d span book ctx x
+        addConstraint (Constr xT aT)
         case bT of
-          Lam _ _ body -> return (body x, Constr xT aT : f_constraints ++ x_constraints, idx2)
-          _ -> return (App bT x, Constr xT aT : f_constraints ++ x_constraints, idx2)
+          Lam _ _ body -> return (body x)
+          _ -> return (App bT x)
       _ -> do
         -- Function type unknown, create metavariables
-        (xT, x_constraints, idx2) <- inferGo d span book ctx x idx1
-        let resultMeta = Var "?result" (idx2-1)
-        let funBodyMeta = Var "?funbody" (idx2-2)
-        return (resultMeta,
-                f_constraints ++ x_constraints ++ 
-                [Constr fT (All xT funBodyMeta), 
-                 Constr resultMeta (App funBodyMeta x)],
-                idx2-2)
+        xT <- inferGo d span book ctx x
+        resultMeta <- freshMeta "result"
+        funBodyMeta <- freshMeta "funbody"
+        addConstraint (Constr fT (All xT funBodyMeta))
+        addConstraint (Constr resultMeta (App funBodyMeta x))
+        return resultMeta
 
   -- Equality type
   Eql t a b -> do
-    (tT, t_constraints, idx1) <- inferGo d span book ctx t idx
-    (aT, a_constraints, idx2) <- inferGo d span book ctx a idx1
-    (bT, b_constraints, idx3) <- inferGo d span book ctx b idx2
-    return (Set,
-            [Constr tT Set, Constr aT t, Constr bT t] ++ 
-            t_constraints ++ a_constraints ++ b_constraints,
-            idx3)
+    tT <- inferGo d span book ctx t
+    addConstraint (Constr tT Set)
+    aT <- inferGo d span book ctx a
+    addConstraint (Constr aT t)
+    bT <- inferGo d span book ctx b
+    addConstraint (Constr bT t)
+    return Set
 
-  -- Refl
-  Rfl -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Refl - soft fail
+  Rfl -> softFail span book ctx Nothing
 
-  -- Equality eliminator
-  EqlM f -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Equality eliminator - soft fail
+  EqlM f -> softFail span book ctx Nothing
 
   -- Rewrite
   Rwt e f -> do
-    (eT, e_constraints, idx1) <- inferGo d span book ctx e idx
+    eT <- inferGo d span book ctx e
     case force book eT of
       Eql t a b -> do
         let rewrittenCtx = rewriteCtx d book a b ctx
-        (fT, f_constraints, idx2) <- inferGo d span book rewrittenCtx f idx1
-        return (fT, e_constraints ++ f_constraints, idx2)
-      _ -> Fail $ TypeMismatch span (normalCtx book ctx) 
-                   (normal book (Eql (Var "_" 0) (Var "_" 0) (Var "_" 0))) 
-                   (normal book eT) Nothing
+        inferGo d span book rewrittenCtx f
+      _ -> do
+        let eqlType = Eql (Var "_" 0) (Var "_" 0) (Var "_" 0)
+        throwError (TypeMismatch span (normalCtx book ctx) (normal book eqlType) (normal book eT) Nothing)
 
   -- Location
-  Loc l t -> inferGo d l book ctx t idx
+  Loc l t -> inferGo d l book ctx t
 
-  -- Erasure
-  Era -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Erasure - soft fail
+  Era -> softFail span book ctx Nothing
 
-  -- Sup
-  Sup l a b -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Sup - soft fail
+  Sup l a b -> softFail span book ctx Nothing
 
-  -- Sup eliminator
-  SupM l f -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Sup eliminator - soft fail
+  SupM l f -> softFail span book ctx Nothing
 
-  -- Fork
-  Frk l a b -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Fork - soft fail
+  Frk l a b -> softFail span book ctx Nothing
 
-  -- Met (already used metavariables)
-  Met n t c -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+  -- Met - soft fail
+  Met n t c -> softFail span book ctx Nothing
 
   -- Numeric type
-  Num t -> return (Set, [], idx)
+  Num t -> return Set
 
   -- Numeric values
-  Val (U64_V v) -> return (Num U64_T, [], idx)
-  Val (I64_V v) -> return (Num I64_T, [], idx)
-  Val (F64_V v) -> return (Num F64_T, [], idx)
-  Val (CHR_V v) -> return (Num CHR_T, [], idx)
+  Val (U64_V v) -> return (Num U64_T)
+  Val (I64_V v) -> return (Num I64_T)
+  Val (F64_V v) -> return (Num F64_T)
+  Val (CHR_V v) -> return (Num CHR_T)
 
   -- Binary operations
   Op2 op a b -> do
-    (aT, a_constraints, idx1) <- inferGo d span book ctx a idx
-    (bT, b_constraints, idx2) <- inferGo d span book ctx b idx1
+    aT <- inferGo d span book ctx a
+    bT <- inferGo d span book ctx b
     case inferOp2Type d span book ctx op aT bT of
-      Done resultType -> return (resultType, a_constraints ++ b_constraints, idx2)
-      Fail e -> Fail e
+      Done resultType -> return resultType
+      Fail e -> throwError e
 
   -- Unary operations
   Op1 op a -> do
-    (aT, a_constraints, idx1) <- inferGo d span book ctx a idx
+    aT <- inferGo d span book ctx a
     case inferOp1Type d span book ctx op aT of
-      Done resultType -> return (resultType, a_constraints, idx1)
-      Fail e -> Fail e
+      Done resultType -> return resultType
+      Fail e -> throwError e
 
   -- Primitives
-  Pri U64_TO_CHAR -> return (All (Num U64_T) (Lam "x" Nothing (\_ -> Num CHR_T)), [], idx)
-  Pri CHAR_TO_U64 -> return (All (Num CHR_T) (Lam "x" Nothing (\_ -> Num U64_T)), [], idx)
-  Pri HVM_INC -> Fail $ CantInfer span (normalCtx book ctx) Nothing
-  Pri HVM_DEC -> Fail $ CantInfer span (normalCtx book ctx) Nothing
-  Pri IO_PURE -> return (All Set (Lam "A" (Just Set) (\a -> 
-                           All a (Lam "x" (Just a) (\_ -> IO a)))), [], idx)
-  Pri IO_BIND -> return (All Set (Lam "A" (Just Set) (\a ->
-                           All Set (Lam "B" (Just Set) (\b ->
-                             All (IO a) (Lam "m" (Just (IO a)) (\_ ->
-                               All (All a (Lam "_" (Just a) (\_ -> IO b))) 
-                                   (Lam "f" Nothing (\_ -> IO b)))))))), [], idx)
-  Pri IO_PRINT -> return (All (Lst (Num CHR_T)) (Lam "s" Nothing (\_ -> IO Uni)), [], idx)
-  Pri IO_PUTC -> return (All (Num CHR_T) (Lam "c" Nothing (\_ -> IO Uni)), [], idx)
-  Pri IO_GETC -> return (IO (Num CHR_T), [], idx)
-  Pri IO_READ_FILE -> return (All (Lst (Num CHR_T)) 
-                               (Lam "path" Nothing (\_ -> IO (Lst (Num CHR_T)))), [], idx)
-  Pri IO_WRITE_FILE -> return (All (Lst (Num CHR_T)) (Lam "path" Nothing (\_ ->
-                                 All (Lst (Num CHR_T)) (Lam "content" Nothing (\_ ->
-                                   IO Uni)))), [], idx)
+  Pri U64_TO_CHAR -> return (All (Num U64_T) (Lam "x" Nothing (\_ -> Num CHR_T)))
+  Pri CHAR_TO_U64 -> return (All (Num CHR_T) (Lam "x" Nothing (\_ -> Num U64_T)))
+  Pri HVM_INC -> softFail span book ctx Nothing
+  Pri HVM_DEC -> softFail span book ctx Nothing
+  Pri IO_PURE -> do
+    let aType = Lam "A" (Just Set) (\a -> All a (Lam "x" (Just a) (\_ -> IO a)))
+    return (All Set aType)
+  Pri IO_BIND -> do
+    let aType = Lam "A" (Just Set) (\a -> 
+                  All Set (Lam "B" (Just Set) (\b ->
+                    All (IO a) (Lam "m" (Just (IO a)) (\_ ->
+                      All (All a (Lam "_" (Just a) (\_ -> IO b))) 
+                          (Lam "f" Nothing (\_ -> IO b)))))))
+    return (All Set aType)
+  Pri IO_PRINT -> return (All (Lst (Num CHR_T)) (Lam "s" Nothing (\_ -> IO Uni)))
+  Pri IO_PUTC -> return (All (Num CHR_T) (Lam "c" Nothing (\_ -> IO Uni)))
+  Pri IO_GETC -> return (IO (Num CHR_T))
+  Pri IO_READ_FILE -> do
+    let pathType = Lst (Num CHR_T)
+    return (All pathType (Lam "path" Nothing (\_ -> IO pathType)))
+  Pri IO_WRITE_FILE -> do
+    let strType = Lst (Num CHR_T)
+    return (All strType (Lam "path" Nothing (\_ ->
+              All strType (Lam "content" Nothing (\_ -> IO Uni)))))
 
   -- Log
   Log s x -> do
-    (sT, s_constraints, idx1) <- inferGo d span book ctx s idx
-    (xT, x_constraints, idx2) <- inferGo d span book ctx x idx1
-    return (xT, 
-            Constr sT (Lst (Num CHR_T)) : s_constraints ++ x_constraints,
-            idx2)
+    sT <- inferGo d span book ctx s
+    addConstraint (Constr sT (Lst (Num CHR_T)))
+    inferGo d span book ctx x
 
-  -- Pattern
-  Pat _ _ _ -> Fail $ Unsupported span (normalCtx book ctx) 
-                      (Just "Sugared Pat constructors not supported in type checking")
+  -- Pattern - hard error, not supported
+  Pat _ _ _ -> do
+    let nctx = normalCtx book ctx
+    let msg = Just "Pat not supported"
+    throwError (Unsupported span nctx msg)
 
 -- Infer the result type of a binary numeric operation
 inferOp2Type :: Int -> Span -> Book -> Ctx -> NOp2 -> Term -> Term -> Result Term
@@ -878,8 +885,8 @@ check d span book ctx term      goal =
         Nothing -> do
           -- t <- infer d span book ctx v
           -- vT <- inferLetVarType d span book ctx v f (-1)
-          t <- inferLetVarType d span book ctx v f (-1)
-          t' <- trace ("AAA " ++ show t) $ check d span book ctx (reduceEtas d span book t) Set
+          t <- inferLetVarType d span book ctx v f
+          t' <- check d span book ctx (reduceEtas d span book t) Set
           v' <- cutChk <$> check d span book ctx v t'
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
           return $ Let k (Just t') v' (\x -> bindVarByName k x f')
