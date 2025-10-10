@@ -81,6 +81,76 @@ import Debug.Trace
 import Data.Maybe (isJust, fromJust, fromMaybe)
 import Control.Applicative
 
+expandElimApps :: Int -> Span -> Book -> Term -> Term
+expandElimApps d span book term = case term of
+  App f x -> case (cut f, cut x) of
+    -- SigM case: expand when applied to a tuple
+    (SigM g, Tup a b) -> 
+      expandElimApps d span book (App (App g a) b)
+    
+    -- Default: recurse on both parts
+    _ -> App (expandElimApps d span book f) (expandElimApps d span book x)
+  
+  -- Recursive cases for all other constructors
+  Loc l t       -> Loc l (expandElimApps d l book t)
+  Lam k mty f   -> Lam k (fmap (expandElimApps d span book) mty) (\x -> expandElimApps (d+1) span book (f x))
+  Fix n f       -> Fix n (\v -> expandElimApps (d+1) span book (f v))
+  Let n mty v f -> Let n (fmap (expandElimApps d span book) mty) 
+                         (expandElimApps d span book v) 
+                         (\v' -> expandElimApps (d+1) span book (f v'))
+  Use n v f     -> Use n (expandElimApps d span book v) (\v' -> expandElimApps (d+1) span book (f v'))
+  Chk t ty      -> Chk (expandElimApps d span book t) (expandElimApps d span book ty)
+  UniM f        -> UniM (expandElimApps d span book f)
+  BitM f g      -> BitM (expandElimApps d span book f) (expandElimApps d span book g)
+  Suc t         -> Suc (expandElimApps d span book t)
+  NatM z s      -> NatM (expandElimApps d span book z) (expandElimApps d span book s)
+  IO t          -> IO (expandElimApps d span book t)
+  Lst ty        -> Lst (expandElimApps d span book ty)
+  Con h t       -> Con (expandElimApps d span book h) (expandElimApps d span book t)
+  LstM nil c    -> LstM (expandElimApps d span book nil) (expandElimApps d span book c)
+  EnuM cs def   -> EnuM [(s, expandElimApps d span book v) | (s,v) <- cs] (expandElimApps d span book def)
+  Op2 o a b     -> Op2 o (expandElimApps d span book a) (expandElimApps d span book b)
+  Op1 o a       -> Op1 o (expandElimApps d span book a)
+  Sig a b       -> Sig (expandElimApps d span book a) (expandElimApps d span book b)
+  Tup a b       -> Tup (expandElimApps d span book a) (expandElimApps d span book b)
+  SigM f        -> SigM (expandElimApps d span book f)
+  All a b       -> All (expandElimApps d span book a) (expandElimApps d span book b)
+  Eql ty a b    -> Eql (expandElimApps d span book ty) (expandElimApps d span book a) (expandElimApps d span book b)
+  EqlM f        -> EqlM (expandElimApps d span book f)
+  Rwt e f       -> Rwt (expandElimApps d span book e) (expandElimApps d span book f)
+  Met n ty args -> Met n (expandElimApps d span book ty) (map (expandElimApps d span book) args)
+  Sup l a b     -> Sup (expandElimApps d span book l) (expandElimApps d span book a) (expandElimApps d span book b)
+  SupM l f      -> SupM (expandElimApps d span book l) (expandElimApps d span book f)
+  Log s x       -> Log (expandElimApps d span book s) (expandElimApps d span book x)
+  Pat ss ms cs  -> Pat (map (expandElimApps d span book) ss) 
+                       [(k, expandElimApps d span book v) | (k,v) <- ms] 
+                       [(map (expandElimApps d span book) ps, expandElimApps d span book rhs) | (ps,rhs) <- cs]
+  Frk l a b     -> Frk (expandElimApps d span book l) (expandElimApps d span book a) (expandElimApps d span book b)
+  Tst x         -> Tst (expandElimApps d span book x)
+  Sub t         -> Sub (expandElimApps d span book t)
+  
+  -- Base cases (no recursion needed)
+  Var n i       -> Var n i
+  Ref n i       -> Ref n i
+  Set           -> Set
+  Emp           -> Emp
+  EmpM          -> EmpM
+  Uni           -> Uni
+  One           -> One
+  Bit           -> Bit
+  Bt0           -> Bt0
+  Bt1           -> Bt1
+  Nat           -> Nat
+  Zer           -> Zer
+  Nil           -> Nil
+  Enu ss        -> Enu ss
+  Sym s         -> Sym s
+  Num nt        -> Num nt
+  Val nv        -> Val nv
+  Rfl           -> Rfl
+  Era           -> Era
+  Pri p         -> Pri p
+
 -- Main eta-reduction function
 -- 1) Assumes the `term` at call time is completely in HOAS bind form.
 --    Otherwise, (f Var nam d) is not useful, and variable capture/shadowing can happen.
@@ -134,7 +204,12 @@ reduceEtas d span book term =
           where
           cases = map (\sym -> (sym, reduceEtas d span book $ bindVarByName nam (Sym sym) (resolveMatches span nam eta 0 sym [] (f (Var nam d))))) syms
           def = if compl
-                then reduceEtas d span book (Lam de deAnn (\q -> bindVarByName nam q (resolveMatches span nam eta (-1) "" [Sub q] (f (Var nam d)))))
+                then 
+                  -- trace ("HUM1: " ++ show (bindVarByName nam (Var nam 0) (resolveMatches span nam eta (-1) "" [Var nam 0] (f (Var nam d))))) $ 
+                  -- trace ("HUM2: " ++ show (Lam de deAnn (\q -> bindVarByName nam q (resolveMatches span nam eta (-1) "" [Sub q] (f (Var nam d)))))) $ 
+                  -- trace ("HUM3: " ++ show (reduceEtas d span book $ Lam de deAnn (\q -> bindVarByName nam q (resolveMatches span nam eta (-1) "" [Sub q] (f (Var nam d)))))) $ 
+                  reduceEtas d span book (Lam de deAnn (\q -> reduceEtas d span book $ bindVarByName nam q (resolveMatches span nam eta (-1) "" [Sub q] (f (Var nam d)))))
+                  -- reduceEtas d span book (Lam de deAnn (\q -> bindVarByName nam q (resolveMatches span nam eta (-1) "" [Sub q] (f (Var nam d)))))
                 else One
         _ -> Lam k mty (\x -> reduceEtas (d+1) span book (f x))
         -- SUPM lab -> not reduced

@@ -100,9 +100,12 @@ adjust book term = do
   npat <- desugarPats 0 noSpan chkd
   let nfrk = desugarFrks book 0 npat
   let hoas = bind nfrk
-  let etas = reduceEtas 0 noSpan book hoas
+  let elim = expandElimApps 0 noSpan book hoas
+  let etas = reduceEtas 0 noSpan book elim
+  -- let etas = reduceEtas 0 noSpan book hoas
   return $ 
     -- trace ("-hoas: " ++ show hoas) $
+    -- trace ("-elim: " ++ show elim) $
     -- trace ("-etas: " ++ show etas) $
     etas
 
@@ -117,8 +120,8 @@ annotateSplitBook book@(Book defs names) = do
     checkAndAccumulate (accDefs, accSuccess) (name, (inj, term, typ)) = do
       let checkResult = do 
             typ'  <- check 0 noSpan book (Ctx []) typ Set
-            term' <- check 0 noSpan book (Ctx []) term typ'
-            -- traceM $ "chec: " ++ show term'
+            term' <- reduceEtas 0 noSpan book <$> check 0 noSpan book (Ctx []) term typ'
+            traceM $ "chec: " ++ show term'
             return (inj, term', typ')
       case checkResult of
         Done (inj', term', typ') -> do

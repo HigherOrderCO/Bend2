@@ -121,7 +121,7 @@ showPlain ctx term = case term of
   LstM n c     -> "λ{[]:" ++ showPlain ctx n ++ ";<>:" ++ showPlain ctx c ++ "}"
 
   -- Enum
-  Enu s        -> "enum{" ++ intercalate "," (map ("&" ++) s) ++ "}"
+  Enu s        -> "enum{" ++ intercalate "," (map (("&" ++) . showName ctx) s) ++ "}"
   Sym s        -> "&" ++ showName ctx s
   EnuM cs d    -> showEnuM ctx cs d
 
@@ -167,6 +167,7 @@ showName :: ShowCtx -> String -> String
 showName ctx name
   | ctxShowFQN ctx = name
   | otherwise      = stripPrefix (ctxAmbiguous ctx) name
+  -- | otherwise      = name
 
 -- ============================================================================
 -- Binding Display Functions
@@ -176,7 +177,7 @@ showName ctx name
 showVar :: S.Set String -> String -> Int -> String
 showVar shadowed k i = case S.member k shadowed of
   True  -> k ++ "^" ++ show i
-  False -> k
+  False -> k -- ++ "^" ++ show i
 
 -- | μx. body
 showFix :: ShowCtx -> String -> Body -> String
@@ -575,8 +576,8 @@ instance Show Error where
     CantInfer span ctx hint       -> "\x1b[1mCantInfer:\x1b[0m\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     Unsupported span ctx hint     -> "\x1b[1mUnsupported:\x1b[0m\nCurrently, Bend doesn't support matching on non-var expressions.\nThis will be added later. For now, please split this definition.\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     Undefined span ctx name hint  -> "\x1b[1mUndefined:\x1b[0m " ++ name ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    TypeMismatch span ctx goal typ hint -> "\x1b[1mMismatch:\x1b[0m\n- Goal: " ++ showTerm False True goal ++ "\n- Type: " ++ showTerm False True typ ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    TermMismatch span ctx a b hint -> "\x1b[1mMismatch:\x1b[0m\n- " ++ showTerm False True a ++ "\n- " ++ showTerm False True b ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    TypeMismatch span ctx goal typ hint -> "\x1b[1mType Mismatch:\x1b[0m\n- Goal: " ++ showTerm False True goal ++ "\n- Type: " ++ showTerm False True typ ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    TermMismatch span ctx a b hint -> "\x1b[1mTerm Mismatch:\x1b[0m\n- " ++ showTerm False True a ++ "\n- " ++ showTerm False True b ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     IncompleteMatch span ctx hint -> "\x1b[1mIncompleteMatch:\x1b[0m\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     UnknownTermination term  -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
     ImportError span msg     -> "\x1b[1mImportError:\x1b[0m " ++ msg ++ show span
@@ -601,7 +602,7 @@ instance Show Ctx where
       clean _ [] = []
       clean seen ((n,l):xs)
         | n `S.member` seen = clean seen xs
-        | take 1 n == "_"   = clean seen xs
+        -- | take 1 n == "_"   = clean seen xs
         | otherwise         = (n,l) : clean (S.insert n seen) xs
 
 errorWithSpan :: Span -> String -> a

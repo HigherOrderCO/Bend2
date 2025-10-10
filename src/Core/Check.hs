@@ -1152,7 +1152,7 @@ check d span book ctx term      goal =
     (term, _) -> do
       let (fn, xs) = collectApps term []
       if isLam fn then do
-        Fail $ Unsupported span (normalCtx book ctx) Nothing
+        Fail $ Unsupported span (normalCtx book ctx) (Just $ show term ++ " :: " ++ show (force book goal))
       else do
         verify d span book ctx term goal
 

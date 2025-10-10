@@ -139,6 +139,7 @@ processFile file = do
       Fail e -> showErrAndDie e
     bookChk <- checkBook bookAdj
     runMain file bookChk
+    -- runMain file bookAdj
   case result of
     Left (BendException e) -> showErrAndDie e
     Right () -> return ()
