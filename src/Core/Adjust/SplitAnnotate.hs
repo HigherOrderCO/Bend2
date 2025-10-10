@@ -34,8 +34,9 @@
 
 module Core.Adjust.SplitAnnotate where
 
-import Control.Monad (unless)
-import Control.Monad (unless, foldM)
+import Control.Monad (unless, when, foldM)
+import Control.Monad.Except
+import Control.Monad.State
 import Data.List (find)
 import Data.Maybe (fromJust, fromMaybe, listToMaybe)
 import System.Exit (exitFailure)
@@ -121,144 +122,338 @@ isConstructorSigma _ _ = False
 -- Type Checker
 -- ------------
 
--- Apply constraints to solve metavariables
-applyConstraints :: Int -> Span -> Book -> Ctx -> [Constraint] -> Term -> Int -> Result (Term, [Constraint])
-applyConstraints d span book ctx constraints term idx = case constraints of
-  -- Base case: no more constraints
-  [] -> return (term, [])
-  
-  -- Metavariable on left side
-  (Constr (Var k@('?':_) i) val) : rest -> do
-    -- Substitute metavariable with its value
-    term' <- substInTerm i val term
-    rest' <- substInConstraints i val rest
-    applyConstraints d span book ctx rest' term' idx
-  
-  -- Metavariable on right side
-  (Constr val (Var k@('?':_) i)) : rest -> do
-    -- Substitute metavariable with its value
-    term' <- substInTerm i val term
-    rest' <- substInConstraints i val rest
-    applyConstraints d span book ctx rest' term' idx
-  
-  -- Let on either side: beta reduce
-  (Constr (Let k t v b) val) : rest ->
-    applyConstraints d span book ctx (Constr (b v) val : rest) term idx
-  
-  (Constr val (Let k t v b)) : rest ->
-    applyConstraints d span book ctx (Constr val (b v) : rest) term idx
-  
-  -- Structural decomposition: All types
-  (Constr (All a b) (All a' b')) : rest ->
-    applyConstraints d span book ctx (Constr a a' : Constr b b' : rest) term idx
-  
-  -- Structural decomposition: Applications
-  (Constr (App f x) (App f' x')) : rest ->
-    applyConstraints d span book ctx (Constr f f' : Constr x x' : rest) term idx
-  
-  -- Structural decomposition: Lambdas
-  (Constr (Lam k1 mt1 b1) (Lam k2 mt2 b2)) : rest ->
-    applyConstraints (d+1) span book ctx 
-      (Constr (b1 (Var k1 d)) (b2 (Var k2 d)) : rest) 
-      term (idx-1)
-  
-  -- Beta reduction when application meets lambda
-  (Constr a (App (Lam _ _ b) x)) : rest ->
-    applyConstraints d span book ctx (Constr a (b x) : rest) term idx
-  
-  (Constr (App (Lam _ _ b) x) a) : rest ->
-    applyConstraints d span book ctx (Constr (b x) a : rest) term idx
-  
-  -- Already equal: skip constraint
-  (Constr a b) : rest | equal d book a b ->
-    applyConstraints d span book ctx rest term idx
-  
-  -- Pattern matching constructs decomposition
-  -- NatM
-  (Constr (NatM z1 s1) (NatM z2 s2)) : rest ->
-    applyConstraints d span book ctx (Constr z1 z2 : Constr s1 s2 : rest) term idx
-  
-  -- BitM  
-  (Constr (BitM f1 t1) (BitM f2 t2)) : rest ->
-    applyConstraints d span book ctx (Constr f1 f2 : Constr t1 t2 : rest) term idx
-  
-  -- UniM
-  (Constr (UniM f1) (UniM f2)) : rest ->
-    applyConstraints d span book ctx (Constr f1 f2 : rest) term idx
-  
-  -- LstM
-  (Constr (LstM n1 c1) (LstM n2 c2)) : rest ->
-    applyConstraints d span book ctx (Constr n1 n2 : Constr c1 c2 : rest) term idx
-  
-  -- EnuM
-  (Constr (EnuM cs1 df1) (EnuM cs2 df2)) : rest | map fst cs1 == map fst cs2 -> do
-    let caseConstraints = zipWith (\(_, t1) (_, t2) -> Constr t1 t2) cs1 cs2
-    applyConstraints d span book ctx (caseConstraints ++ [Constr df1 df2] ++ rest) term idx
-  
-  -- SigM
-  (Constr (SigM f1) (SigM f2)) : rest ->
-    applyConstraints d span book ctx (Constr f1 f2 : rest) term idx
-  
-  -- SupM
-  (Constr (SupM l1 f1) (SupM l2 f2)) : rest ->
-    applyConstraints d span book ctx (Constr l1 l2 : Constr f1 f2 : rest) term idx
-  
-  -- Value types
-  (Constr (Sig a1 b1) (Sig a2 b2)) : rest ->
-    applyConstraints d span book ctx (Constr a1 a2 : Constr b1 b2 : rest) term idx
-  
-  (Constr (Tup a1 b1) (Tup a2 b2)) : rest ->
-    applyConstraints d span book ctx (Constr a1 a2 : Constr b1 b2 : rest) term idx
-  
-  (Constr (Eql t1 a1 b1) (Eql t2 a2 b2)) : rest ->
-    applyConstraints d span book ctx 
-      (Constr t1 t2 : Constr a1 a2 : Constr b1 b2 : rest) term idx
-  
-  (Constr (Lst t1) (Lst t2)) : rest ->
-    applyConstraints d span book ctx (Constr t1 t2 : rest) term idx
-  
-  (Constr (IO t1) (IO t2)) : rest ->
-    applyConstraints d span book ctx (Constr t1 t2 : rest) term idx
-  
-  (Constr (Num t1) (Num t2)) : rest | t1 == t2 ->
-    applyConstraints d span book ctx rest term idx
-  
-  -- Default: unsolvable constraint
-  (Constr a b) : rest ->
-    Fail $ CantInfer span (normalCtx book ctx) 
-      (Just $ "Unsolvable constraint: " ++ show a ++ " == " ++ show b)
+-- -- Apply constraints to solve metavariables
+-- applyConstraints :: Int -> Span -> Book -> Ctx -> [Constraint] -> Term -> Int -> Result (Term, [Constraint])
+-- applyConstraints d span book ctx constraints term idx = case constraints of
+--   -- Base case: no more constraints
+--   [] -> return (term, [])
+--
+--   -- Metavariable on left side
+--   (Constr (Var k@('?':_) i) val) : rest -> do
+--     -- Substitute metavariable with its value
+--     term' <- substInTerm i val term
+--     rest' <- substInConstraints i val rest
+--     applyConstraints d span book ctx rest' term' idx
+--
+--   -- Metavariable on right side
+--   (Constr val (Var k@('?':_) i)) : rest -> do
+--     -- Substitute metavariable with its value
+--     term' <- substInTerm i val term
+--     rest' <- substInConstraints i val rest
+--     applyConstraints d span book ctx rest' term' idx
+--
+--   -- Let on either side: beta reduce
+--   (Constr (Let k t v b) val) : rest ->
+--     applyConstraints d span book ctx (Constr (b v) val : rest) term idx
+--
+--   (Constr val (Let k t v b)) : rest ->
+--     applyConstraints d span book ctx (Constr val (b v) : rest) term idx
+--
+--   -- Structural decomposition: All types
+--   (Constr (All a b) (All a' b')) : rest ->
+--     applyConstraints d span book ctx (Constr a a' : Constr b b' : rest) term idx
+--
+--   -- Structural decomposition: Applications
+--   (Constr (App f x) (App f' x')) : rest ->
+--     applyConstraints d span book ctx (Constr f f' : Constr x x' : rest) term idx
+--
+--   -- Structural decomposition: Lambdas
+--   (Constr (Lam k1 mt1 b1) (Lam k2 mt2 b2)) : rest ->
+--     applyConstraints (d+1) span book ctx 
+--       (Constr (b1 (Var k1 d)) (b2 (Var k2 d)) : rest) 
+--       term (idx-1)
+--
+--   -- Beta reduction when application meets lambda
+--   (Constr a (App (Lam _ _ b) x)) : rest ->
+--     applyConstraints d span book ctx (Constr a (b x) : rest) term idx
+--
+--   (Constr (App (Lam _ _ b) x) a) : rest ->
+--     applyConstraints d span book ctx (Constr (b x) a : rest) term idx
+--
+--   -- Already equal: skip constraint
+--   (Constr a b) : rest | equal d book a b ->
+--     applyConstraints d span book ctx rest term idx
+--
+--   -- Pattern matching constructs decomposition
+--   -- NatM
+--   (Constr (NatM z1 s1) (NatM z2 s2)) : rest ->
+--     applyConstraints d span book ctx (Constr z1 z2 : Constr s1 s2 : rest) term idx
+--
+--   -- BitM  
+--   (Constr (BitM f1 t1) (BitM f2 t2)) : rest ->
+--     applyConstraints d span book ctx (Constr f1 f2 : Constr t1 t2 : rest) term idx
+--
+--   -- UniM
+--   (Constr (UniM f1) (UniM f2)) : rest ->
+--     applyConstraints d span book ctx (Constr f1 f2 : rest) term idx
+--
+--   -- LstM
+--   (Constr (LstM n1 c1) (LstM n2 c2)) : rest ->
+--     applyConstraints d span book ctx (Constr n1 n2 : Constr c1 c2 : rest) term idx
+--
+--   -- EnuM
+--   (Constr (EnuM cs1 df1) (EnuM cs2 df2)) : rest | map fst cs1 == map fst cs2 -> do
+--     let caseConstraints = zipWith (\(_, t1) (_, t2) -> Constr t1 t2) cs1 cs2
+--     applyConstraints d span book ctx (caseConstraints ++ [Constr df1 df2] ++ rest) term idx
+--
+--   -- SigM
+--   (Constr (SigM f1) (SigM f2)) : rest ->
+--     applyConstraints d span book ctx (Constr f1 f2 : rest) term idx
+--
+--   -- SupM
+--   (Constr (SupM l1 f1) (SupM l2 f2)) : rest ->
+--     applyConstraints d span book ctx (Constr l1 l2 : Constr f1 f2 : rest) term idx
+--
+--   -- Value types
+--   (Constr (Sig a1 b1) (Sig a2 b2)) : rest ->
+--     applyConstraints d span book ctx (Constr a1 a2 : Constr b1 b2 : rest) term idx
+--
+--   (Constr (Tup a1 b1) (Tup a2 b2)) : rest ->
+--     applyConstraints d span book ctx (Constr a1 a2 : Constr b1 b2 : rest) term idx
+--
+--   (Constr (Eql t1 a1 b1) (Eql t2 a2 b2)) : rest ->
+--     applyConstraints d span book ctx 
+--       (Constr t1 t2 : Constr a1 a2 : Constr b1 b2 : rest) term idx
+--
+--   (Constr (Lst t1) (Lst t2)) : rest ->
+--     applyConstraints d span book ctx (Constr t1 t2 : rest) term idx
+--
+--   (Constr (IO t1) (IO t2)) : rest ->
+--     applyConstraints d span book ctx (Constr t1 t2 : rest) term idx
+--
+--   (Constr (Num t1) (Num t2)) : rest | t1 == t2 ->
+--     applyConstraints d span book ctx rest term idx
+--
+--   -- Default: unsolvable constraint
+--   (Constr a b) : rest ->
+--     Fail $ CantInfer span (normalCtx book ctx) 
+--       (Just $ "Unsolvable constraint: " ++ show a ++ " == " ++ show b)
+--
+--   where
+--     -- Helper functions for substitution
+--     substInTerm :: Int -> Term -> Term -> Result Term
+--     substInTerm i val term = return $ bindVarByIndex i val term
+--
+--     substInConstraint :: Int -> Term -> Constraint -> Constraint
+--     substInConstraint i val (Constr a b) = 
+--       Constr (bindVarByIndex i val a) (bindVarByIndex i val b)
+--
+--     substInConstraints :: Int -> Term -> [Constraint] -> Result [Constraint]
+--     substInConstraints i val constraints = 
+--       return $ map (substInConstraint i val) constraints
 
-  where
-    -- Helper functions for substitution
-    substInTerm :: Int -> Term -> Term -> Result Term
-    substInTerm i val term = return $ bindVarByIndex i val term
-    
-    substInConstraint :: Int -> Term -> Constraint -> Constraint
-    substInConstraint i val (Constr a b) = 
-      Constr (bindVarByIndex i val a) (bindVarByIndex i val b)
-    
-    substInConstraints :: Int -> Term -> [Constraint] -> Result [Constraint]
-    substInConstraints i val constraints = 
-      return $ map (substInConstraint i val) constraints
 
--- Infrastructure for constraints
-data Constraint = 
-  Constr Term Term
+-- Constraint (from your code)
+data Constraint = Constr Term Term
+  -- deriving Show
 instance Show Constraint where
-  show (Constr t1 t2) = "Constraint: " ++ show t1 ++ " == " ++ show t2
+  show (Constr t1 t2) = "Constraint: " ++ show t1 ++ " === " ++ show t2
 
--- Main inference function that will apply constraints at the end
+-- Substitution maps metavariable names to terms
+type Subst = M.Map String Term
+
+-- Unification state: tracks substitutions and fresh index counter
+data UnifyState = UnifyState
+  { subst :: Subst
+  , nextIdx :: Int -- For generating fresh metavariables
+  , depth :: Int   -- For tracking binding depth
+  }
+
+-- Unification monad: uses your Result and Error types
+type UnifyM = ExceptT Error (State UnifyState)
+
+-- Add a substitution to the state
+addSubst :: String -> Term -> UnifyM Subst
+addSubst k t = do
+  s <- gets subst
+  let s' = M.insert k t s
+  modify (\state -> state { subst = s' })
+  return s'
+
+-- Occurs check to prevent infinite types
+occursCheck :: Span -> Book -> Ctx -> String -> Term -> UnifyM ()
+occursCheck span book ctx k t =
+  when (k `S.member` freeVars S.empty t) $
+    throwError $ CantInfer span (normalCtx book ctx)
+      (Just $ "Occurs check failed: " ++ k ++ " in " ++ show (normal book t))
+
+-- Generate a fresh metavariable
+freshMeta :: String -> UnifyM Term
+freshMeta prefix = do
+  s <- get
+  let idx = nextIdx s
+  put s { nextIdx = idx - 1 }
+  return $ Var ("?" ++ prefix ++ show idx) idx
+
+-- Run unification: takes constraints and a term, returns the solved term and substitution
+runUnify :: Int -> Span -> Book -> Ctx -> [Constraint] -> Term -> Int -> Result (Term, Subst)
+runUnify d span book ctx constraints term idx = do
+  let initialState = UnifyState M.empty idx d
+  case runState (runExceptT (unify d span book ctx constraints term)) initialState of
+    (Left err, finalState) -> trace ("failed " ++ show term ++ " || " ++ show (subst finalState)) $  Fail err
+    (Right t, finalState) -> trace ("success " ++ show term) $ Done (t, subst finalState)
+
+-- Main unification function: solves constraints and applies substitutions
+unify :: Int -> Span -> Book -> Ctx -> [Constraint] -> Term -> UnifyM Term
+unify d span book ctx constraints term = do
+  subst <- unifyConstraints d span book ctx constraints
+  applySubst d subst term
+
+-- Solve a list of constraints, building a substitution
+unifyConstraints :: Int -> Span -> Book -> Ctx -> [Constraint] -> UnifyM Subst
+unifyConstraints d span book ctx constraints = do
+  subst <- gets subst
+  foldM (unifyOne d span book ctx) subst constraints
+
+-- Solve a single constraint, updating the substitution
+unifyOne :: Int -> Span -> Book -> Ctx -> Subst -> Constraint -> UnifyM Subst
+unifyOne d span book ctx subst (Constr t1 t2) = do
+  t1' <- applySubst d subst t1
+  t2' <- applySubst d subst t2
+  unifyTerm d span book ctx t1' t2'
+
+-- Unify two terms, returning an updated substitution
+unifyTerm :: Int -> Span -> Book -> Ctx -> Term -> Term -> UnifyM Subst
+unifyTerm d span book ctx t1 t2 = case (force book t1, force book t2) of
+  -- Base case: equal terms
+  (t1', t2') | equal 0 book t1' t2' -> gets subst
+  -- Metavariable cases
+  (Var k@('?':_) i, t) | not (k `S.member` freeVars S.empty t) -> do
+    occursCheck span book ctx k t
+    addSubst k t
+  (t, Var k@('?':_) i) | not (k `S.member` freeVars S.empty t) -> do
+    occursCheck span book ctx k t
+    addSubst k t
+  -- Structural decomposition
+  (All a1 b1, All a2 b2) -> do
+    subst' <- unifyOne d span book ctx M.empty (Constr a1 a2)
+    x <- freshMeta "x"
+    unifyOne d span book ctx subst' (Constr (App b1 x) (App b2 x))
+  (App f1 x1, App f2 x2) -> do
+    subst' <- unifyOne d span book ctx M.empty (Constr f1 f2)
+    unifyOne d span book ctx subst' (Constr x1 x2)
+  -- Placeholder for complex cases (e.g., App ?k x ≡ t)
+  _ -> trace ("failed to unify term " ++ show t1 ++ " and " ++ show t2) $ throwError $ CantInfer span (normalCtx book ctx)
+    (Just $ "Unsolvable constraint: " ++ show t1 ++ " == " ++ show t2)
+
+applySubst :: Int -> Subst -> Term -> UnifyM Term
+applySubst d subst term = case term of
+  Var k@('?':_) i -> case (M.lookup k subst) of
+    Just term' -> 
+      trace (show term ++ " -> " ++ show term' ++ " || under " ++ show subst) $ 
+      applySubst d subst term'
+    Nothing    -> 
+      trace (show term ++ " -> " ++ show term ++ " || under " ++ show subst) $ 
+      return term
+  Var k i -> return term
+  Ref k i -> return term
+  Sub t -> Sub <$> applySubst d subst t
+  Fix k b -> do
+    b' <- applySubst (d+1) subst (b (Var k d))
+    return $ Fix k (\v -> bindVarByIndex d v b')
+  Let k mt v b -> do
+    mt' <- traverse (applySubst d subst) mt
+    v' <- applySubst d subst v
+    b' <- applySubst (d+1) subst (b (Var k d))
+    return $ Let k mt' v' (\v -> bindVarByIndex d v b')
+  Use k v b -> do
+    v' <- applySubst d subst v
+    b' <- applySubst (d+1) subst (b (Var k d))
+    return $ Use k v' (\v -> bindVarByIndex d v b')
+  Chk x t -> Chk <$> applySubst d subst x <*> applySubst d subst t
+  Tst x -> Tst <$> applySubst d subst x
+  Set -> return term
+  Emp  -> return term
+  EmpM -> return term
+  Uni -> return term
+  One -> return term
+  UniM f -> UniM <$> applySubst d subst f
+  Bit -> return term
+  Bt0 -> return term
+  Bt1 -> return term
+  BitM f t -> BitM <$> applySubst d subst f <*> applySubst d subst t
+  Nat -> return term
+  Zer -> return term
+  Suc n -> Suc <$> applySubst d subst n
+  NatM z s -> NatM <$> applySubst d subst z <*> applySubst d subst s
+  Lst t -> Lst <$> applySubst d subst t
+  Nil -> return term
+  Con h t -> Con <$> applySubst d subst h <*> applySubst d subst t
+  LstM n c -> LstM <$> applySubst d subst n <*> applySubst d subst c
+  Enu s -> return term
+  Sym s -> return term
+  EnuM cs d' -> EnuM <$> mapM (\(s, t) -> (s,) <$> applySubst d subst t) cs <*> applySubst d subst d'
+  Num nt -> return term
+  Val nv -> return term
+  Op2 op a b -> Op2 op <$> applySubst d subst a <*> applySubst d subst b
+  Op1 op a -> Op1 op <$> applySubst d subst a
+  Sig a b -> do
+    a' <- applySubst d subst a
+    b' <- applySubst d subst b
+    return $ Sig a' b'
+  Tup a b -> Tup <$> applySubst d subst a <*> applySubst d subst b
+  SigM f -> SigM <$> applySubst d subst f
+  All a b -> do
+    a' <- applySubst d subst a
+    b' <- applySubst d subst b
+    return $
+      trace (show (All a b) ++ " -> " ++ show (All a' b') ++ " under " ++ show subst) $ 
+      All a' b'
+  Lam k mt b -> do
+    mt' <- traverse (applySubst d subst) mt
+    b'  <- applySubst (d+1) subst (b (Var k d))
+    return $ Lam k mt' (\v -> bindVarByIndex d v b')
+  App f x -> App <$> applySubst d subst f <*> applySubst d subst x
+  Eql t a b -> Eql <$> applySubst d subst t <*> applySubst d subst a <*> applySubst d subst b
+  Rfl -> return term
+  EqlM f -> EqlM <$> applySubst d subst f
+  Rwt e f -> Rwt <$> applySubst d subst e <*> applySubst d subst f
+  Met n t ctx -> Met n <$> applySubst d subst t <*> mapM (applySubst d subst) ctx
+  Era -> return term
+  Sup l a b -> Sup <$> applySubst d subst l <*> applySubst d subst a <*> applySubst d subst b
+  SupM l f -> SupM <$> applySubst d subst l <*> applySubst d subst f
+  Loc l t -> Loc l <$> applySubst d subst t
+  Log s x -> Log <$> applySubst d subst s <*> applySubst d subst x
+  Pri pf -> return term
+  Pat ts ms cs -> Pat
+    <$> mapM (applySubst d subst) ts
+    <*> mapM (\(s, t) -> (s,) <$> applySubst d subst t) ms
+    <*> mapM (\(ps, t) -> (,) <$> mapM (applySubst d subst) ps <*> applySubst d subst t) cs
+  Frk l a b -> Frk <$> applySubst d subst l <*> applySubst d subst a <*> applySubst d subst b
+  IO t -> IO <$> applySubst d subst t
+
+inferLetVarType :: Int -> Span -> Book -> Ctx -> Term -> (Term -> Term) -> Int -> Result Term
+inferLetVarType d span book ctx v f idx = do
+  let vMeta = Var ("?" ++ show idx ++ "_type") idx
+  let new_ctx = extend ctx "tmp" (Var "tmp" d) vMeta
+  (fT, f_constraints, idx1) <- inferGo (d+1) span book new_ctx (f (Var "tmp" d)) (idx-1)
+  (vT, v_constraints, idx2) <- inferGo d span book ctx v idx1
+  (res, subst) <- runUnify d span book ctx (Constr vT vMeta : v_constraints ++ f_constraints) vMeta idx2
+  return res
+
+-- -- Main inference function that will apply constraints at the end
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
 infer d span book ctx term = do
-  (typeWithMetas, constraints, _) <- inferGo d span book ctx term (-1)
-  
-  -- Apply constraints to solve metavariables
-  (solvedType, remainingConstraints) <- applyConstraints d span book ctx constraints typeWithMetas (-1)
-  
-  -- Check if any metavariables remain unsolved
+  (typeWithMetas, constraints, idx1) <- inferGo d span book ctx term (-1)
+  (solvedType, _) <- runUnify d span book ctx constraints typeWithMetas idx1
   if any (\case ('?':_) -> True; _ -> False) (S.toList (freeVars S.empty solvedType))
-  then Fail $ CantInfer span (normalCtx book ctx) Nothing
-  else return solvedType
+    then Fail $ CantInfer span (normalCtx book ctx) (Just "Unresolved metavariables remain")
+    else Done solvedType
+
+
+-- -- Main inference function that will apply constraints at the end
+-- infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
+-- infer d span book ctx term = do
+--   (typeWithMetas, constraints, _) <- inferGo d span book ctx term (-1)
+--
+--   -- Apply constraints to solve metavariables
+--   (solvedType, remainingConstraints) <- applyConstraints d span book ctx constraints typeWithMetas (-1)
+--
+--   -- Check if any metavariables remain unsolved
+--   if any (\case ('?':_) -> True; _ -> False) (S.toList (freeVars S.empty solvedType))
+--   then Fail $ CantInfer span (normalCtx book ctx) Nothing
+--   else return solvedType
+
 
 -- The core inference that generates constraints
 inferGo :: Int -> Span -> Book -> Ctx -> Term -> Int -> Result (Term, [Constraint], Int)
@@ -681,12 +876,13 @@ check d span book ctx term      goal =
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
           return $ Let k (Just t') v' (\x -> bindVarByName k x f')
         Nothing -> do
-          t <- infer d span book ctx v
-          t' <- check d span book ctx (reduceEtas d span book t) Set
+          -- t <- infer d span book ctx v
+          -- vT <- inferLetVarType d span book ctx v f (-1)
+          t <- inferLetVarType d span book ctx v f (-1)
+          t' <- trace ("AAA " ++ show t) $ check d span book ctx (reduceEtas d span book t) Set
           v' <- cutChk <$> check d span book ctx v t'
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
           return $ Let k (Just t') v' (\x -> bindVarByName k x f')
-
     -- ctx |- f(v) : T
     -- -------------------------- Use
     -- ctx |- (use k = v ; f) : T
