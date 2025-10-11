@@ -34,7 +34,7 @@
 
 module Core.Adjust.SplitAnnotate where
 
-import Control.Monad (unless, when, foldM)
+import Control.Monad (unless, when, foldM, filterM)
 import Control.Monad.Except
 import Control.Monad.State
 import Data.List (find)
@@ -285,27 +285,51 @@ occursCheck span book ctx k t =
       (Just $ "Occurs check failed: " ++ k ++ " in " ++ show (normal book t))
 
 solveConstraints :: Int -> Span -> Book -> Ctx -> TypeM ()
-solveConstraints d span book ctx = do
-  cs <- gets constraints
-  mapM_ solveOne cs
+solveConstraints d span book ctx = iterate
   where
-    solveOne (Constr t1 t2) = do
+    iterate = do
+      oldSubst <- gets subst
+      cs <- gets constraints
+      mapM_ tryOne cs
+      newSubst <- gets subst
+      if M.size newSubst > M.size oldSubst
+        then iterate  -- Substitution grew, try another pass
+        else finalCheck
+    
+    tryOne (Constr t1 t2) = do
       s <- gets subst
       t1' <- applySubst d s t1
       t2' <- applySubst d s t2
-      unifyTerm d span book ctx t1' t2'
+      (unifyTerm d span book ctx t1' t2')
+        `catchError` (\_ -> return ())
+    
+    finalCheck = do
+      cs <- gets constraints
+      s <- gets subst
+      unsolved <- filterM (\(Constr t1 t2) -> do
+        t1' <- applySubst d s t1
+        t2' <- applySubst d s t2
+        return $ not (equal 0 book t1' t2')) cs
+      case unsolved of
+        [] -> return ()
+        (Constr t1 t2):_ -> do
+          t1' <- applySubst d s t1
+          t2' <- applySubst d s t2
+          throwError $ CantInfer span (normalCtx book ctx)
+            (Just $ "Unsolvable constraint: " ++ show t1' ++ " == " ++ show t2')
 
--- Add this after your other helper functions
-softFail :: Span -> Book -> Ctx -> Maybe String -> TypeM Term
-softFail span book ctx msg = do
+softFail :: Error -> TypeM Term
+softFail err = do
   gathering <- gets gatherOnly
   if gathering
     then freshMeta "unknown"
-    else throwError (CantInfer span (normalCtx book ctx) msg)
+    else throwError err
 
 -- Unify two terms, updating the substitution map
 unifyTerm :: Int -> Span -> Book -> Ctx -> Term -> Term -> TypeM ()
-unifyTerm d span book ctx t1 t2 = case (force book t1, force book t2) of
+unifyTerm d span book ctx t1 t2 = 
+  -- trace ("unify: " ++ show (force book t1) ++ " --- " ++ show (force book t2)) $ 
+  case (cut $ force book t1, cut $ force book t2) of -- TODO: is this force correct?
   -- Base case: equal terms
   (t1', t2') | equal 0 book t1' t2' -> return ()
   -- Metavariable cases
@@ -318,11 +342,14 @@ unifyTerm d span book ctx t1 t2 = case (force book t1, force book t2) of
   -- Structural decomposition
   (All a1 b1, All a2 b2) -> do
     unifyTerm d span book ctx a1 a2
-    x <- freshMeta "x"
-    unifyTerm d span book ctx (App b1 x) (App b2 x)
+    unifyTerm d span book ctx b1 b2
   (App f1 x1, App f2 x2) -> do
+    s <- gets subst
+    traceM $ "pre unify: " ++ show (App f1 x1) ++ " || " ++ show (App f2 x2) ++ " -> " ++ show s
     unifyTerm d span book ctx f1 f2
     unifyTerm d span book ctx x1 x2
+    s <- gets subst
+    traceM $ "pos unify: " ++ show (App f1 x1) ++ " || " ++ show (App f2 x2) ++ " -> " ++ show s
   -- Placeholder for complex cases (e.g., App ?k x ≡ t)
   _ -> throwError $ CantInfer span (normalCtx book ctx)
     (Just $ "Unsolvable constraint: " ++ show t1 ++ " == " ++ show t2)
@@ -432,14 +459,19 @@ inferLetVarType d span book ctx v f =
       -- Try to infer v normally (non-gathering mode)
       vT <- inferGo d span book ctx v
       addConstraint (Constr vT vMeta)
+
+      c <- gets constraints
+      traceM $ "-infered: " ++ show v ++ " :: " ++ show vT ++ "\n@ " ++ show c
       
       solveConstraints d span book ctx
       s <- gets subst
+      traceM $ "-substs: " ++ show v ++ " :: " ++ show vT ++ "\n @ " ++ show c ++ "\n subs: " ++ show s
       applySubst d s vMeta
 
 -- -- Main inference function that will apply constraints at the end
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
 infer d span book ctx term = 
+  -- trace ("-infer " ++ show term) $
   case runState (runExceptT computation) initialState of
     (Left err, _) -> Fail err
     (Right t, _)  -> Done t
@@ -447,15 +479,17 @@ infer d span book ctx term =
     initialState = TypeState [] M.empty (-1) False
     computation = do
       typeWithMetas <- inferGo d span book ctx term
-      -- traceM $ "-infered: " ++ show term ++ " :: " ++ show typeWithMetas
+      c <- gets constraints
+      -- traceM $ "-infered: " ++ show term ++ " :: " ++ show typeWithMetas ++ " @ " ++ show c
       solveConstraints d span book ctx
       s <- gets subst
+      -- traceM $ "-substs: " ++ show term ++ " :: " ++ show typeWithMetas ++ " @ " ++ show c
       finalType <- applySubst d s typeWithMetas
       if any (\case ('?':_) -> True; _ -> False) (S.toList (freeVars S.empty finalType))
-        then throwError $ CantInfer span (normalCtx book ctx) (Just "Unresolved metavariables remain")
+        then throwError $ CantInfer span (normalCtx book ctx) (Just $ "Unresolved metavariables remain " ++ "\n" ++ show c)
         else 
             -- trace ("-infered: " ++ show term ++ " :: " ++ show finalType) $ 
-            return finalType
+            return $ force book finalType
 
 -- The core inference that generates constraints
 inferGo :: Int -> Span -> Book -> Ctx -> Term -> TypeM Term
@@ -468,12 +502,12 @@ inferGo d span book@(Book defs names) ctx term =
     let Ctx ks = ctx
     if i < length ks && i >= 0
       then let (_, _, typ) = ks !! i in return typ
-      else throwError (CantInfer span (normalCtx book ctx) Nothing)
+      else softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- References - hard error if undefined
   Ref k i -> case getDefn book k of
     Just (_, _, typ) -> return typ
-    Nothing -> trace "AAAAA" $ throwError (Undefined span (normalCtx book ctx) k Nothing)
+    Nothing -> trace "AAAAA" $ softFail (Undefined span (normalCtx book ctx) k Nothing)
 
   -- Sub
   Sub x -> inferGo d span book ctx x
@@ -497,7 +531,7 @@ inferGo d span book@(Book defs names) ctx term =
   Use k v f -> inferGo d span book ctx (f v)
 
   -- Fix - soft fail
-  Fix k f -> softFail span book ctx Nothing
+  Fix k f -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Check annotation
   Chk v t -> do
@@ -508,7 +542,7 @@ inferGo d span book@(Book defs names) ctx term =
     return t
 
   -- Trust - soft fail
-  Tst _ -> softFail span book ctx Nothing
+  Tst _ -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Set
   Set -> return Set
@@ -517,7 +551,7 @@ inferGo d span book@(Book defs names) ctx term =
   Emp -> return Set
 
   -- Empty eliminator - soft fail
-  EmpM -> softFail span book ctx Nothing
+  EmpM -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Unit type
   Uni -> return Set
@@ -622,7 +656,7 @@ inferGo d span book@(Book defs names) ctx term =
     let bookEnums = concatMap extractValidEnum (M.toList defs)
     case find isEnuWithTag bookEnums of
       Just t -> return t
-      Nothing -> throwError (Undefined span (normalCtx book ctx) ("@" ++ s) Nothing)
+      Nothing -> softFail (Undefined span (normalCtx book ctx) ("@" ++ s) Nothing)
     where
       isEnuWithTag (Enu tags) = s `elem` tags
       isEnuWithTag _ = False
@@ -710,7 +744,7 @@ inferGo d span book@(Book defs names) ctx term =
             return (All domainType (Lam "_" Nothing (\_ -> returnType)))
       else 
         -- No cases at all
-        softFail span book ctx Nothing
+        softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Sigma type
   Sig a b -> do
@@ -729,7 +763,7 @@ inferGo d span book@(Book defs names) ctx term =
     return (Sig aT bFunc)
 
   -- Sigma eliminator - soft fail
-  SigM f -> softFail span book ctx Nothing
+  SigM f -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Pi type
   All a b -> do
@@ -762,7 +796,13 @@ inferGo d span book@(Book defs names) ctx term =
         All a b -> do
           case check d span book ctx x a of
             Done x' -> return $ App b x
-            Fail e -> throwError e
+            -- Fail e -> trace ("FF " ++ show e) $ throwError e
+            -- Fail e -> trace ("AAA " ++ show term ++ " " ++ show a ++ " , -> " ++ show e) $ softFail (CantInfer span (normalCtx book ctx) Nothing) 
+            Fail e -> do
+              -- xT <- inferGo d span book ctx x
+              -- addConstraint (Constr xT a)
+              -- traceM $ "CON 1 " ++ show (Constr xT a) ++ " \n" ++ show f ++ " \n " ++ show xT
+              fallback
         _ -> fallback
       _ -> fallback
     where
@@ -772,6 +812,7 @@ inferGo d span book@(Book defs names) ctx term =
         bT <- freshMeta "B"
         addConstraint (Constr fT (All xT bT))
         cstr <- gets constraints
+        -- traceM $ "CON " ++ show cstr ++ " \n" ++ show f ++ " \n " ++ show xT
         -- TODO: capability of solving constraints as bellow (see examples/main/VecInd)
         -- traceM $ "f(x): " ++ show term ++ "\nfT: " ++ show fT ++ "\nxT: " ++ show xT ++ "\nbT: " ++ show bT ++ "\n:: " ++ show (App bT x) ++ "\n@ " ++ show cstr ++ "\nctx:\n" ++ show ctx
         return $ App bT x
@@ -787,10 +828,10 @@ inferGo d span book@(Book defs names) ctx term =
     return Set
 
   -- Refl - soft fail
-  Rfl -> softFail span book ctx Nothing
+  Rfl -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Equality eliminator - soft fail
-  EqlM f -> softFail span book ctx Nothing
+  EqlM f -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Rewrite
   Rwt e f -> do
@@ -802,25 +843,25 @@ inferGo d span book@(Book defs names) ctx term =
       _ -> do
         -- let eqlType = Eql (Var "_" 0) (Var "_" 0) (Var "_" 0)
         -- throwError $ TypeMismatch span (normalCtx book ctx) (normal book eqlType) (normal book eT) Nothing)
-        softFail span book ctx Nothing
+        softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Location
   Loc l t -> inferGo d l book ctx t
 
   -- Erasure - soft fail
-  Era -> softFail span book ctx Nothing
+  Era -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Sup - soft fail
-  Sup l a b -> softFail span book ctx Nothing
+  Sup l a b -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Sup eliminator - soft fail
-  SupM l f -> softFail span book ctx Nothing
+  SupM l f -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Fork - soft fail
-  Frk l a b -> softFail span book ctx Nothing
+  Frk l a b -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Met - soft fail
-  Met n t c -> softFail span book ctx Nothing
+  Met n t c -> softFail (CantInfer span (normalCtx book ctx) Nothing)
 
   -- Numeric type
   Num t -> return Set
@@ -837,20 +878,20 @@ inferGo d span book@(Book defs names) ctx term =
     bT <- inferGo d span book ctx b
     case inferOp2Type d span book ctx op aT bT of
       Done resultType -> return resultType
-      Fail e -> throwError e
+      Fail e -> softFail e
 
   -- Unary operations
   Op1 op a -> do
     aT <- inferGo d span book ctx a
     case inferOp1Type d span book ctx op aT of
       Done resultType -> return resultType
-      Fail e -> throwError e
+      Fail e -> softFail e
 
   -- Primitives
   Pri U64_TO_CHAR -> return (All (Num U64_T) (Lam "x" Nothing (\_ -> Num CHR_T)))
   Pri CHAR_TO_U64 -> return (All (Num CHR_T) (Lam "x" Nothing (\_ -> Num U64_T)))
-  Pri HVM_INC -> softFail span book ctx Nothing
-  Pri HVM_DEC -> softFail span book ctx Nothing
+  Pri HVM_INC -> softFail (CantInfer span (normalCtx book ctx) Nothing)
+  Pri HVM_DEC -> softFail (CantInfer span (normalCtx book ctx) Nothing)
   Pri IO_PURE -> do
     let aType = Lam "A" (Just Set) (\a -> All a (Lam "x" (Just a) (\_ -> IO a)))
     return (All Set aType)
@@ -882,7 +923,7 @@ inferGo d span book@(Book defs names) ctx term =
   Pat _ _ _ -> do
     let nctx = normalCtx book ctx
     let msg = Just "Pat not supported"
-    throwError (Unsupported span nctx msg)
+    softFail (Unsupported span nctx msg)
 
 -- Infer the result type of a binary numeric operation
 inferOp2Type :: Int -> Span -> Book -> Ctx -> NOp2 -> Term -> Term -> Result Term
@@ -1006,6 +1047,7 @@ check d span book ctx term      goal =
           -- t <- infer d span book ctx v
           -- vT <- inferLetVarType d span book ctx v f (-1)
           t <- inferLetVarType d span book ctx v f
+          traceM $ "check let: " ++ show v ++ " :: " ++ show t ++ " -> " ++ show (reduceEtas d span book t) ++ " :: " ++ show Set
           t' <- check d span book ctx (reduceEtas d span book t) Set
           v' <- cutChk <$> check d span book ctx v t'
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
