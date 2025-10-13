@@ -21,6 +21,7 @@ import System.Process (readProcessWithExitCode)
 import System.Exit (ExitCode(..))
 import Control.Exception (catch, IOException, try)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
+import Data.Typeable (Typeable, cast)
 
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Bind
@@ -248,20 +249,20 @@ getGenDeps file = do
     Done b -> return b
     Fail e -> showErrAndDie e
   
-  -- Find all definitions that are `try` definitions (i.e., contain a Met)
-  let tryDefs = M.filter (\(_, term, _) -> hasMet term) defs
-  let tryNames = M.keysSet tryDefs
+  -- Find all generator definitions (contain a Met)
+  let genDefs = M.filter (\(_, term, _) -> hasMet term) defs
+  let genNames = M.keysSet genDefs
 
   -- Find all reverse dependencies (examples)
   let allDefs = M.toList defs
-  let reverseDeps = S.fromList [ name | (name, (_, term, typ)) <- allDefs, not (name `S.member` tryNames), not (S.null (S.intersection tryNames (S.union (getDeps term) (getDeps typ)))) ]
+  let reverseDeps = S.fromList [ name | (name, (_, term, typ)) <- allDefs, not (name `S.member` genNames), not (S.null (S.intersection genNames (S.union (getDeps term) (getDeps typ)))) ]
 
-  -- Get all dependencies of the `try` definitions and the reverse dependencies
-  let targetDefs = M.filterWithKey (\k _ -> k `S.member` tryNames || k `S.member` reverseDeps) defs
+  -- Get all dependencies of the generator definitions and the reverse dependencies
+  let targetDefs = M.filterWithKey (\k _ -> k `S.member` genNames || k `S.member` reverseDeps) defs
   let allDeps = S.unions $ map (\(_, term, typ) -> S.union (getDeps term) (getDeps typ)) (M.elems targetDefs)
 
-  -- Also include the names of the try defs and reverse deps themselves
-  let allNames = S.union tryNames reverseDeps
+  -- Also include the names of the generator defs and reverse deps themselves
+  let allNames = S.union genNames reverseDeps
   let finalDepNames = S.union allNames allDeps
 
   -- Filter the book to get the definitions we want to print
@@ -317,9 +318,11 @@ hasMet term = case term of
   Frk l a b   -> hasMet l || hasMet a || hasMet b
   _           -> False
 
-showErrAndDie :: Show a => a -> IO b
+showErrAndDie :: (Show a, Typeable a) => a -> IO b
 showErrAndDie err = do
-  hPutStrLn stderr $ show err
+  case cast err of
+    Just (msg :: String) -> hPutStrLn stderr msg
+    Nothing -> hPutStrLn stderr (show err)
   exitFailure
 
 -- IO Helper Functions

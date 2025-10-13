@@ -154,6 +154,7 @@ data CompileCtx = CompileCtx
   , ctxWarnings :: [String]   -- Accumulated warnings
   , ctxMetas :: S.Set Name    -- Metavariable names (for uppercase refs)
   , ctxInEql :: Bool          -- Are we inside an Eql type? (use lowercase refs)
+  , ctxGens :: [Nick]         -- Ordered list of generator nicks
   }
 
 -- ============================================================================
@@ -213,15 +214,23 @@ compileBook :: Book -> String -> Either HCompileError (HBook, Nick)
 compileBook book@(Book defs _) mainFQN = do
   -- Pre-scan to collect all metavariable names
   let metas = S.fromList [name | (name, (_, term, _)) <- M.toList defs, isMet (cut term)]
-  let ctx = CompileCtx book M.empty 0 [] metas False
-  -- Check main exists
-  unless (M.member mainFQN defs) $
+  let hasMain = M.member mainFQN defs
+  let hasGen  = not (S.null metas)
+  let ctx = CompileCtx book M.empty 0 [] metas False []
+  -- Ensure we have an entry point unless generators will supply it
+  unless (hasMain || hasGen) $
     Left $ UnknownReference $ "Main function not found: " ++ mainFQN
   -- Compile all definitions
   finalCtx <- foldM compileDefn ctx (M.toList defs)
-  -- Get main nick
+  let gens = ctxGens finalCtx
   let mainNick = toNick mainFQN
-  return (ctxDefs finalCtx, mainNick)
+  let finalDefs = case gens of
+        [] -> ctxDefs finalCtx
+        _  ->
+          let targetNick = map toUpper (last gens)
+              autoMain = HDefn mainNick Nothing (HRef targetNick)
+          in M.insert mainNick autoMain (ctxDefs finalCtx)
+  return (finalDefs, mainNick)
   where
     isMet (Met _ _ _) = True
     isMet _           = False
@@ -250,8 +259,10 @@ compileDefn ctx (name, (_, term, typ)) = do
   let hdef = HDefn nick htype hbodyWithDup
   -- Add to metas set if it's a metavariable
   let updatedMetas = if isMeta then S.insert name (ctxMetas ctx) else ctxMetas ctx
+  let updatedGens  = if isMeta then ctxGens ctx ++ [nick] else ctxGens ctx
   let updatedCtx = ctx { ctxDefs = M.insert nick hdef (ctxDefs ctx)
-                       , ctxMetas = updatedMetas }
+                       , ctxMetas = updatedMetas
+                       , ctxGens = updatedGens }
   return updatedCtx
 
 -- Convert Bend Term to KolmoC Core
@@ -1013,8 +1024,12 @@ showPrimitive op args i = case (op, args) of
 -- Convert function type ∀A.λx.B to A → B
 showFunctionType :: HCore -> HCore -> String
 showFunctionType argType body = case body of
-  HLam _ rest -> showHCore 0 argType ++ " → " ++ showHCore 0 rest
-  _           -> "∀" ++ paren (showHCore 0 argType) ++ "." ++ showHCore 0 body
+  HLam name rest
+    | name == "_" -> showHCore 0 argType ++ " → " ++ showHCore 0 rest
+    | otherwise   -> "∀" ++ binder ++ ". " ++ showHCore 0 rest
+    where
+      binder = name ++ ": " ++ showHCore 0 argType
+  _ -> "∀_: " ++ showHCore 0 argType ++ ". " ++ showHCore 0 body
 
 -- Convert natural number chains to integers
 natToNumber :: HCore -> Maybe Int
