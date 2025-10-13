@@ -47,6 +47,7 @@ import qualified Data.Set as S
 import Debug.Trace
 
 import Core.Bind
+import qualified Core.Check as C (infer)
 import Core.Type
 import Core.Show
 import Core.Equal
@@ -450,19 +451,19 @@ inferLetVarType d span book ctx v f =
     computation = do
       vMeta <- freshMeta "vartype"
       let new_ctx = extend ctx "tmp" (Var "tmp" d) vMeta
-      
+
       -- Set gathering mode for body exploration
       modify (\s -> s { gatherOnly = True })
       _ <- inferGo (d+1) span book new_ctx (f (Var "tmp" d))
       modify (\s -> s { gatherOnly = False })
-      
+
       -- Try to infer v normally (non-gathering mode)
       vT <- inferGo d span book ctx v
       addConstraint (Constr vT vMeta)
 
       c <- gets constraints
       traceM $ "-infered: " ++ show v ++ " :: " ++ show vT ++ "\n@ " ++ show c
-      
+
       solveConstraints d span book ctx
       s <- gets subst
       traceM $ "-substs: " ++ show v ++ " :: " ++ show vT ++ "\n @ " ++ show c ++ "\n subs: " ++ show s
@@ -472,25 +473,27 @@ inferLetVarType d span book ctx v f =
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
 infer d span book ctx term = 
   -- trace ("-infer " ++ show term) $
-  case runState (runExceptT computation) initialState of
-    (Left err, _) -> Fail err
-    (Right t, _)  -> Done t
-  where
-    initialState = TypeState [] M.empty (-1) False
-    computation = do
-      typeWithMetas <- inferGo d span book ctx term
-      c <- gets constraints
-      -- traceM $ "-infered: " ++ show term ++ " :: " ++ show typeWithMetas ++ " @ " ++ show c
-      solveConstraints d span book ctx
-      s <- gets subst
-      -- traceM $ "-substs: " ++ show term ++ " :: " ++ show typeWithMetas ++ " @ " ++ show c
-      finalType <- applySubst d s typeWithMetas
-      if any (\case ('?':_) -> True; _ -> False) (S.toList (freeVars S.empty finalType))
-        then throwError $ CantInfer span (normalCtx book ctx) (Just $ "Unresolved metavariables remain " ++ "\n" ++ show c)
-        else 
-            -- trace ("-infered: " ++ show term ++ " :: " ++ show finalType) $ 
-            return $ force book finalType
-
+  case C.infer d span book ctx term of
+    Done t -> return t
+    _ -> do
+      case runState (runExceptT computation) initialState of
+        (Left err, _) -> Fail err
+        (Right t, _)  -> Done t
+      where
+        initialState = TypeState [] M.empty (-1) False
+        computation = do
+          typeWithMetas <- inferGo d span book ctx term
+          c <- gets constraints
+          -- traceM $ "-infered: " ++ show term ++ " :: " ++ show typeWithMetas ++ " @ " ++ show c
+          solveConstraints d span book ctx
+          s <- gets subst
+          -- traceM $ "-substs: " ++ show term ++ " :: " ++ show typeWithMetas ++ " @ " ++ show c
+          finalType <- applySubst d s typeWithMetas
+          if any (\case ('?':_) -> True; _ -> False) (S.toList (freeVars S.empty finalType))
+            then throwError $ CantInfer span (normalCtx book ctx) (Just $ "Unresolved metavariables remain " ++ "\n" ++ show c)
+            else 
+                -- trace ("-infered: " ++ show term ++ " :: " ++ show finalType) $ 
+                return $ force book finalType
 -- The core inference that generates constraints
 inferGo :: Int -> Span -> Book -> Ctx -> Term -> TypeM Term
 inferGo d span book@(Book defs names) ctx term = 
@@ -791,19 +794,11 @@ inferGo d span book@(Book defs names) ctx term =
 
   -- Application
   App f x -> do
-    case infer d span book ctx f of
-      Done fT' -> case force book fT' of
-        All a b -> do
+    case force book <$> C.infer d span book ctx f of
+      Done (All a b) -> do
           case check d span book ctx x a of
             Done x' -> return $ App b x
-            -- Fail e -> trace ("FF " ++ show e) $ throwError e
-            -- Fail e -> trace ("AAA " ++ show term ++ " " ++ show a ++ " , -> " ++ show e) $ softFail (CantInfer span (normalCtx book ctx) Nothing) 
-            Fail e -> do
-              -- xT <- inferGo d span book ctx x
-              -- addConstraint (Constr xT a)
-              -- traceM $ "CON 1 " ++ show (Constr xT a) ++ " \n" ++ show f ++ " \n " ++ show xT
-              fallback
-        _ -> fallback
+            _ -> fallback
       _ -> fallback
     where
       fallback = do
