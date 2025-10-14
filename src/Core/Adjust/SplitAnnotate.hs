@@ -6,16 +6,15 @@
 --
 -- This module implements a bidirectional type checker that:
 -- 1) Checks terms against expected types (check mode)
--- 2) Infers types from term structure (infer mode)  
+-- 2) Infers types from the term itself (infer mode)
 -- 3) Splits certain eliminator applications into applications of auxiliary definitions
+-- 4) Adds type annotations to previously unannotated let-bindings when it can infer them
 --
 -- Key Functions:
 -- -------------
 -- check        -> verifies term has expected type, may transform the term
--- infer        -> synthesizes type from term, either from its structure or from how it's used
---   inferStructural -> infers the type of a term by looking at its structure
---   inferIndirect   -> infers the type of a term by looking at how it's used in an "environment" term
--- verify       -> helper that infers then compares with expected type
+-- infer        -> synthesizes type from a term, reusing the same logic as check
+-- verify       -> infers a term and compares the result with the expected type
 --
 -- Application Splitting:
 -- ---------------------
@@ -25,11 +24,6 @@
 --     (NatM z s) 
 --   in $aux_n(x)
 --
--- Indirect Inference:
--- ------------------
--- For terms like λx. body where x's type is unknown, inferIndirect
--- analyzes how x is used in body to reconstruct its type.
--- Example: from λx. True or x, infers x : Bool
 {-# LANGUAGE ViewPatterns #-}
 
 module Core.Adjust.SplitAnnotate where
@@ -60,7 +54,7 @@ import Core.Adjust.ReduceEtas
 extend :: Ctx -> Name -> Term -> Term -> Ctx
 extend (Ctx ctx) k v t = Ctx (ctx ++ [(k, v, t)])
 
--- Get span for the left operand of a binary operation by estimating from the operator span
+-- Heuristic span for the left operand of an addition by estimating from the '+' span
 getLeftOperandSpan :: Span -> Span
 getLeftOperandSpan opSpan =
   let (begLine, begCol) = spanBeg opSpan
@@ -347,9 +341,6 @@ infer d span book@(Book defs names) ctx term =
     -- ctx |- (a,b) : Σx:A.B
     Tup a b -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
-      -- aT <- infer d span book ctx a
-      -- bT <- infer d span book ctx b
-      -- Done (Sig aT (Lam "_" Nothing (\_ -> bT)))
 
     -- Can't infer SigM
     SigM f -> do
