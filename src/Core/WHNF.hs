@@ -405,7 +405,7 @@ force book term =
       Ref k i -> case getDefn book k of
         Just (True,fn',_) -> force book $ foldl App fn' xs
         otherwise         -> term'
-      term' -> term'
+      fn' -> term'
       where (fn,xs) = collectApps term' []
 
 -- Normalization
