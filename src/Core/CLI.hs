@@ -21,6 +21,7 @@ import System.Process (readProcessWithExitCode)
 import System.Exit (ExitCode(..))
 import Control.Exception (catch, IOException, try)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
+import Text.Read (readMaybe)
 
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Bind
@@ -319,7 +320,10 @@ hasMet term = case term of
 
 showErrAndDie :: Show a => a -> IO b
 showErrAndDie err = do
-  hPutStrLn stderr $ show err
+  let rendered = case readMaybe (show err) :: Maybe String of
+        Just txt -> txt
+        Nothing  -> show err
+  hPutStrLn stderr rendered
   exitFailure
 
 -- IO Helper Functions
