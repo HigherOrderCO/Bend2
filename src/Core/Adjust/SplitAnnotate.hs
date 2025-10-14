@@ -260,8 +260,9 @@ infer d span book@(Book defs names) ctx term =
     -- ----------------- Suc
     -- ctx |- 1n+n : Nat
     Suc n -> do
-      _ <- check d span book ctx n Nat
-      Done Nat
+      case check d span book ctx n Nat of
+        Done _ -> return Nat
+        _      -> Fail $ CantInfer span (normalCtx book ctx) Nothing
 
     -- Can't infer NatM
     NatM z s -> do
@@ -741,8 +742,7 @@ check d span book ctx term      goal =
     -- ----------------- Suc
     -- ctx |- 1n+n : Nat
     (Suc n, Nat) -> do
-      n' <- 
-        check d span book ctx n Nat
+      n' <- check d span book ctx n Nat
       return $ Suc n'
 
     -- ctx |- n : t{a==b}
