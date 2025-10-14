@@ -217,7 +217,8 @@ infer d span book@(Book defs names) ctx term =
 
     -- Can't infer UniM
     UniM f -> do
-      Fail $ CantInfer span (normalCtx book ctx) Nothing
+      fT <- infer d span book ctx f
+      return $ All Uni (Lam "_" (Just Uni) (\_ -> fT))
 
     -- ctx |-
     -- ----------------- Bit
@@ -239,7 +240,9 @@ infer d span book@(Book defs names) ctx term =
 
     -- Can't infer BitM
     BitM f t -> do
-      Fail $ CantInfer span (normalCtx book ctx) Nothing
+      fT <- infer d span book ctx f
+      tT <- infer d span book ctx t
+      return $ All Bit (BitM fT tT)
 
     -- ctx |-
     -- ---------------- Nat
@@ -262,7 +265,12 @@ infer d span book@(Book defs names) ctx term =
 
     -- Can't infer NatM
     NatM z s -> do
-      Fail $ CantInfer span (normalCtx book ctx) Nothing
+      zT <- infer d span book ctx z
+      sT <- case cut <$> infer d span book ctx s of
+        Done (All (force book -> Nat) bT) -> return bT
+        Done sT' -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All Nat (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book sT') Nothing
+        Fail e   -> Fail e
+      return $ All Nat (NatM zT sT)
 
     -- ctx |- T : Set
     -- -----------------
@@ -284,11 +292,22 @@ infer d span book@(Book defs names) ctx term =
 
     -- Can't infer Con
     Con h t -> do
-      Fail $ CantInfer span (normalCtx book ctx) Nothing
+      hT <- infer d span book ctx h
+      case check d span book ctx t (Lst hT) of
+        Done _ -> return $ Lst hT
+        _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
 
     -- Can't infer LstM
     LstM n c -> do
-      Fail $ CantInfer span (normalCtx book ctx) Nothing
+      nT <- infer d span book ctx n
+      (hT, cT) <- case force book <$> infer d span book ctx c of
+        Done (All (force book -> hT) bT') -> do
+          case check d span book ctx c (All hT (Lam "_" (Just hT) (\_ -> All (Lst hT) (Lam "_" (Just (Lst hT)) (\_ -> nT))))) of
+            Done _ -> return $ (hT, (Lam "_" (Just hT) (\_ -> Lam "_" (Just (Lst hT)) (\_ -> nT))))
+            _      -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+        Done cT' -> trace "BBB" $ Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book cT') Nothing
+        Fail e   -> Fail e
+      return $ All (Lst hT) (LstM nT cT)
 
     -- ctx |-
     -- ---------------------- Enu
@@ -303,7 +322,7 @@ infer d span book@(Book defs names) ctx term =
       let bookEnums = [ Enu tags | (k, (_, (Sig (Enu tags) _), Set)) <- M.toList defs ]
       case find isEnuWithTag bookEnums of
         Just t  -> Done t
-        Nothing -> Fail $ Undefined span (normalCtx book ctx) ("@" ++ s) Nothing
+        Nothing -> Fail $ CantInfer span (normalCtx book ctx) Nothing
         where
           isEnuWithTag (Enu tags) = s `elem` tags
           isEnuWithTag _ = False
@@ -326,9 +345,10 @@ infer d span book@(Book defs names) ctx term =
     -- --------------------- Tup
     -- ctx |- (a,b) : Σx:A.B
     Tup a b -> do
-      aT <- infer d span book ctx a
-      bT <- infer d span book ctx b
-      Done (Sig aT (Lam "_" Nothing (\_ -> bT)))
+      Fail $ CantInfer span (normalCtx book ctx) Nothing
+      -- aT <- infer d span book ctx a
+      -- bT <- infer d span book ctx b
+      -- Done (Sig aT (Lam "_" Nothing (\_ -> bT)))
 
     -- Can't infer SigM
     SigM f -> do
@@ -682,8 +702,8 @@ check d span book ctx term      goal =
           return $ Let k (Just t') v' (\x -> bindVarByName k x f')
         Nothing -> do
           t <- infer d span book ctx v
-          t' <- check d span book ctx (reduceEtas d span book t) Set
-          v' <- cutChk <$> check d span book ctx v t'
+          t' <- trace (show (reduceEtas d span book t) ++ " :: " ++ show Set) $ check d span book ctx (reduceEtas d span book t) Set
+          v' <- trace (show (reduceEtas d span book v) ++ " :: " ++ show t') $ cutChk <$> check d span book ctx v t'
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
           return $ Let k (Just t') v' (\x -> bindVarByName k x f')
 
