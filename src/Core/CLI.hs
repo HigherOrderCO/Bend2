@@ -10,24 +10,27 @@ module Core.CLI
   , getGenDeps
   ) where
 
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.List (isSuffixOf)
-import Data.Maybe (fromJust)
+import Data.Char (isAlphaNum, isSpace)
+import Data.List (foldl', isPrefixOf, isSuffixOf, sortOn)
+import Data.Maybe (fromJust, mapMaybe)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.Process (readProcessWithExitCode)
 import System.Exit (ExitCode(..))
-import Control.Exception (catch, IOException, try)
-import System.IO (hPutStrLn, stderr, hFlush, stdout)
+import Control.Exception (catch, IOException, throwIO, try)
+import System.IO (hClose, hFlush, hPutStr, hPutStrLn, stderr, stdout)
+import System.IO.Temp (withSystemTempFile)
+import System.Timeout (timeout)
 import Data.Typeable (Typeable, cast)
 
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Bind
 import Core.Check
 import Core.Deps
-import Core.Import (autoImport, autoImportWithExplicit, extractModuleName)
+import Core.Import (autoImportWithExplicit, extractModuleName)
 import Core.Parse.Book (doParseBook)
 import Core.Parse.Parse (ParserState(..))
 import Core.Type
@@ -133,16 +136,203 @@ runMain filePath book = do
 -- | Process a Bend file: parse, check, and run
 processFile :: FilePath -> IO ()
 processFile file = do
-  book <- parseFile file
-  result <- try $ do
-    bookAdj <- case adjustBook book of
-      Done b -> return b
-      Fail e -> showErrAndDie e
-    bookChk <- checkBook bookAdj
-    runMain file bookChk
+  result <- try $ processFileInternal file True
   case result of
     Left (BendException e) -> showErrAndDie e
     Right () -> return ()
+
+processFileInternal :: FilePath -> Bool -> IO ()
+processFileInternal file allowGeneration = do
+  content <- readFile file
+  (rawBook, importedBook) <- parseBookWithAuto file content
+  let moduleName = extractModuleName file
+      mainFQN = moduleName ++ "::main"
+      genInfos = collectGenInfos file rawBook
+
+  bookAdj <- case adjustBook importedBook of
+    Done b -> return b
+    Fail e -> showErrAndDie e
+  let metasPresent = bookHasMet bookAdj
+  bookChk <- checkBook bookAdj
+
+  if null genInfos
+    then do
+      when metasPresent $
+        throwCliError "Meta variables remain after generation; run `bend verify` for detailed errors."
+      runMain file bookChk
+    else do
+      when (not allowGeneration) $
+        throwCliError "Meta variables remain after generation; generation already attempted."
+      bookForHVM <- case adjustBook importedBook of
+        Done b -> return b
+        Fail e -> showErrAndDie e
+      generatedDefs <- generateDefinitions file bookForHVM mainFQN genInfos
+      updatedContent <- applyGenerated content genInfos generatedDefs
+      writeFile file updatedContent
+      processFileInternal file False
+
+data GenInfo = GenInfo
+  { giSimpleName :: String
+  , giSpan       :: Span
+  }
+
+parseBookWithAuto :: FilePath -> String -> IO (Book, Book)
+parseBookWithAuto file content =
+  case doParseBook file content of
+    Left err -> showErrAndDie err
+    Right (book, parserState) -> do
+      autoImportedBook <- autoImportWithExplicit file book parserState
+      return (book, autoImportedBook)
+
+collectGenInfos :: FilePath -> Book -> [GenInfo]
+collectGenInfos file (Book defs names) =
+  mapMaybe lookupGen names
+  where
+    lookupGen name = do
+      ( _inj, term, _typ) <- M.lookup name defs
+      case term of
+        Loc sp inner
+          | spanPth sp == file
+          , Met _ _ _ <- stripLoc inner ->
+              let simple = extractSimpleName name
+              in Just (GenInfo simple sp)
+        _ -> Nothing
+    stripLoc t = case t of
+      Loc _ inner -> stripLoc inner
+      other       -> other
+
+extractSimpleName :: Name -> String
+extractSimpleName name =
+  case reverse (splitOnSep "::" name) of
+    (simple:_) -> simple
+    []         -> name
+
+splitOnSep :: String -> String -> [String]
+splitOnSep sep str = go str
+  where
+    go [] = [""]
+    go s =
+      case breakOnSep s of
+        (chunk, Nothing)    -> [chunk]
+        (chunk, Just rest') -> chunk : go rest'
+    breakOnSep s =
+      if sep `isPrefixOf` s
+        then ("", Just (drop (length sep) s))
+        else case s of
+               []     -> ("", Nothing)
+               (c:cs) ->
+                 let (chunk, rest) = breakOnSep cs
+                 in (c:chunk, rest)
+
+bookHasMet :: Book -> Bool
+bookHasMet (Book defs _) = any (\(_, term, _) -> termHasMet term) (M.elems defs)
+
+generateDefinitions :: FilePath -> Book -> Name -> [GenInfo] -> IO (M.Map String String)
+generateDefinitions _file book mainFQN genInfos = do
+  let hvmCode = HVM.compile book mainFQN
+  withSystemTempFile "bend-gen.hvm4" $ \tmpPath tmpHandle -> do
+    hPutStr tmpHandle hvmCode
+    hClose tmpHandle
+    result <- timeout (5 * 1000000) (readProcessWithExitCode "hvm4" [tmpPath, "-C1", "-P"] "")
+    case result of
+      Nothing -> throwCliError "hvm4 timed out while generating code."
+      Just (exitCode, stdoutStr, stderrStr) -> case exitCode of
+        ExitSuccess -> do
+          unless (null stderrStr) $
+            throwCliError $ "hvm4 reported an error: " ++ stderrStr
+          let parsed = parseGeneratedFunctions stdoutStr
+          let missing = [giSimpleName info | info <- genInfos, M.notMember (giSimpleName info) parsed]
+          unless (null missing) $
+            throwCliError $ "hvm4 did not generate definitions for: " ++ show missing
+          return parsed
+        ExitFailure code ->
+          throwCliError $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
+
+applyGenerated :: String -> [GenInfo] -> M.Map String String -> IO String
+applyGenerated content genInfos generated = do
+  replacements <- mapM toReplacement genInfos
+  case applySpanReplacements content replacements of
+    Left err -> throwCliError err
+    Right updated -> return updated
+  where
+    toReplacement info =
+      case M.lookup (giSimpleName info) generated of
+        Nothing     -> throwCliError $ "Missing generated definition for " ++ giSimpleName info
+        Just result -> return (giSpan info, ensureTrailingNewline result)
+
+ensureTrailingNewline :: String -> String
+ensureTrailingNewline txt
+  | null txt = txt
+  | last txt == '\n' = txt
+  | otherwise = txt ++ "\n"
+
+applySpanReplacements :: String -> [(Span, String)] -> Either String String
+applySpanReplacements original replacements = do
+  converted <- mapM toOffsets replacements
+  let sortedAsc = sortOn (\(s,_,_) -> s) converted
+  unless (nonOverlapping sortedAsc) $
+    Left "Generator definitions overlap; cannot rewrite file."
+  let sortedDesc = sortOn (\(s,_,_) -> negate s) converted
+  return $ foldl' applyOne original sortedDesc
+  where
+    toOffsets (sp, txt) = do
+      let src = spanSrc sp
+          reference = if null src then original else src
+          start = positionToOffset reference (spanBeg sp)
+          end   = positionToOffset reference (spanEnd sp)
+      if start <= end && end <= length reference
+        then Right (start, end, txt)
+        else Left "Invalid span information for generator replacement."
+    nonOverlapping [] = True
+    nonOverlapping [_] = True
+    nonOverlapping ((_,e1,_):(s2,e2,x2):rest) =
+      e1 <= s2 && nonOverlapping ((s2,e2,x2):rest)
+    applyOne acc (start, end, txt) =
+      let (prefix, rest) = splitAt start acc
+          (_, suffix) = splitAt (end - start) rest
+      in prefix ++ txt ++ suffix
+
+positionToOffset :: String -> (Int, Int) -> Int
+positionToOffset src (line, col)
+  | line <= 0 || col <= 0 = 0
+  | otherwise =
+      lineStartOffset src (line - 1) + (col - 1)
+
+lineStartOffset :: String -> Int -> Int
+lineStartOffset src linesToSkip = go src linesToSkip 0
+  where
+    go remaining 0 acc = acc
+    go [] _ acc = acc
+    go s n acc =
+      let (before, after) = break (== '\n') s
+          consumed = acc + length before
+      in case after of
+           []     -> consumed
+           (_:rest) -> go rest (n - 1) (consumed + 1)
+
+parseGeneratedFunctions :: String -> M.Map String String
+parseGeneratedFunctions output = go (lines output) Nothing [] M.empty
+  where
+    go [] currentName currentLines acc =
+      maybe acc (\name -> M.insert name (render currentLines) acc) currentName
+    go (ln:rest) currentName currentLines acc =
+      let trimmed = dropWhile isSpace ln
+      in if "def " `isPrefixOf` trimmed
+           then
+             let acc' = maybe acc (\name -> M.insert name (render currentLines) acc) currentName
+                 name = takeWhile isDefChar (drop 4 trimmed)
+             in go rest (Just name) [ln] acc'
+           else
+             case currentName of
+               Nothing -> go rest currentName currentLines acc
+               Just _  -> go rest currentName (currentLines ++ [ln]) acc
+    render ls = case ls of
+      [] -> ""
+      _  -> unlines ls
+    isDefChar c = isAlphaNum c || c == '_' || c == '\''
+
+throwCliError :: String -> IO a
+throwCliError msg = throwIO (BendException $ Unsupported noSpan (Ctx []) (Just msg))
 
 -- | Process a Bend file and return it's Core form
 processFileToCore :: FilePath -> IO ()
