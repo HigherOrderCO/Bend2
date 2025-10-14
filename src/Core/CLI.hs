@@ -200,7 +200,7 @@ processFileToHVM file = do
   let mainFQN = moduleName ++ "::main"
   book <- parseFile file
   result <- try $ do
-    bookAdj <- case adjustBookWithPats book of
+    bookAdj <- case adjustBook book of
       Done b -> return b
       Fail e -> showErrAndDie e
     -- putStrLn $ show bookAdj
