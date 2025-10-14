@@ -305,7 +305,7 @@ infer d span book@(Book defs names) ctx term =
           case check d span book ctx c (All hT (Lam "_" (Just hT) (\_ -> All (Lst hT) (Lam "_" (Just (Lst hT)) (\_ -> nT))))) of
             Done _ -> return $ (hT, (Lam "_" (Just hT) (\_ -> Lam "_" (Just (Lst hT)) (\_ -> nT))))
             _      -> Fail $ CantInfer span (normalCtx book ctx) Nothing
-        Done cT' -> trace "BBB" $ Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book cT') Nothing
+        Done cT' -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book cT') Nothing
         Fail e   -> Fail e
       return $ All (Lst hT) (LstM nT cT)
 
@@ -702,8 +702,8 @@ check d span book ctx term      goal =
           return $ Let k (Just t') v' (\x -> bindVarByName k x f')
         Nothing -> do
           t <- infer d span book ctx v
-          t' <- trace (show (reduceEtas d span book t) ++ " :: " ++ show Set) $ check d span book ctx (reduceEtas d span book t) Set
-          v' <- trace (show (reduceEtas d span book v) ++ " :: " ++ show t') $ cutChk <$> check d span book ctx v t'
+          t' <- check d span book ctx (reduceEtas d span book t) Set
+          v' <- cutChk <$> check d span book ctx v t'
           f' <- check (d+1) span book (extend ctx k (Var k d) t') (f (Var k d)) goal
           return $ Let k (Just t') v' (\x -> bindVarByName k x f')
 

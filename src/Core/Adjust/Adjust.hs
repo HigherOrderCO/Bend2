@@ -118,15 +118,15 @@ annotateSplitBook book@(Book defs names) = do
       let checkResult = do 
             typ'  <- check 0 noSpan book (Ctx []) typ Set
             term' <- check 0 noSpan book (Ctx []) term typ'
-            -- traceM $ "chec: " ++ show term'
+            traceM $ "chec: " ++ show term'
             return (inj, term', typ')
       case checkResult of
         Done (inj', term', typ') -> do
-          -- putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
+          putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
           return ((name, (inj', term', typ')) : accDefs, accSuccess)
         Fail e -> do
-          -- hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
-          -- hPutStrLn stderr $ show e
+          hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
+          hPutStrLn stderr $ show e
           -- Keep original term when check fails
           return ((name, (inj, term, typ)) : accDefs, False)
 
@@ -157,9 +157,9 @@ adjustBook book@(Book defs names) = do
         Done t' -> t'
         Fail e  -> throw (BendException e)
   let adjustedBook  = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
-  let (annSplitBook, success) = unsafePerformIO $ annotateSplitBook adjustedBook 
-  Done annSplitBook
-  -- Done adjustedBook
+  -- let (annSplitBook, success) = unsafePerformIO $ annotateSplitBook adjustedBook 
+  -- Done annSplitBook
+  Done adjustedBook
 
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
 adjustBookWithPats :: Book -> Result Book
