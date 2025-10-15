@@ -173,8 +173,8 @@ infer d span book@(Book defs names) ctx term =
     -- ------------------- infer-Chk
     -- ctx |- (v :: t) : t
     Chk v t -> do
-      _ <- check d span book ctx t Set
-      t' <- check d span book ctx v t
+      t' <- check d span book ctx t Set
+      _ <- check d span book ctx v t
       Done t'
 
     -- Can't infer Trust
@@ -661,8 +661,8 @@ check d span book ctx term      goal =
       b' <- check d span book ctx b (All a (Lam "_" Nothing (\_ -> Set)))
       return $ All a' b'
 
-    (Chk x t, _) | equal d book t nGoal -> do
-      check d span book ctx x t
+    -- (Chk x t, _) | equal d book t nGoal -> do
+    --   check d span book ctx x t
 
     -- ctx |-
     -- ------------------ Trust
@@ -770,12 +770,8 @@ check d span book ctx term      goal =
     -- ---------------------- Lam
     -- ctx |- λx. f : ∀x:A. B
     (Lam k mt f, All a b) -> do
-      ann <- case mt of 
-        Nothing                   -> return a
-        Just t | equal d book t a -> return t
-        Just t                    -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All t (Lam "_" Nothing (\_ -> Var "_" 0)))) Nothing
       f' <- check (d+1) span book (extend ctx k (Var k d) a) (f (Var k d)) (App b (Var k d))
-      return $ Lam k (Just ann) (\x -> bindVarByIndex d x f')
+      return $ Lam k (Just a) (\x -> bindVarByIndex d x f')
 
     -- ctx |- 
     -- --------------------------------- EmpM-Eql-Zer-Suc
