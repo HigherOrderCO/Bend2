@@ -25,6 +25,7 @@ import System.IO (hClose, hFlush, hPutStr, hPutStrLn, stderr, stdout)
 import System.IO.Temp (withSystemTempFile)
 import System.Timeout (timeout)
 import Data.Typeable (Typeable, cast)
+import Text.Read (readMaybe)
 
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Bind
@@ -349,7 +350,7 @@ processFileToCore file = do
     Right () -> return ()
   where
     showBookWithFQN (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
-    showDefn k (_, x, t) = k ++ " : " ++ showTerm True False t ++ " = " ++ showTerm True False x
+    showDefn k (_, x, t) = k ++ " : " ++ showTerm True t ++ " = " ++ showTerm True x
 
 -- | Try to format JavaScript code using prettier if available
 formatJavaScript :: String -> IO String
@@ -510,9 +511,10 @@ hasMet term = case term of
 
 showErrAndDie :: (Show a, Typeable a) => a -> IO b
 showErrAndDie err = do
-  case cast err of
-    Just (msg :: String) -> hPutStrLn stderr msg
-    Nothing -> hPutStrLn stderr (show err)
+  let rendered = case readMaybe (show err) :: Maybe String of
+        Just txt -> txt
+        Nothing  -> show err
+  hPutStrLn stderr rendered
   exitFailure
 
 -- IO Helper Functions

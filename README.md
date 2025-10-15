@@ -102,7 +102,9 @@ def comm(a: Nat, b: Nat) -> Nat{add(a,b) == add(b,a)}:
       finally
 ```
 
-You can run the programs above with `bend file_name.bend`.
+You can run the programs above with `bend file_name.bend`. Make sure to execute
+the CLI from the `BendRoot/` directory of your workspace, as the import system
+expects all paths to be relative to that root.
 
 ## Using SupGen: an automatic programmer and prover
 
