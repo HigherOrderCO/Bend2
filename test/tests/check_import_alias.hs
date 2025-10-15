@@ -22,12 +22,12 @@ def f() -> Nat -> Nat -> Nat:
 
 add_for_import_bend :: String
 add_for_import_bend = """
-def fixme/add_for_import(a: Nat, b: Nat) -> Nat:
+def add_for_import(a: Nat, b: Nat) -> Nat:
   match a:
     case 0n:
       b
     case 1n+p:
-      fixme/add_for_import(p,b)
+      add_for_import(p,b)
 """
 
 main :: IO ()

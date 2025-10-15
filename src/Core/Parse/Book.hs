@@ -37,7 +37,7 @@ parseDefinition = do
 parseDef :: Parser (Name, Defn)
 parseDef = do
   _ <- symbol "def"
-  f <- name
+  f <- definitionName
   qualifiedName <- qualifyName f
   choice
     [ parseDefFunction qualifiedName
@@ -93,18 +93,10 @@ parseImport = do
 parseImportTarget :: Parser String
 parseImportTarget = lexeme $ do
   pathParts <- sepBy1 parseSegment (char '/')
-  suffix <- optional (try parseSuffix)
-  let basePath = intercalate "/" pathParts
-  pure $ maybe basePath (\suf -> basePath ++ "::" ++ suf) suffix
+  pure $ intercalate "/" pathParts
   where
     parseSegment :: Parser String
     parseSegment = some (satisfy isSegmentChar <?> "path character")
-
-    parseSuffix :: Parser String
-    parseSuffix = do
-      _ <- string "::"
-      parts <- sepBy1 parseSegment (string "::")
-      pure (intercalate "::" parts)
 
     isSegmentChar :: Char -> Bool
     isSegmentChar c =
@@ -125,7 +117,7 @@ parseBook = do
 parseType :: Parser (Name, Defn)
 parseType = label "datatype declaration" $ do
   _       <- symbol "type"
-  tName   <- name
+  tName   <- definitionName
   qualifiedTypeName <- qualifyName tName
   params  <- option [] $ angles (sepEndBy (parseArg True) (symbol ","))
   indices <- option [] $ parens (sepEndBy (parseArg False) (symbol ","))
@@ -186,7 +178,7 @@ parseGen = do
   -- Insert a Loc span for text replacement in bendgen
   (sp, (f, x, t)) <- withSpan $ do
     _ <- symbol "gen"
-    f <- name
+    f <- definitionName
     qualifiedName <- qualifyName f
     (x, t) <- choice [parseGenFunction qualifiedName, parseGenSimple qualifiedName]
     return (qualifiedName, x, t)

@@ -17,6 +17,7 @@ module Core.Parse.Parse
   , braces
   , brackets
   , name
+  , definitionName
   , reserved
   , parseSemi
 
@@ -143,6 +144,15 @@ checkReserved n = when (n `elem` reserved) $ do
 name :: Parser Name
 name = lexeme $ do
   n <- parseRawName
+  checkReserved n
+  return n
+
+-- | Parse a definition name, forbidding path separators.
+definitionName :: Parser Name
+definitionName = lexeme $ do
+  n <- parseRawName
+  when ('/' `elem` n) $
+    fail "definition names cannot contain '/' (use imports for paths)"
   checkReserved n
   return n
 

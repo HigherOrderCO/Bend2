@@ -4,7 +4,7 @@ import Test
 
 main_bend :: String
 main_bend = """
-import Tests/color as Color
+import Tests/Color as Color
 
 def identity(c: Color::Color) -> Color::Color:
   match c:
@@ -49,7 +49,7 @@ main :: IO ()
 main =
   test "bend main.bend"
     [ ("main.bend", main_bend)
-    , ("Tests/color.bend", color_bend)
+    , ("Tests/Color.bend", color_bend)
     ]
     "constructor names respect import alias rewriting"
     $ \_ err -> assert (err == "")

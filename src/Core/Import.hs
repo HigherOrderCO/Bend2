@@ -7,14 +7,14 @@ module Core.Import
 import Control.Monad (when)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Data.Char (isUpper)
-import Data.List (intercalate, isInfixOf, isSuffixOf, foldl')
+import Data.List (intercalate, isSuffixOf, foldl')
 import Data.List.Split (splitOn)
 import System.Directory (doesFileExist, getCurrentDirectory, canonicalizePath)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import qualified System.FilePath as FP
 import System.IO (hPutStrLn, stderr)
+import Data.Char (isUpper)
 
 import Core.Deps
 import Core.Parse.Book (doParseBook)
@@ -46,16 +46,28 @@ applyFunctionSubst :: SubstMap -> Name -> Name
 applyFunctionSubst subst name =
   case M.lookup name (functionMap subst) of
     Just replacement -> replacement
-    Nothing -> applyPrefixSubst subst name
+    Nothing ->
+      let expanded = applyPrefixSubst subst name
+      in if expanded == name
+           then name
+           else applyFunctionSubst subst expanded
 
 applyPrefixSubst :: SubstMap -> Name -> Name
 applyPrefixSubst subst name =
-  case splitOn "::" name of
-    alias:rest | not (null rest) ->
+  case span (/= '/') name of
+    (alias, '/' : rest) | not (null alias) ->
       case M.lookup alias (prefixMap subst) of
-        Just prefix -> prefix ++ "::" ++ intercalate "::" rest
-        Nothing -> name
-    _ -> name
+        Just target -> combineAliasPath target rest
+        Nothing -> legacy
+    _ -> legacy
+  where
+    legacy =
+      case splitOn "::" name of
+        aliasSegment:restSegments | not (null restSegments) ->
+          case M.lookup aliasSegment (prefixMap subst) of
+            Just prefix -> prefix ++ "::" ++ intercalate "::" restSegments
+            Nothing -> name
+        _ -> name
 
 applyNameSubst :: SubstMap -> Name -> Name
 applyNameSubst subst name =
@@ -66,6 +78,25 @@ applyNameSubst subst name =
 
 applyNameSubstSet :: SubstMap -> S.Set Name -> S.Set Name
 applyNameSubstSet subst = S.map (applyNameSubst subst)
+
+splitPathSegments :: String -> [String]
+splitPathSegments = filter (not . null) . splitOn "/"
+
+lastPathSegment :: String -> Maybe String
+lastPathSegment path =
+  case reverse (splitPathSegments path) of
+    (seg:_) -> Just seg
+    []      -> Nothing
+
+combineAliasPath :: String -> String -> String
+combineAliasPath target rest =
+  let targetSegs = splitPathSegments target
+      restSegs   = splitPathSegments rest
+      restSegs'  = case (reverse targetSegs, restSegs) of
+                     (lastSeg:_, headSeg:tailSegs) | lastSeg == headSeg -> tailSegs
+                     _ -> restSegs
+      combined   = targetSegs ++ restSegs'
+  in intercalate "/" combined
 
 -- Substitution on terms ------------------------------------------------------
 
@@ -148,10 +179,13 @@ buildAliasSubstMap = foldl' addAlias emptySubstMap
   where
     addAlias acc (ImportAlias target alias) =
       let accWithPrefix = insertPrefix alias target acc
-          accWithFunction = if "::" `isInfixOf` target
-                              then insertFunction alias target accWithPrefix
-                              else accWithPrefix
-      in accWithFunction
+      in case lastPathSegment target of
+           Nothing -> accWithPrefix
+           Just public ->
+             let fqn = target ++ "::" ++ public
+                 acc1 = insertFunction alias fqn accWithPrefix
+                 acc2 = insertFunction (alias ++ "/" ++ public) fqn acc1
+             in acc2
 
 buildLocalSubstMap :: FilePath -> Book -> SubstMap
 buildLocalSubstMap currentFile (Book defs _) =
@@ -167,6 +201,23 @@ buildLocalSubstMap currentFile (Book defs _) =
     collect fs (fqn, _defn) =
       let withoutPrefix = drop (length modulePrefix + 2) fqn
       in (withoutPrefix, fqn) : fs
+
+buildExportSubstMap :: FilePath -> Book -> Either String SubstMap
+buildExportSubstMap modulePath (Book defs _) =
+  let modulePrefix = extractModuleName modulePath
+  in case lastPathSegment modulePrefix of
+    Nothing -> Left $ "Error: invalid module path '" ++ modulePath ++ "'."
+    Just public ->
+      let fqn = modulePrefix ++ "::" ++ public
+      in case M.lookup fqn defs of
+           Nothing -> Left $ "Error: public definition '" ++ fqn ++ "' not found in module '" ++ modulePrefix ++ "'."
+           Just _  ->
+             let entries =
+                   [ (modulePrefix, fqn)
+                   , (modulePrefix ++ "/" ++ public, fqn)
+                   ]
+                 subst = foldl' (\m (k,v) -> insertFunction k v m) emptySubstMap entries
+             in Right subst
 
 -- Book helpers ----------------------------------------------------------------
 
@@ -212,9 +263,10 @@ resolveDependency st dep
       let resolved = applyNameSubst (isSubst st) dep
       if resolved /= dep
         then pure st { isPending = S.insert resolved (isPending st) }
-        else if "::" `isInfixOf` dep
-          then ensureDefinition dep st
-          else if not (isModuleCandidate dep)
+        else case splitFQN dep of
+          Just _  -> ensureDefinition dep st
+          Nothing ->
+            if not (isModuleCandidate dep)
             then pure st { isLoaded = S.insert dep (isLoaded st) }
             else do
               st' <- ensureModuleFor dep st
@@ -227,7 +279,7 @@ resolveDependency st dep
 
 isModuleCandidate :: Name -> Bool
 isModuleCandidate [] = False
-isModuleCandidate (c:_) = isUpper c
+isModuleCandidate name = '/' `elem` name || isUpper (head name)
 
 ensureDefinition :: Name -> ImporterState -> IO ImporterState
 ensureDefinition name st
@@ -240,9 +292,19 @@ ensureDefinition name st
             Nothing -> do
               hPutStrLn stderr $ "Import error: invalid fully qualified name '" ++ name ++ "'."
               exitFailure
-            Just (modulePath, _) -> do
-              ((moduleBook, moduleLocalSubst), st1) <- loadModule modulePath st
-              let subst' = unionSubstMap (isSubst st1) moduleLocalSubst
+            Just (modulePath, defName) -> do
+              let publicName = lastPathSegment modulePath
+                  moduleAlreadyCached = M.member modulePath (isModuleCache st)
+              case publicName of
+                Nothing -> do
+                  hPutStrLn stderr $ "Import error: invalid module path '" ++ modulePath ++ "'."
+                  exitFailure
+                Just pub | defName /= pub && not moduleAlreadyCached -> do
+                  hPutStrLn stderr $ "Import error: '" ++ name ++ "' is private to '" ++ modulePath ++ "'."
+                  exitFailure
+                _ -> pure ()
+              ((moduleBook, moduleExportSubst), st1) <- loadModule modulePath st
+              let subst' = unionSubstMap (isSubst st1) moduleExportSubst
                   st2 = st1 { isSubst = subst' }
               case M.lookup name (bookDefs moduleBook) of
                 Nothing -> do
@@ -262,8 +324,8 @@ ensureDefinition name st
 
 ensureModuleFor :: Name -> ImporterState -> IO ImporterState
 ensureModuleFor modulePath st = do
-  ((_, moduleLocalSubst), st1) <- loadModule modulePath st
-  let subst' = unionSubstMap (isSubst st1) moduleLocalSubst
+  ((_, moduleExportSubst), st1) <- loadModule modulePath st
+  let subst' = unionSubstMap (isSubst st1) moduleExportSubst
   pure st1 { isSubst = subst' }
 
 loadModule :: String -> ImporterState -> IO ((Book, SubstMap), ImporterState)
@@ -282,7 +344,10 @@ loadModule modulePath st =
               localSubst = buildLocalSubstMap posixPath book
               combined = unionSubstMap aliasSubst localSubst
               substituted = substituteRefsInBook combined book
-              cacheEntry = (substituted, localSubst)
+          exportSubst <- case buildExportSubstMap posixPath substituted of
+                           Left errMsg -> hPutStrLn stderr errMsg >> exitFailure
+                           Right subst -> pure subst
+          let cacheEntry = (substituted, exportSubst)
               cache' = M.insert modulePath cacheEntry (isModuleCache st)
           pure (cacheEntry, st { isModuleCache = cache' })
 
