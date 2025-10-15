@@ -7,19 +7,13 @@ Bend aims to be a programming language AI-directed. This means AI's should handl
 
 The smallest part of a `Bend` codebase is a **definition**. Definitions are introduced by `def name()...`. Those definitions are in files that live in a specific path.
 
-All definitions, along with their paths, build up a **Fully Qualified Name**, which will be called FQN across this document.
+All definitions, along with their paths, build up a **Fully Qualified Path** (FQP). Bend now enforces the following rule: every `.bend` file exports exactly **one** public definition, and its name must match the file’s final path segment. For example, `./Nat/add.bend` must contain the public definition `def add ...`. External code reaches that definition through the path `Nat/add`.
 
-So for example, a function in: `./Nat/operations.bend`, defined as `def add...` will have the FQN: `Nat/operations::add` . Note that `/` denotes the filepath of the functions, whereas `::` denotes the function name that lives there.
+Files are still allowed to declare any number of helper definitions. Helpers stay private to the file, never leave the module scope, and therefore can’t be imported directly from other files.
 
-This creates a very interesting and important property in our system. All functions are **UNIQUELY** defined by their FQN, and there is only ONE definition per FQN. This creates a 1 : 1 mapping, where knowing the FQN of some definition, we **must** know exactly where it lives. This is extremely good for AI contexts, since now it does not have to keep `import` syntaxes or other context bloat.
+Because of this 1 : 1 mapping, we can build an import system that never drags entire modules into scope. In code you can write `def main() -> Nat: Nat/some_file/some_other_file()`, and the resolver will only fetch that single definition (plus its own transitive dependencies) from `BendRoot/Nat/some_file/some_other_file.bend`.
 
-Also, this way we're able to build an import system based on this basic blocks, where we DO NOT BRING ANY USELESS DEFINITION TO SCOPE.
-
-This means we absolutely **not** import entire modules, such as `import Nat` bringing `Nat/operations.bend`, `Nat/proofs.bend` or other files into scope. The definitions into scope are strictly the ones used in the code.
-
-So, in my code, I should be able to write `def main() -> Nat: Nat/some_file/some_other_file::definition()` and this should only bring that specific definition (and it's dependencies, obviously individually as well) into scope. 
-
-The only syntax sugar we should have available is to allow *aliases* to be created. This syntax should be: `import FQN as alias`, and the implementation should be a simple substitution map where alias point to the correct FQN. Note that aliases go up to paths, so you do: `import Nat/some_file/some_other_file as F` and then do `F::definition()`. 
+Aliases remain a thin textual convenience. `import Nat/add as N` records a substitution so that references like `N` or `N/add(...)` are rewritten back to the public path `Nat/add(...)`.
 
 Now, Bend also has an external import system, that is a package index. This package is a global tree of all definitions.
 
@@ -71,9 +65,9 @@ This groups related definitions (add, sub, mul, etc.) under a single version, pr
 
 1. **Package-level versioning**: Version `#7` applies to all definitions within `VictorTaelin/VecAlg`, ensuring coherent sets of functions that are tested and published together.
 
-2. **Individual addressability**: Internally, each definition remains fully independent. The resolver and database treat `VictorTaelin/VecAlg#7/List/dot` as a unique FQN, enabling minimal context loading—only the specific definitions used (plus their dependencies) are pulled into scope.
+2. **Individual addressability**: Internally, each definition remains fully independent. The resolver and database treat `VictorTaelin/VecAlg#7/List/dot` as a unique FQP, enabling minimal context loading—only the specific definitions used (plus their dependencies) are pulled into scope.
 
-3. **Direct reference capability**: Any definition can be referenced anywhere using its full FQN without explicitly importing the package first, maintaining context efficiency.
+3. **Direct reference capability**: Any definition can be referenced anywhere using its full FQP without explicitly importing the package first, maintaining context efficiency.
 
 **Implementation Notes**
 
@@ -92,15 +86,15 @@ BendRoot/@VictorTaelin/VecAlg#7/Nat/add.bend
 
 The resolver treats the version as part of the path structure, ensuring different versions can coexist in the dependency tree when needed.
 
-Importing / using `BendRoot/@VictorTaelin/VecAlg/List/dot::fn()` will error out. A version NEEDS to be specified.
+Importing / using `BendRoot/@VictorTaelin/VecAlg/List/dot()` will error out. A version NEEDS to be specified.
 
 In terms of storing, we will always store different versions in different places, meaning:
 
 ```
 @lorenzo/my_app#0
 # contains:
-@lorenzo/my_app#0/main::foo()
-@lorenzo/my_app#0/main::bar()
+@lorenzo/my_app#0/main/foo
+@lorenzo/my_app#0/main/bar
 ```
 
 Then, this get stored in the BendRoot index in that exact structure.
@@ -112,8 +106,8 @@ Therefore, we now have to create:
 ```
 @lorenzo/my_app#1
 # contains:
-@lorenzo/my_app#1/main::foo() -> changed
-@lorenzo/my_app#1/main::bar() -> didnt change
+@lorenzo/my_app#1/main/foo -> changed
+@lorenzo/my_app#1/main/bar -> didnt change
 ```
 
 Note that we're storing bar() twice even though the implementations are identical, but this is the CORRECT way to do so.
@@ -123,10 +117,9 @@ Note that we're storing bar() twice even though the implementations are identica
 ### Parser and Surface Syntax
 
 - The only recognised import form is `import <target> as <alias>`.
-- `<target>` is parsed as a POSIX-style path with an optional `::constructor` suffix. Examples:
-  - `Nat/add` (brings the file `Nat/add.bend` into scope, i.e just adds it at the substitution map, do not bring all definitions)
-  - `Nat/add::add` (directly references the `add` definition inside that file)
-  - `Nat/list` (creates a prefix alias; every later reference `Nat` resolves under the original path)
+- `<target>` is parsed as a POSIX-style path. Examples:
+  - `Nat/add` (brings the file `Nat/add.bend` into scope; its public definition is `add`)
+  - `Nat/list/map` (creates a prefix alias so later references like `Alias/map` rewrite back to the fully qualified path)
 - Aliases are stored as `ImportAlias` records in the `ParserState` and later consumed by the resolver—there is no textual rewriting at parse time anymore.
 - Paths that contain package versions (for example `@lorenzo/my_app#1/...`) are accepted verbatim by the parser; the `#` segment is treated as just another path component. There is currently no parser-level enforcement that a version segment actually exists—validation must happen downstream.
 - Legacy constructs (`from ... import ...`, implicit module imports, slash aliases, etc.) have been removed; code using them will now fail during parsing.
@@ -141,8 +134,8 @@ All resolution happens inside `Core.Import`. The high-level flow for `autoImport
 
 2. **Substitution Maps**
    - `buildAliasSubstMap` turns parsed `ImportAlias` entries into two mappings:
-     - Prefix aliases (`alias -> target::prefix`) so expressions like `F::foo` rewrite back to the fully qualified name.
-     - Direct function aliases (`alias -> FQN`) when the import target itself already includes `::`.
+     - Prefix aliases (`alias -> target`) so expressions like `F/add` rewrite back to the fully qualified path.
+     - Direct function aliases (`alias -> target::public`) so bare `F` resolves immediately to the public definition exported by that file.
    - `buildLocalSubstMap` scans the local book (produced by parsing the current file) and registers short names for functions and constructors defined in that file.
    - Substitution maps are purely textual rewrites: they only affect names inside already loaded terms and never trigger IO.
 
@@ -150,7 +143,7 @@ All resolution happens inside `Core.Import`. The high-level flow for `autoImport
    - The base book is rewritten using alias+local substitutions and its dependencies are collected via `Core.Deps.getBookDeps`.
    - An import loop (`resolveAll`) repeatedly dequeues unmet dependencies:
      - If a dependency already exists in the current book (or has been loaded), nothing happens.
-     - Otherwise, the system splits the FQN into `(path, defName)` and calls `loadModule path`.
+     - Otherwise, the system splits the FQP into `(path, defName)` and calls `loadModule path`.
 
 4. **Module Loading**
    - `loadModule` tries to read `path.bend` or `path/_.bend` relative to BendRoot.
@@ -180,6 +173,7 @@ All resolution happens inside `Core.Import`. The high-level flow for `autoImport
 - Every Bend source file is expected to live under `BendRoot/<path>.bend` or `BendRoot/<path>/_.bend`.
 - Parsing a file never loads dependencies automatically; all extra files are fetched lazily as dependencies are discovered during resolution.
 - Books produced by the resolver only contain definitions that were directly requested by user code (plus their dependencies). This keeps the global scope clean and prevents accidental name clashes.
+- Each file exposes exactly one public definition whose name matches the file’s final path segment; any other helper definitions in that file remain private and cannot be imported elsewhere.
 - If multiple modules define constructors with the same short name, the enum substitution map keeps both their fully qualified names, and the unqualified alias is dropped when ambiguous.
 
 ### Practical Notes
@@ -189,7 +183,7 @@ All resolution happens inside `Core.Import`. The high-level flow for `autoImport
 - The resolver caches parsed modules within a single import run, but it does not persist results between CLI invocations; subsequent runs will re-read files from disk (which should be in sync thanks to BendRoot mirroring).
 - The package index client currently assumes a `GET /api/files/<path>` endpoint that responds with raw Bend source. Future enhancements (permissions, authentication) can extend the helper without touching the resolver core.
 
-Together, these pieces implement the spec’s core principles: every definition is addressed by an FQN, imports introduce no unwanted names, aliases act as predictable textual sugar, and the package index is transparently consulted whenever the local BendRoot is missing a required file.
+Together, these pieces implement the spec’s core principles: every definition is addressed by an FQP, imports introduce no unwanted names, aliases act as predictable textual sugar, and the package index is transparently consulted whenever the local BendRoot is missing a required file.
 
 ### Spec Compliance Gaps
 
