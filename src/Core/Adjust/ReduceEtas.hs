@@ -66,6 +66,13 @@
 -- resolveMatches -> given elim label, at each term f(x), if `f` is λ{..} 
 --               of a kind matching the elim label, then replace this application by
 --               the the clause of f that corresponds to the one determined by reduceEtas
+--
+-- Supporting Utilities:
+-- ---------------------
+-- ElimLabel      -> records which eliminator was matched and the span/binder metadata to rebuild it later
+-- combLabels     -> merges multiple ElimLabel findings, halting when incompatible eliminators are mixed
+-- getVarNames    -> extracts the parameter names used by eliminator branches, allowing preservation of var names when the user defined them
+-- getAnnotations -> extract argument annotations out of eliminator branches so the reconstructed clauses can preserve them
 
 {-# LANGUAGE ViewPatterns #-}
 module Core.Adjust.ReduceEtas where
@@ -528,6 +535,12 @@ getVarNames term defs = go (length defs) 0 term [] defs
     combine a  b  [] = error "unreachable B" -- called with go without enough defaults
 
 
+-- Extracts argument annotations from eliminator branches
+-- 1) Traverses the lambda towers inside each clause, collecting explicit type annotations
+-- 2) Merges annotations across branches, stopping when they disagree
+-- 3) Returns `Nothing` when no annotations can be recovered (or when structure diverges)
+--
+-- Returns: from NatM z (λp. ...) -> Just [Nothing, Just τ] when the successor branch annotates its binder with τ
 getAnnotations :: Int -> Book -> Term -> Maybe [Maybe Term]
 getAnnotations d book term = case cut term of
   NatM _ s -> go d 1 0 s [] [Nothing]
@@ -610,7 +623,3 @@ getAnnotations d book term = case cut term of
         _ -> Nothing
     combine [] [] [] = Just []
     combine a b [] = Nothing -- called with go without enough defaults
-
-
-
-
