@@ -7,6 +7,7 @@ module Core.Import
 import Control.Monad (when)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Data.Char (isUpper)
 import Data.List (intercalate, isInfixOf, isSuffixOf, foldl')
 import Data.List.Split (splitOn)
 import System.Directory (doesFileExist, getCurrentDirectory, canonicalizePath)
@@ -15,42 +16,35 @@ import System.FilePath ((</>))
 import qualified System.FilePath as FP
 import System.IO (hPutStrLn, stderr)
 
-import Core.Type
 import Core.Deps
 import Core.Parse.Book (doParseBook)
 import Core.Parse.Parse (ParserState(..), Import(..))
+import Core.Type
 import qualified Package.Index as PkgIndex
 
 -- Substitution structures ----------------------------------------------------
 
 data SubstMap = SubstMap
   { functionMap :: M.Map Name Name
-  , enumMap     :: M.Map Name Name
   , prefixMap   :: M.Map Name Name
   } deriving (Show, Eq)
 
 emptySubstMap :: SubstMap
-emptySubstMap = SubstMap M.empty M.empty M.empty
+emptySubstMap = SubstMap M.empty M.empty
 
 unionSubstMap :: SubstMap -> SubstMap -> SubstMap
-unionSubstMap (SubstMap f1 e1 p1) (SubstMap f2 e2 p2) =
-  SubstMap (M.union f1 f2) (M.union e1 e2) (M.union p1 p2)
+unionSubstMap (SubstMap f1 p1) (SubstMap f2 p2) =
+  SubstMap (M.union f1 f2) (M.union p1 p2)
 
 insertFunction :: Name -> Name -> SubstMap -> SubstMap
-insertFunction alias target (SubstMap f e p) = SubstMap (M.insert alias target f) e p
+insertFunction alias target (SubstMap f p) = SubstMap (M.insert alias target f) p
 
 insertPrefix :: Name -> Name -> SubstMap -> SubstMap
-insertPrefix alias target (SubstMap f e p) = SubstMap f e (M.insert alias target p)
+insertPrefix alias target (SubstMap f p) = SubstMap f (M.insert alias target p)
 
 applyFunctionSubst :: SubstMap -> Name -> Name
 applyFunctionSubst subst name =
   case M.lookup name (functionMap subst) of
-    Just replacement -> replacement
-    Nothing -> applyPrefixSubst subst name
-
-applyEnumSubst :: SubstMap -> Name -> Name
-applyEnumSubst subst name =
-  case M.lookup name (enumMap subst) of
     Just replacement -> replacement
     Nothing -> applyPrefixSubst subst name
 
@@ -63,18 +57,27 @@ applyPrefixSubst subst name =
         Nothing -> name
     _ -> name
 
+applyNameSubst :: SubstMap -> Name -> Name
+applyNameSubst subst name =
+  let fnReplaced = applyFunctionSubst subst name
+  in if fnReplaced /= name
+        then fnReplaced
+        else name
+
+applyNameSubstSet :: SubstMap -> S.Set Name -> S.Set Name
+applyNameSubstSet subst = S.map (applyNameSubst subst)
+
 -- Substitution on terms ------------------------------------------------------
 
 substituteRefs :: SubstMap -> Term -> Term
 substituteRefs subst = go S.empty
   where
     resolveName = applyFunctionSubst subst
-    resolveEnum = applyEnumSubst subst
 
     go bound term = case term of
       Var k i     -> if k `S.member` bound then Var k i else Var (resolveName k) i
       Ref k i     -> Ref (resolveName k) i
-      Sym n       -> Sym (resolveEnum n)
+      Sym n       -> Sym n
       Sub t       -> Sub (go bound t)
       Fix k f     -> Fix k (\v -> go (S.insert k bound) (f v))
       Let k t v f -> Let k (fmap (go bound) t) (go bound v) (\u -> go (S.insert k bound) (f u))
@@ -154,42 +157,24 @@ buildLocalSubstMap :: FilePath -> Book -> SubstMap
 buildLocalSubstMap currentFile (Book defs _) =
   let filePrefix = modulePrefix ++ "::"
       localDefs = M.filterWithKey (\k _ -> filePrefix `prefixOf` k) defs
-      (fnMap, enumMapEntries) = foldl' collect ([], []) (M.toList localDefs)
+      fnMap = foldl' collect [] (M.toList localDefs)
       fnMap' = M.fromList fnMap
-      enumMap' = M.fromList enumMapEntries
-  in SubstMap fnMap' enumMap' M.empty
+  in SubstMap fnMap' M.empty
   where
     modulePrefix = extractModuleName currentFile
     prefixOf pref str = take (length pref) str == pref
 
-    collect (fs, es) (fqn, defn) =
+    collect fs (fqn, _defn) =
       let withoutPrefix = drop (length modulePrefix + 2) fqn
-          parts = splitOn "::" withoutPrefix
-          (fnEntries, enumEntries) = case parts of
-            [name] -> ([(name, fqn)], [])
-            [typeName, enumName] -> ([], [(withoutPrefix, fqn), (enumName, fqn)])
-            _ -> ([(withoutPrefix, fqn)], [])
-          enumFromDef = extractEnumsFromDefn defn
-      in (fs ++ fnEntries, es ++ enumEntries ++ enumFromDef)
-
-    extractEnumsFromDefn (_, term, _) = extractEnumsFromTerm term
-
-    extractEnumsFromTerm term = case term of
-      Sig (Enu tags) _ -> [(takeLast tag, tag) | tag <- tags]
-      Lam _ _ f -> extractEnumsFromTerm (f (Var "_" 0))
-      App f x   -> extractEnumsFromTerm f ++ extractEnumsFromTerm x
-      Sig a b   -> extractEnumsFromTerm a ++ extractEnumsFromTerm b
-      All a b   -> extractEnumsFromTerm a ++ extractEnumsFromTerm b
-      _         -> []
-
-    takeLast fqn = case reverse (splitOn "::" fqn) of
-      (x:_) -> x
-      []    -> fqn
+      in (withoutPrefix, fqn) : fs
 
 -- Book helpers ----------------------------------------------------------------
 
 bookNames :: Book -> S.Set Name
 bookNames (Book defs _) = S.fromList (M.keys defs)
+
+bookDefs :: Book -> M.Map Name Defn
+bookDefs (Book defs _) = defs
 
 insertDefinition :: Book -> Name -> Defn -> Book
 insertDefinition (Book defs names) name defn =
@@ -208,40 +193,80 @@ data ImporterState = ImporterState
   , isBook        :: Book
   , isPending     :: S.Set Name
   , isLoaded      :: S.Set Name
-  , isModuleCache :: M.Map String Book
+  , isModuleCache :: M.Map String (Book, SubstMap)
+  , isSubst       :: SubstMap
   }
 
 resolveAll :: ImporterState -> IO ImporterState
 resolveAll st =
   case S.minView (isPending st) of
     Nothing -> pure st
-    Just (dep, rest)
-      | dep `S.member` isLoaded st -> resolveAll st { isPending = rest }
-      | dep `M.member` defs -> resolveAll st { isPending = rest, isLoaded = S.insert dep (isLoaded st) }
-      | otherwise ->
-          case splitFQN dep of
-            Nothing -> resolveAll st { isPending = rest, isLoaded = S.insert dep (isLoaded st) }
+    Just (dep, rest) -> do
+      st' <- resolveDependency st { isPending = rest } dep
+      resolveAll st'
+
+resolveDependency :: ImporterState -> Name -> IO ImporterState
+resolveDependency st dep
+  | dep `S.member` isLoaded st = pure st
+  | otherwise = do
+      let resolved = applyNameSubst (isSubst st) dep
+      if resolved /= dep
+        then pure st { isPending = S.insert resolved (isPending st) }
+        else if "::" `isInfixOf` dep
+          then ensureDefinition dep st
+          else if not (isModuleCandidate dep)
+            then pure st { isLoaded = S.insert dep (isLoaded st) }
+            else do
+              st' <- ensureModuleFor dep st
+              let resolved' = applyNameSubst (isSubst st') dep
+              if resolved' == dep
+                then do
+                  hPutStrLn stderr $ "Import error: could not resolve reference '" ++ dep ++ "'."
+                  exitFailure
+                else pure st' { isPending = S.insert resolved' (isPending st') }
+
+isModuleCandidate :: Name -> Bool
+isModuleCandidate [] = False
+isModuleCandidate (c:_) = isUpper c
+
+ensureDefinition :: Name -> ImporterState -> IO ImporterState
+ensureDefinition name st
+  | name `S.member` isLoaded st = pure st
+  | otherwise =
+      case M.lookup name (bookDefs (isBook st)) of
+        Just _ -> pure st { isLoaded = S.insert name (isLoaded st) }
+        Nothing ->
+          case splitFQN name of
+            Nothing -> do
+              hPutStrLn stderr $ "Import error: invalid fully qualified name '" ++ name ++ "'."
+              exitFailure
             Just (modulePath, _) -> do
-              (moduleBook, st1) <- loadModule modulePath st { isPending = rest }
-              case M.lookup dep (bookDefs moduleBook) of
+              ((moduleBook, moduleLocalSubst), st1) <- loadModule modulePath st
+              let subst' = unionSubstMap (isSubst st1) moduleLocalSubst
+                  st2 = st1 { isSubst = subst' }
+              case M.lookup name (bookDefs moduleBook) of
                 Nothing -> do
-                  hPutStrLn stderr $ "Error: definition '" ++ dep ++ "' not found in module '" ++ modulePath ++ "'."
+                  hPutStrLn stderr $ "Error: definition '" ++ name ++ "' not found in module '" ++ modulePath ++ "'."
                   exitFailure
                 Just defn -> do
-                  let book' = insertDefinition (isBook st1) dep defn
-                      depsForDef = S.delete dep (definitionDeps defn)
-                      alreadyKnown = S.union (bookNames book') (isLoaded st1)
-                      newPending = S.union (isPending st1) (S.difference depsForDef alreadyKnown)
-                  resolveAll st1
-                    { isBook   = book'
-                    , isLoaded = S.insert dep (isLoaded st1)
+                  let book' = insertDefinition (isBook st2) name defn
+                      depsForDef = S.delete name (definitionDeps defn)
+                      resolvedDeps = applyNameSubstSet subst' depsForDef
+                      alreadyKnown = S.union (bookNames book') (isLoaded st2)
+                      newPending = S.union (isPending st2) (S.difference resolvedDeps alreadyKnown)
+                  pure st2
+                    { isBook = book'
+                    , isLoaded = S.insert name (isLoaded st2)
                     , isPending = newPending
                     }
-  where
-    bookDefs (Book defs _) = defs
-    defs = bookDefs (isBook st)
 
-loadModule :: String -> ImporterState -> IO (Book, ImporterState)
+ensureModuleFor :: Name -> ImporterState -> IO ImporterState
+ensureModuleFor modulePath st = do
+  ((_, moduleLocalSubst), st1) <- loadModule modulePath st
+  let subst' = unionSubstMap (isSubst st1) moduleLocalSubst
+  pure st1 { isSubst = subst' }
+
+loadModule :: String -> ImporterState -> IO ((Book, SubstMap), ImporterState)
 loadModule modulePath st =
   case M.lookup modulePath (isModuleCache st) of
     Just cached -> pure (cached, st)
@@ -257,8 +282,9 @@ loadModule modulePath st =
               localSubst = buildLocalSubstMap posixPath book
               combined = unionSubstMap aliasSubst localSubst
               substituted = substituteRefsInBook combined book
-              cache' = M.insert modulePath substituted (isModuleCache st)
-          pure (substituted, st { isModuleCache = cache' })
+              cacheEntry = (substituted, localSubst)
+              cache' = M.insert modulePath cacheEntry (isModuleCache st)
+          pure (cacheEntry, st { isModuleCache = cache' })
 
 resolveModuleFile :: FilePath -> PkgIndex.IndexConfig -> String -> IO (String, FilePath)
 resolveModuleFile root indexCfg modulePath = do
@@ -319,9 +345,11 @@ runAutoImport root indexCfg base localSubst aliasSubst = do
         , isPending = initialPending
         , isLoaded = initialLoaded
         , isModuleCache = M.empty
+        , isSubst = combinedSubst
         }
   finalState <- resolveAll initialState
-  pure (isBook finalState)
+  let finalBook = substituteRefsInBook (isSubst finalState) (isBook finalState)
+  pure finalBook
 
 -- Utilities ------------------------------------------------------------------
 
