@@ -75,54 +75,40 @@ parseDefFunction f = label "function definition" $ do
     -- TODO: refactor parseArg to use a do-block instead. DO IT BELOW:
     nestTypeBod (argName, argType) (currType, currBod) = (All argType (Lam argName (Just argType) (\v -> currType)), Lam argName (Just argType) (\v -> currBod))
 
--- | Parse a module path like Path/To/Lib
-parseModulePath :: Parser String
-parseModulePath = do
-  firstPart <- name
-  restParts <- many (try $ char '/' >> name)
-  skip -- consume whitespace after path
-  return $ intercalate "/" (firstPart : restParts)
-
 addImport :: Import -> Parser ()
 addImport imp = do
   st <- get
   put st { parsedImports = imp : parsedImports st }
 
--- | Syntax: import module [as alias] | from module import name1, name2
+-- | Syntax: import <target> as <alias>
 parseImport :: Parser ()
-parseImport = choice
-  [ try parseFromImport         -- from module import name1, name2
-  , parseModuleImport           -- import module [as alias]
-  ]
-
--- | Parse: from module_path import name1, name2, ...
-parseFromImport :: Parser ()
-parseFromImport = do
-  _ <- symbol "from"
-  path <- parseModulePath
+parseImport = do
   _ <- symbol "import"
-  -- Parse either: name1 [as alias1], name2 [as alias2], ...  or  (name1 [as alias1], name2 [as alias2], ...)
-  nameAliases <- choice
-    [ parens (sepBy1 parseNameWithAlias (symbol ","))
-    , sepBy1 parseNameWithAlias (symbol ",")
-    ]
-  addImport (SelectiveImport path nameAliases)
+  target <- parseImportTarget
+  _ <- symbol "as"
+  alias <- name
+  addImport (ImportAlias target alias)
 
--- | Parse: name [as alias]
-parseNameWithAlias :: Parser (String, Maybe String)
-parseNameWithAlias = do
-  n <- name
-  maybeAlias <- optional (symbol "as" *> name)
-  return (n, maybeAlias)
+-- | Parse the import target, allowing both path-only and FQN forms.
+parseImportTarget :: Parser String
+parseImportTarget = lexeme $ do
+  pathParts <- sepBy1 parseSegment (char '/')
+  suffix <- optional (try parseSuffix)
+  let basePath = intercalate "/" pathParts
+  pure $ maybe basePath (\suf -> basePath ++ "::" ++ suf) suffix
+  where
+    parseSegment :: Parser String
+    parseSegment = some (satisfy isSegmentChar <?> "path character")
 
--- | Parse: import module_path [as alias]
-parseModuleImport :: Parser ()
-parseModuleImport = do
-  _ <- symbol "import"  
-  path <- parseModulePath
-  -- Optional alias
-  maybeAlias <- optional (symbol "as" *> name)
-  addImport (ModuleImport path maybeAlias)
+    parseSuffix :: Parser String
+    parseSuffix = do
+      _ <- string "::"
+      parts <- sepBy1 parseSegment (string "::")
+      pure (intercalate "::" parts)
+
+    isSegmentChar :: Char -> Bool
+    isSegmentChar c =
+      isAsciiLower c || isAsciiUpper c || isDigit c || c == '_' || c == '@' || c == '-'
 
 
 -- | Syntax: import statements followed by definitions
@@ -251,7 +237,7 @@ parseAssert = do
 -- | Parse a book from a string, returning both the book and the import information
 doParseBook :: FilePath -> String -> Either String (Book, ParserState)
 doParseBook file input =
-  case runState (runParserT p file input) (ParserState True input [] M.empty [] 0 file) of
+  case runState (runParserT p file input) (ParserState True input [] [] 0 file) of
     (Left err, _)    -> Left (formatError input err)
     (Right res, st)  -> Right (res, st)
   where
