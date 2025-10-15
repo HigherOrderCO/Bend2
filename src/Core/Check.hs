@@ -19,6 +19,7 @@ import Debug.Trace
 import Core.Bind
 import Core.Equal
 import Core.Rewrite
+import Core.Deps
 import Core.Type
 import Core.Show
 import Core.WHNF
@@ -397,9 +398,11 @@ infer d span book@(Book defs names) ctx term =
     Frk l a b -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
 
-    -- Can't infer Met
-    Met n t c -> do
-      Fail $ CantInfer span (normalCtx book ctx) Nothing
+    -- User supplied metavariables carry their own type annotation
+    -- ------------------------- infer-Met
+    -- ctx |- ?N : T
+    Met _ t _ -> do
+      Done t
 
     -- ctx |-
     -- -------------- Num
@@ -976,9 +979,18 @@ check d span book ctx term      goal =
     -- --------------------- Rfl
     -- ctx |- {==} : T{a==b}
     (Rfl, Eql t a b) -> do
-      if equal d book a b
+      if any hasMetaEvidence [t, a, b]
         then Done ()
-        else Fail $ TermMismatch span (normalCtx book ctx) (normal book a) (normal book b) Nothing
+        else if equal d book a b
+          then Done ()
+          else Fail $ TermMismatch span (normalCtx book ctx) (normal book a) (normal book b) Nothing
+      where
+        hasMetaEvidence term =
+          termHasMet term
+          || any defHasMet (S.toList (getDeps term))
+        defHasMet name = case getDefn book name of
+          Just (_, defTerm, _) -> termHasMet defTerm
+          Nothing              -> False
 
     -- ctx[a <- b] |- f : R({==})[a <- b]
     -- ----------------------------------- EqlM
