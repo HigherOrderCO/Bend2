@@ -26,6 +26,7 @@ library
                       Core.Adjust.Adjust,
                       Core.Bind,
                       Core.CLI,
+                      Core.CLI.Gen,
                       Core.Check,
                       Core.Deps,
                       Core.Equal,
