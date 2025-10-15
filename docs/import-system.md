@@ -54,6 +54,46 @@ Obviously this also involves the package index repository, so now we're focusing
 
 For Bend, we must guarantee that the imports fall back to the package index API if we don't find them locally.
 
+### Versioning
+
+Bend uses a package-based versioning system that balances user ergonomics with the core principle of individually addressable definitions.
+
+**Package Version Syntax**
+
+The version number appears at the package level, not per-definition:
+```
+import VictorTaelin/VecAlg#7/List/dot as dot
+```
+
+This groups related definitions (add, sub, mul, etc.) under a single version, preventing the chaotic scenario where each function has independent versions that may be incompatible when used together.
+
+**Key Properties**
+
+1. **Package-level versioning**: Version `#7` applies to all definitions within `VictorTaelin/VecAlg`, ensuring coherent sets of functions that are tested and published together.
+
+2. **Individual addressability**: Internally, each definition remains fully independent. The resolver and database treat `VictorTaelin/VecAlg#7/List/dot` as a unique FQN, enabling minimal context loading—only the specific definitions used (plus their dependencies) are pulled into scope.
+
+3. **Direct reference capability**: Any definition can be referenced anywhere using its full FQN without explicitly importing the package first, maintaining context efficiency.
+
+**Implementation Notes**
+
+- When publishing via `bend publish`, definitions are grouped into packages with a single version identifier
+- The package index stores definitions independently but associates them with package metadata for user-facing operations
+- Tree-shaking is automatic: importing one function from a package never forces loading the entire package—only the transitive closure of that function's dependencies
+- This avoids the npm problem where using a single helper function requires downloading entire libraries
+
+**Storage Format**
+
+Package versions are stored in the global tree with paths like:
+```
+BendRoot/@VictorTaelin/VecAlg#7/List/dot.bend
+BendRoot/@VictorTaelin/VecAlg#7/Nat/add.bend
+```
+
+The resolver treats the version as part of the path structure, ensuring different versions can coexist in the dependency tree when needed.
+
+Importing / using `BendRoot/@VictorTaelin/VecAlg/List/dot::fn()` will resolve to the `latest` version available since no specific version is specified.
+
 ## Current Implementation Overview
 
 ### Parser and Surface Syntax
