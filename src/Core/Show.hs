@@ -8,6 +8,7 @@ import Core.Type
 import Control.Exception (Exception)
 import qualified Data.Map as M
 import Data.List (intercalate)
+import Data.List.Split (splitOn)
 import Data.Maybe (fromMaybe)
 import Highlight (highlightError)
 
@@ -47,8 +48,8 @@ showPlain term depth = case term of
   Nil          -> "[]"
   Con h t      -> showCon h t depth
   LstM n c     -> "λ{[]:" ++ showPlain n depth ++ ";<>:" ++ showPlain c depth ++ "}"
-  Enu s        -> "enum{" ++ intercalate "," (map ("&" ++) s) ++ "}"
-  Sym s        -> "&" ++ s
+  Enu s        -> "enum{" ++ intercalate "," (map (("&" ++) . shortName) s) ++ "}"
+  Sym s        -> "&" ++ shortName s
   EnuM cs d    -> showEnuM cs d depth
   Sig a b      -> showSig a b depth
   Tup _ _      -> showTup term depth
@@ -97,7 +98,7 @@ showCon h t depth = fromMaybe plain (showStr (Con h t) depth)
 
 showEnuM :: [(String,Term)] -> Term -> Int -> String
 showEnuM cs d depth = "λ{" ++ intercalate ";" cases ++ ";" ++ showPlain d depth ++ "}"
-  where cases = map (\(s,t) -> "&" ++ s ++ ":" ++ showPlain t depth) cs
+  where cases = map (\(s,t) -> "&" ++ shortName s ++ ":" ++ showPlain t depth) cs
 
 showSig :: Term -> Term -> Int -> String
 showSig a b depth = case cut b of
@@ -209,8 +210,13 @@ showStr term depth = go [] term
 
 showCtr :: Term -> Maybe String
 showCtr t = case flattenTup t of
-  (Sym name : xs) -> Just ("@" ++ name ++ "{" ++ intercalate "," (map show xs) ++ "}")
+  (Sym name : xs) -> Just ("@" ++ shortName name ++ "{" ++ intercalate "," (map show xs) ++ "}")
   _               -> Nothing
+
+shortName :: String -> String
+shortName name = case splitOn "::" name of
+  [] -> name
+  xs -> last xs
 
 showHint :: Maybe String -> String
 showHint Nothing = ""
