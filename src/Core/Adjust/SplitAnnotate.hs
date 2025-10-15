@@ -174,8 +174,8 @@ infer d span book@(Book defs names) ctx term =
     -- ctx |- (v :: t) : t
     Chk v t -> do
       _ <- check d span book ctx t Set
-      _ <- check d span book ctx v t
-      Done t
+      t' <- check d span book ctx v t
+      Done t'
 
     -- Can't infer Trust
     Tst _ -> do
@@ -209,10 +209,9 @@ infer d span book@(Book defs names) ctx term =
     One -> do
       Done Uni
 
-    -- Can't infer UniM
     UniM f -> do
       fT <- infer d span book ctx f
-      return $ All Uni (Lam "_" (Just Uni) (\_ -> fT))
+      return $ All Uni (Lam "_" Nothing (\_ -> fT))
 
     -- ctx |-
     -- ----------------- Bit
@@ -232,7 +231,6 @@ infer d span book@(Book defs names) ctx term =
     Bt1 -> do
       Done Bit
 
-    -- Can't infer BitM
     BitM f t -> do
       fT <- infer d span book ctx f
       tT <- infer d span book ctx t
@@ -258,7 +256,6 @@ infer d span book@(Book defs names) ctx term =
         Done _ -> return Nat
         _      -> Fail $ CantInfer span (normalCtx book ctx) Nothing
 
-    -- Can't infer NatM
     NatM z s -> do
       zT <- infer d span book ctx z
       sT <- case cut <$> infer d span book ctx s of
@@ -285,14 +282,12 @@ infer d span book@(Book defs names) ctx term =
     Nil -> do
       Fail $ CantInfer span (normalCtx book ctx) Nothing
 
-    -- Can't infer Con
     Con h t -> do
       hT <- infer d span book ctx h
       case check d span book ctx t (Lst hT) of
         Done _ -> return $ Lst hT
         _ -> Fail $ CantInfer span (normalCtx book ctx) Nothing
 
-    -- Can't infer LstM
     LstM n c -> do
       nT <- infer d span book ctx n
       (hT, cT) <- case force book <$> infer d span book ctx c of
@@ -667,8 +662,8 @@ check d span book ctx term      goal =
       return $ All a' b'
 
     (Chk x t, _) | equal d book t nGoal -> do
-      _ <- check d span book ctx t Set
       check d span book ctx x t
+
     -- ctx |-
     -- ------------------ Trust
     -- ctx |- trust x : T
@@ -740,10 +735,8 @@ check d span book ctx term      goal =
     -- --------------------------- Suc-Eql
     -- ctx |- 1n+n : t{1n+a==1n+b}
     (Suc n, Eql t (force book -> Suc a) (force book -> Suc b)) -> do
-      n' <- 
-        check d span book ctx n (Eql t a b)
-      return $ 
-        Suc n'
+      n' <- check d span book ctx n (Eql t a b)
+      return $ Suc n'
 
     -- ctx |- 
     -- --------------- Nil
@@ -752,34 +745,37 @@ check d span book ctx term      goal =
       return term
 
     -- Type mismatch for Nil
-    (Nil, goal) ->
+    (Nil, goal) -> do
       Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book goal) Nothing
 
     -- ctx |- h : T
     -- ctx |- t : T[]
     -- ------------------ Con
     -- ctx |- h<>t : T[]
-    (Con h t, Lst tT) -> do
-      h' <- check d span book ctx h tT
-      t' <- check d span book ctx t (Lst tT)
+    (Con h t, Lst hT) -> do
+      h' <- check d span book ctx h hT
+      t' <- check d span book ctx t (Lst hT)
       return $ Con h' t'
 
     -- ctx |- h : T{h1==h2}
     -- ctx |- t : T[]{t1==t2}
     -- --------------------------------- Con-Eql
     -- ctx |- h<>t : T[]{h1<>t1==h2<>t2}
-    (Con h t, Eql (force book -> Lst tT) (force book -> Con h1 t1) (force book -> Con h2 t2)) -> do
-      h' <- check d span book ctx h (Eql tT h1 h2)
-      t' <- check d span book ctx t (Eql (Lst tT) t1 t2)
+    (Con h t, Eql (force book -> Lst hT) (force book -> Con h1 t1) (force book -> Con h2 t2)) -> do
+      h' <- check d span book ctx h (Eql hT h1 h2)
+      t' <- check d span book ctx t (Eql (Lst hT) t1 t2)
       return $ Con h' t'
 
     -- ctx, x:A |- f : B
     -- ---------------------- Lam
     -- ctx |- λx. f : ∀x:A. B
-    (Lam k t f, All a b) -> do
+    (Lam k mt f, All a b) -> do
+      ann <- case mt of 
+        Nothing                   -> return a
+        Just t | equal d book t a -> return t
+        Just t                    -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All t (Lam "_" Nothing (\_ -> Var "_" 0)))) Nothing
       f' <- check (d+1) span book (extend ctx k (Var k d) a) (f (Var k d)) (App b (Var k d))
-      -- return $ Lam k t (\v -> bindVarByIndex d v f')
-      return $ Lam k (Just $ reduceEtas d span book a) (\v -> bindVarByIndex d v f')
+      return $ Lam k (Just ann) (\x -> bindVarByIndex d x f')
 
     -- ctx |- 
     -- --------------------------------- EmpM-Eql-Zer-Suc
@@ -917,8 +913,7 @@ check d span book ctx term      goal =
     -- ctx |- λ{[]:n;<>:c} : ∀p:T[]{h1<>t1==h2<>t2}. R(p)
     (LstM n c, All (force book -> Eql (force book -> Lst a) (force book -> Con h1 t1) (force book -> Con h2 t2)) rT) -> do
       c' <- check d span book ctx c (All (Eql a h1 h2) (Lam "hp" Nothing (\hp -> 
-        All (Eql (Lst a) t1 t2) (Lam "tp" Nothing (\tp -> 
-          App rT (Con hp tp))))))
+        All (Eql (Lst a) t1 t2) (Lam "tp" Nothing (\tp -> App rT (Con hp tp))))))
       return $ LstM n c'
 
     -- ctx |- 
@@ -972,9 +967,6 @@ check d span book ctx term      goal =
           Just t -> do
             t' <- check d span book ctx t (App rT Rfl)
             return $ EnuM (map (\(s,t) -> if s == s1 then (s,t') else (s,t)) cs) df
-          -- Nothing -> case df of
-          --   Just df' -> check d span book ctx df' (All (Enu syms) (Lam "_" Nothing (\v -> App rT v)))
-          --   Nothing  -> Fail $ IncompleteMatch span (normalCtx book ctx) Nothing -- TODO: CHECK THIS CLAUSE
           Nothing -> do
             df' <- check d span book ctx df (All (Enu syms) (Lam "_" Nothing (\v -> App rT v)))
             return $ EnuM cs df'
@@ -1003,7 +995,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for EnuM
     (EnuM cs df, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu []) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu ["..."]) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- f : ∀xp:A{x1==x2}. ∀yp:B(x1){y1==y2}. R((xp,yp))
     -- ------------------------------------------------------- SigM-Eql
