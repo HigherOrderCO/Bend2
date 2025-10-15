@@ -27,8 +27,6 @@ module Core.Parse.Parse
   -- * Name parsing helpers
   , parseRawName
   , checkReserved
-  , resolveImports
-  , applyImportMappings
 
   -- * Location tracking
   , withSpan
@@ -55,8 +53,6 @@ import Text.Megaparsec
 import Text.Megaparsec (anySingle, manyTill, lookAhead)
 import Text.Megaparsec.Char
 import qualified Data.List.NonEmpty as NE
-import qualified Data.Map.Strict as M
-import qualified Data.Set        as S
 import qualified Text.Megaparsec.Char.Lexer as L
 
 import Core.Bind
@@ -64,20 +60,20 @@ import Core.Type
 import qualified Core.Parse.WithSpan as WithSpan
 
 -- Parser state
--- | Represents different kinds of imports parsed from syntax
-data Import 
-  = ModuleImport String (Maybe String)           -- ^ import module [as alias] 
-  | SelectiveImport String [(String, Maybe String)]  -- ^ from module import name1 [as alias1], name2 [as alias2], ...
+data Import
+  = ImportAlias
+      { importTarget :: String
+      , importAlias  :: String
+      }
   deriving (Show, Eq)
 
 data ParserState = ParserState
-  { tight         :: Bool                  -- ^ tracks whether previous token ended with no trailing space
-  , source        :: String                -- ^ original file source, for error reporting
-  , blocked       :: [String]              -- ^ list of blocked operators
-  , imports       :: M.Map String String   -- ^ import mappings: "Lib/" => "Path/To/Lib/" (legacy, for compatibility)
-  , parsedImports :: [Import]              -- ^ imports parsed from syntax, to be resolved later
-  , assertCounter :: Int                   -- ^ counter for generating unique assert names (E0, E1, E2...)
-  , fileName      :: FilePath              -- ^ current file being parsed, for FQN generation
+  { tight         :: Bool      -- ^ tracks whether previous token ended with no trailing space
+  , source        :: String    -- ^ original file source, for error reporting
+  , blocked       :: [String]  -- ^ list of blocked operators
+  , parsedImports :: [Import]  -- ^ imports parsed from syntax, to be resolved later
+  , assertCounter :: Int       -- ^ counter for generating unique assert names (E0, E1, E2...)
+  , fileName      :: FilePath  -- ^ current file being parsed, for FQN generation
   }
 
 type Parser = ParsecT Void String (Control.Monad.State.Strict.State ParserState)
@@ -143,37 +139,12 @@ checkReserved n = when (n `elem` reserved) $ do
   setOffset (offset - length n)
   fail ("reserved keyword '" ++ n ++ "'")
 
--- | Apply import mappings to a name
-resolveImports :: Name -> Parser Name
-resolveImports n = do
-  st <- get
-  return $ applyImportMappings (imports st) n
-
--- | Apply all import mappings to a name
-applyImportMappings :: M.Map String String -> Name -> Name
-applyImportMappings mappings n =
-  case M.lookup (n ++ "/") mappings of
-    Just replacement -> dropSuffix "/" replacement  -- Exact alias match: "add" -> "Nat/add"
-    Nothing -> foldr tryApplyPrefix n (M.toList mappings)  -- Try prefix matches: "add/foo" -> "Nat/add/foo"
-  where
-    tryApplyPrefix :: (String, String) -> String -> String
-    tryApplyPrefix (prefix, replacement) name =
-      if take (length prefix) name == prefix
-      then replacement ++ drop (length prefix) name
-      else name
-    
-    dropSuffix :: String -> String -> String
-    dropSuffix suffix str =
-      if length str >= length suffix && drop (length str - length suffix) str == suffix
-      then take (length str - length suffix) str
-      else str
-
 -- | Parse a name with import resolution
 name :: Parser Name
 name = lexeme $ do
   n <- parseRawName
   checkReserved n
-  resolveImports n
+  return n
 
 -- Parses an Optional semicolon
 parseSemi :: Parser ()

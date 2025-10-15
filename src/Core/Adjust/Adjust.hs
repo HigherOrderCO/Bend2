@@ -65,14 +65,12 @@ import Control.Monad.State
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-import Debug.Trace
-
 import Control.Exception (throw)
 import Core.Adjust.DesugarFrks
 import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
-import Core.Adjust.ReduceEtas
 import Core.Adjust.ResolveEnums
+import Core.Adjust.ReduceEtas
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -88,8 +86,8 @@ import Core.WHNF
 -- When called standalone (e.g., from parseTerm), enums are resolved here.
 adjust :: Book -> Term -> Result Term
 adjust book term = do
-  -- First resolve enums to their FQNs (needed for standalone use)
-  resolved <- resolveEnumsInTerm (extractEnums book) term
+  let enumMap = extractEnums book
+  resolved <- resolveEnumsInTerm enumMap term
   let flat = flattenPats 0 noSpan book resolved
   let chkd = checkPatternCompleteness 0 noSpan book flat
   npat <- desugarPats 0 noSpan chkd
@@ -118,7 +116,6 @@ type AdjustState = (Book, S.Set Name)
 -- After adjusting all definitions, it checks for free variables.
 adjustBook :: Book -> Result Book
 adjustBook book@(Book defs names) = do
-  -- First resolve all enums in the entire book
   resolvedBook <- resolveEnumsInBook book
   let adjustFn b t = case adjust b t of
         Done t' -> t'
@@ -129,7 +126,6 @@ adjustBook book@(Book defs names) = do
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
 adjustBookWithPats :: Book -> Result Book
 adjustBookWithPats book@(Book defs names) = do
-  -- First resolve all enums in the entire book
   resolvedBook <- resolveEnumsInBook book
   let adjustFn b t = case adjustWithPats b t of
         Done t' -> t'

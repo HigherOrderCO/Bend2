@@ -159,7 +159,7 @@ processFileToCore file = do
     Right () -> return ()
   where
     showBookWithFQN (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
-    showDefn k (_, x, t) = k ++ " : " ++ showTerm True False t ++ " = " ++ showTerm True False x
+    showDefn k (_, x, t) = k ++ " : " ++ showTerm True t ++ " = " ++ showTerm True x
 
 -- | Try to format JavaScript code using prettier if available
 formatJavaScript :: String -> IO String
