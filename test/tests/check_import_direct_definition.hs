@@ -20,12 +20,10 @@ def answer : Nat =
 """
 
 main :: IO ()
-main = do
-  projectDir <- findProjectRoot
-  let cmd = "(cd BendRoot && cabal run -v0 bend --project-dir=" ++ show projectDir ++ " -- main.bend)"
-  test cmd
-    [ ("BendRoot/main.bend", main_bend)
-    , ("BendRoot/Tests/math.bend", math_bend)
+main =
+  test "bend main.bend"
+    [ ("main.bend", main_bend)
+    , ("Tests/math.bend", math_bend)
     ]
     "importing a direct definition via FQN succeeds"
     $ \_ err -> assert (err == "")

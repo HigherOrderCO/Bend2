@@ -92,7 +92,31 @@ BendRoot/@VictorTaelin/VecAlg#7/Nat/add.bend
 
 The resolver treats the version as part of the path structure, ensuring different versions can coexist in the dependency tree when needed.
 
-Importing / using `BendRoot/@VictorTaelin/VecAlg/List/dot::fn()` will resolve to the `latest` version available since no specific version is specified.
+Importing / using `BendRoot/@VictorTaelin/VecAlg/List/dot::fn()` will error out. A version NEEDS to be specified.
+
+In terms of storing, we will always store different versions in different places, meaning:
+
+```
+@lorenzo/my_app#0
+# contains:
+@lorenzo/my_app#0/main::foo()
+@lorenzo/my_app#0/main::bar()
+```
+
+Then, this get stored in the BendRoot index in that exact structure.
+
+Then, I decide to update only the foo() implementation.
+So, the package needs to be updated.
+Therefore, we now have to create:
+
+```
+@lorenzo/my_app#1
+# contains:
+@lorenzo/my_app#1/main::foo() -> changed
+@lorenzo/my_app#1/main::bar() -> didnt change
+```
+
+Note that we're storing bar() twice even though the implementations are identical, but this is the CORRECT way to do so.
 
 ## Current Implementation Overview
 
@@ -104,6 +128,7 @@ Importing / using `BendRoot/@VictorTaelin/VecAlg/List/dot::fn()` will resolve to
   - `Nat/add::add` (directly references the `add` definition inside that file)
   - `Nat/list` (creates a prefix alias; every later reference `Nat` resolves under the original path)
 - Aliases are stored as `ImportAlias` records in the `ParserState` and later consumed by the resolver—there is no textual rewriting at parse time anymore.
+- Paths that contain package versions (for example `@lorenzo/my_app#1/...`) are accepted verbatim by the parser; the `#` segment is treated as just another path component. There is currently no parser-level enforcement that a version segment actually exists—validation must happen downstream.
 - Legacy constructs (`from ... import ...`, implicit module imports, slash aliases, etc.) have been removed; code using them will now fail during parsing.
 
 ### Resolver Pipeline
@@ -148,7 +173,7 @@ All resolution happens inside `Core.Import`. The high-level flow for `autoImport
   - If the file is already present under BendRoot, the function is a no-op.
   - Otherwise, a GET request is issued to `apiBaseUrl ++ "/api/files/" ++ <posix-path>`; on success, the response body is written under the corresponding BendRoot path, creating directories as needed.
   - Any network failure emits a warning and the resolver continues trying other candidates (e.g. the `_.bend` variant). A fatal error is raised only after all candidates and downloads fail.
-- The resolver always works with BendRoot-relative POSIX paths, so the local directory structure mirrors the remote package tree exactly, matching the spec.
+- The resolver always works with BendRoot-relative POSIX paths, so the local directory structure mirrors the remote package tree exactly, matching the spec. Version identifiers (the `#N` segments) are carried through untouched and therefore become literal directory names.
 
 ### Effects on Files and Definitions
 
@@ -162,7 +187,10 @@ All resolution happens inside `Core.Import`. The high-level flow for `autoImport
 - CLI scripts, tests, and external tooling must change directories to BendRoot before invoking `bend` or using the parsing APIs that call `autoImport`.
 - Because alias substitution is purely syntactic, referencing an alias that never maps to a real definition will surface as an unresolved dependency during the import loop, making it easier to diagnose missing files instead of silently rewriting to incorrect paths.
 - The resolver caches parsed modules within a single import run, but it does not persist results between CLI invocations; subsequent runs will re-read files from disk (which should be in sync thanks to BendRoot mirroring).
-- The package index client currently assumes a `GET /api/files/<path>` endpoint that responds with raw Bend source. Future enhancements (versioning, permissions) can extend the helper without touching the resolver core.
+- The package index client currently assumes a `GET /api/files/<path>` endpoint that responds with raw Bend source. Future enhancements (permissions, authentication) can extend the helper without touching the resolver core.
 
 Together, these pieces implement the spec’s core principles: every definition is addressed by an FQN, imports introduce no unwanted names, aliases act as predictable textual sugar, and the package index is transparently consulted whenever the local BendRoot is missing a required file.
 
+### Spec Compliance Gaps
+
+- The resolver does not yet reject imports that omit an explicit package version (e.g. `BendRoot/Nat/add.bend` is still accepted when present locally). The specification requires every external reference to include a `#<version>` segment, so an additional validation pass is needed before module loading to enforce this rule consistently.

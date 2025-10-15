@@ -46,12 +46,10 @@ type Color:
 """
 
 main :: IO ()
-main = do
-  projectDir <- findProjectRoot
-  let cmd = "(cd BendRoot && cabal run -v0 bend --project-dir=" ++ show projectDir ++ " -- main.bend)"
-  test cmd
-    [ ("BendRoot/main.bend", main_bend)
-    , ("BendRoot/Tests/color.bend", color_bend)
+main =
+  test "bend main.bend"
+    [ ("main.bend", main_bend)
+    , ("Tests/color.bend", color_bend)
     ]
     "constructor names respect import alias rewriting"
     $ \_ err -> assert (err == "")

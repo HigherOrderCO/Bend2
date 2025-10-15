@@ -6,7 +6,7 @@ import System.FilePath
 import System.Exit
 import Control.Exception (try, throwIO, finally, evaluate)
 import Control.Monad (when)
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, isPrefixOf)
 import Data.Char (isSpace)
 import System.Timeout (timeout)
 import System.IO (hClose, hGetContents)
@@ -21,9 +21,11 @@ testWithTimeout cmd files desc callback timeoutMicros = do
   tmpDir <- getTemporaryDirectory
   testDir <- findUniqueTestDir tmpDir (0 :: Int)
   createDirectory testDir
-
+  let (useBendRoot, actualCmd) = case cmd of
+        ('!':rest) -> (False, dropWhile (== ' ') rest)
+        _          -> (True, cmd)
   -- Capture the test result first
-  (out, err) <- finally (runTest testDir) (removeDirectoryRecursive testDir)
+  (out, err) <- finally (runTest testDir useBendRoot actualCmd) (removeDirectoryRecursive testDir)
 
   -- Run the callback and check if test passes
   testPassed <- try (callback out err) :: IO (Either ExitCode ())
@@ -50,19 +52,21 @@ testWithTimeout cmd files desc callback timeoutMicros = do
       if exists then findUniqueTestDir base (n + 1) else return dir
 
     -- Corrected runTest function
-    runTest testDir = do
-      mapM_ (writeTestFile testDir) files
+    runTest testDir useBendRoot actualCmd = do
+      when useBendRoot $ createDirectoryIfMissing True (testDir </> "BendRoot")
+      mapM_ (writeTestFile testDir useBendRoot) files
 
       -- Find project directory by looking for bend.cabal
       projectDir <- findProjectRoot
       
-      let cmdWords = words cmd
+      let cmdWords = words actualCmd
       let fullCmd = case cmdWords of
                       ("bend":args) -> "cabal run -v0 bend --project-dir=" ++ projectDir ++ " -- " ++ unwords args
-                      _             -> cmd
+                      _             -> actualCmd
 
       -- Create the process in its own group to kill it and its children
-      let procSpec = (shell $ "cd " ++ testDir ++ " && " ++ fullCmd)
+      let workingDir = if useBendRoot then testDir </> "BendRoot" else testDir
+      let procSpec = (shell $ "cd " ++ workingDir ++ " && " ++ fullCmd)
             { std_out = CreatePipe
             , std_err = CreatePipe
             , create_group = True -- IMPORTANT: For POSIX systems (Linux/macOS)
@@ -87,8 +91,14 @@ testWithTimeout cmd files desc callback timeoutMicros = do
             _ <- waitForProcess ph
             return ("", "ERROR: Test timed out after " ++ show (timeoutMicros `div` 1000000) ++ " seconds")
 
-    writeTestFile testDir (name, content) = do
-      let path = testDir </> name
+    writeTestFile testDir useBendRoot (name, content) = do
+      let relative =
+            if useBendRoot
+              then if "BendRoot/" `isPrefixOf` name
+                     then name
+                     else "BendRoot/" ++ name
+              else name
+      let path = testDir </> relative
       createDirectoryIfMissing True (takeDirectory path)
       writeFile path content
 
