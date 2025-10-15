@@ -58,11 +58,16 @@
 -- ---------------
 -- reduceEtas -> at each subterm λx.f, uses isEtaLong to check 
 --               whether f contains λ{..}(x). If it does,
---               then it uses resolveMatches to produce its output
+--               then it uses resolveMatches to produce its output. If isEtaLong indicates
+--               that Tst has been found, and rewriting needs to happen, then wrap the result in Tst.
+--               this is necessary so that the `trust` in  `def f() -> ..: trust ...` has the effect over
+--               the entire function's body
 -- isEtaLong nam -> at each subterm f(x), if x is the variable 'nam'
 --               from the lambda given from reduceEtas, and f is a λ{..}, 
 --               then return a label encoding which kind of λ{..}. Store information about
---               clause argument types, and return STOP if incompatible information is found
+--               clause argument types, and return STOP if incompatible information is found.
+--               moreover, if a Tst node is found, returns Bool flag so that reduceEtas can
+--               wrap the result in Tst
 -- resolveMatches -> given elim label, at each term f(x), if `f` is λ{..} 
 --               of a kind matching the elim label, then replace this application by
 --               the the clause of f that corresponds to the one determined by reduceEtas
@@ -97,7 +102,8 @@ import Control.Applicative
 -- 4) The span in the ElimLabel is the span of the inner eliminator found by isEtaLong.
 --    This span bubbles up to become the span of the new outer eliminator we synthesize,
 --    since the new eliminator has no natural span of its own (it didn't exist in the source).
--- 5) Rewrites the subterms using resolveMatches
+-- 5) Rewrites the subterms using resolveMatches. If isEtaLong gives True for a Tst being found,
+--    then also wrap the result in Tst
 --
 -- Returns  : term in the form λ{A(a1..):λ{B:..}; ..}
 -- Important: this does not changes `SupM` eliminators.
@@ -108,9 +114,16 @@ reduceEtas d span book term =
   Lam k mty f ->
       -- The "$" prefix ensures `nam` won't clash with user variables
       let nam = "$"++show d in
-      let eta = isEtaLong d span book nam (f (Var nam d)) in
-      case eta of
-        EMPM spa -> Loc spa $ EmpM
+      let (eta, needsTst) = isEtaLong d span book nam (f (Var nam d)) in
+      let wrapTerm = \t -> case (eta, needsTst, t) of
+            (NONE, _, _)            -> t
+            (STOP, _, _)            -> t
+            (_, False, _)           -> t
+            (_, True, Loc spa body) -> Loc spa (Tst body)
+            _                       -> Tst t
+      in
+      wrapTerm $ case eta of
+        EMPM spa -> Loc spa EmpM
         EQLM spa -> Loc spa $ EqlM refl 
             where
             refl = reduceEtas d span book $ bindVarByName nam Rfl (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
@@ -334,89 +347,91 @@ resolveMatches span nam elim clause sym args t = case t of
 -- 4) Captures the span of each eliminator found, which will become the span of
 --    the synthesized outer eliminator in reduceEtas (since that new eliminator
 --    has no span of its own)
+--  5) If a Tst node is found, returns True, indicating that reduceEtas must wrap 
+--    the result in Tst.
 --
 -- Returns: from λx. (λ{0:Z; S:...}(x), λ{0:W; S:...}(x)) 
 -- the label NATM [pred_name_from_S]
-isEtaLong :: Int -> Span -> Book -> Name -> Term -> ElimLabel
+isEtaLong :: Int -> Span -> Book -> Name -> Term -> (ElimLabel, Bool)
 isEtaLong d span book nam (Loc spa t) = isEtaLong d spa book nam t
 isEtaLong d span book nam t = case t of
   Lam k mt f  -> case mt of
     Just t  -> if k == nam then isEtaLong d span book nam t else combLabels d book (isEtaLong d span book nam t) (isEtaLong (d+1) span book nam (f (Var k d)))
-    Nothing -> if k == nam then NONE else isEtaLong (d+1) span book nam (f (Var k d))
+    Nothing -> if k == nam then (NONE, False) else isEtaLong (d+1) span book nam (f (Var k d))
   App f x     ->
     case cut x of
       (Var k _) -> if k == nam
         then
           case (cut f, getAnnotations d book f) of
        -- SupM l _    -> not eliminated
-          (EqlM _  , _)            -> combLabels d book (EQLM span) (isEtaLong d span book nam f)
-          (EmpM    , _)            -> combLabels d book (EMPM span) (isEtaLong d span book nam f)
-          (UniM _  , _)            -> combLabels d book (UNIM span) (isEtaLong d span book nam f)
-          (BitM _ _, _)            -> combLabels d book (BITM span) (isEtaLong d span book nam f)
-          (NatM _ s   , Just anns) -> combLabels d book (NATM span (getVarNames s ["p"]    ) anns) (isEtaLong d span book nam f)
-          (LstM _ c   , Just anns) -> combLabels d book (LSTM span (getVarNames c ["h","t"]) anns) (isEtaLong d span book nam f)
-          (SigM g     , Just anns) -> combLabels d book (SIGM span (getVarNames g ["a","b"]) anns) (isEtaLong d span book nam f)
-          (EnuM cs def, Just anns) -> combLabels d book (ENUM span (map fst cs) (isLam def) (getVarNames def ["t"]) anns) (isEtaLong d span book nam f)
-          (NatM _ s   , Nothing)   -> STOP
-          (LstM _ c   , Nothing)   -> STOP
-          (SigM g     , Nothing)   -> STOP
-          (EnuM cs def, Nothing)   -> STOP
+          (EqlM _  , _)            -> combLabels d book (EQLM span, False) (isEtaLong d span book nam f)
+          (EmpM    , _)            -> combLabels d book (EMPM span, False) (isEtaLong d span book nam f)
+          (UniM _  , _)            -> combLabels d book (UNIM span, False) (isEtaLong d span book nam f)
+          (BitM _ _, _)            -> combLabels d book (BITM span, False) (isEtaLong d span book nam f)
+          (NatM _ s   , Just anns) -> combLabels d book (NATM span (getVarNames s ["p"]    ) anns, False) (isEtaLong d span book nam f)
+          (LstM _ c   , Just anns) -> combLabels d book (LSTM span (getVarNames c ["h","t"]) anns, False) (isEtaLong d span book nam f)
+          (SigM g     , Just anns) -> combLabels d book (SIGM span (getVarNames g ["a","b"]) anns, False) (isEtaLong d span book nam f)
+          (EnuM cs def, Just anns) -> combLabels d book (ENUM span (map fst cs) (isLam def) (getVarNames def ["t"]) anns, False) (isEtaLong d span book nam f)
+          (NatM _ s   , Nothing)   -> (STOP, False)
+          (LstM _ c   , Nothing)   -> (STOP, False)
+          (SigM g     , Nothing)   -> (STOP, False)
+          (EnuM cs def, Nothing)   -> (STOP, False)
           (_,_)           -> isEtaLong d span book nam f
         else
             combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam x)
       _ -> combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam x)
-  Var _ _     -> NONE
-  Ref _ _     -> NONE
+  Var _ _     -> (NONE, False)
+  Ref _ _     -> (NONE, False)
   Sub t'      -> isEtaLong d span book nam t'
   Fix k f     -> isEtaLong (d+1) span book nam (f (Var k d))
   Let k t v f -> let def = combLabels d book (isEtaLong d span book nam v) (isEtaLong (d+1) span book nam (f (Var k d))) 
                  in fromMaybe def (fmap (\typ -> combLabels d book def (isEtaLong d span book nam typ)) t)
   Use k v f   -> combLabels d book (isEtaLong d span book nam v) (isEtaLong (d+1) span book nam (f (Var k d)))
-  Set         -> NONE
+  Set         -> (NONE, False)
   Chk t' ty   -> combLabels d book (isEtaLong d span book nam t') (isEtaLong d span book nam ty)
-  Emp         -> NONE
-  EmpM        -> NONE
-  Uni         -> NONE
-  One         -> NONE
+  Emp         -> (NONE, False)
+  EmpM        -> (NONE, False)
+  Uni         -> (NONE, False)
+  One         -> (NONE, False)
   UniM f      -> isEtaLong d span book nam f
-  Bit         -> NONE
-  Bt0         -> NONE
-  Bt1         -> NONE
+  Bit         -> (NONE, False)
+  Bt0         -> (NONE, False)
+  Bt1         -> (NONE, False)
   BitM f g    -> combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam g)
-  Nat         -> NONE
-  Zer         -> NONE
+  Nat         -> (NONE, False)
+  Zer         -> (NONE, False)
   Suc t'      -> isEtaLong d span book nam t'
   NatM z s    -> combLabels d book (isEtaLong d span book nam z) (isEtaLong d span book nam s)
   IO t        -> isEtaLong d span book nam t
   Lst ty      -> isEtaLong d span book nam ty
-  Nil         -> NONE
+  Nil         -> (NONE, False)
   Con h t'    -> combLabels d book (isEtaLong d span book nam h) (isEtaLong d span book nam t')
   LstM nil c  -> combLabels d book (isEtaLong d span book nam nil) (isEtaLong d span book nam c)
-  Enu _       -> NONE
-  Sym _       -> NONE
+  Enu _       -> (NONE, False)
+  Sym _       -> (NONE, False)
   EnuM cs def -> foldr (combLabels d book) (isEtaLong d span book nam def) (map (isEtaLong d span book nam . snd) cs)
-  Num _       -> NONE
-  Val _       -> NONE
+  Num _       -> (NONE, False)
+  Val _       -> (NONE, False)
   Op2 _ a b   -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
   Op1 _ a     -> isEtaLong d span book nam a
   Sig a b     -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
   Tup a b     -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
   SigM f      -> isEtaLong d span book nam f
   All a b     -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
-  Eql ty a b  -> foldr (combLabels d book) NONE [isEtaLong d span book nam ty, isEtaLong d span book nam a, isEtaLong d span book nam b]
-  Rfl         -> NONE
+  Eql ty a b  -> foldr (combLabels d book) (NONE, False) [isEtaLong d span book nam ty, isEtaLong d span book nam a, isEtaLong d span book nam b]
+  Rfl         -> (NONE, False)
   EqlM f      -> isEtaLong d span book nam f
   Rwt e f     -> combLabels d book (isEtaLong d span book nam e) (isEtaLong d span book nam f)
-  Met _ ty cx -> combLabels d book (isEtaLong d span book nam ty) (foldr (combLabels d book) NONE (map (isEtaLong d span book nam) cx))
-  Era         -> NONE
-  Sup l a b   -> foldr (combLabels d book) NONE [isEtaLong d span book nam l, isEtaLong d span book nam a, isEtaLong d span book nam b]
+  Met _ ty cx -> combLabels d book (isEtaLong d span book nam ty) (foldr (combLabels d book) (NONE, False) (map (isEtaLong d span book nam) cx))
+  Era         -> (NONE, False)
+  Sup l a b   -> foldr (combLabels d book) (NONE, False) [isEtaLong d span book nam l, isEtaLong d span book nam a, isEtaLong d span book nam b]
   SupM l f    -> combLabels d book (isEtaLong d span book nam l) (isEtaLong d span book nam f)
   -- Loc _ t'    -> isEtaLong d span book nam t'
   Log s x     -> combLabels d book (isEtaLong d span book nam s) (isEtaLong d span book nam x)
-  Pri _       -> NONE
-  Pat ss ms cs -> foldr (combLabels d book) NONE (map (isEtaLong d span book nam) ss ++ map (isEtaLong d span book nam . snd) ms ++ concatMap (\(ps, rhs) -> map (isEtaLong d span book nam) ps ++ [isEtaLong d span book nam rhs]) cs)
-  Frk l a b   -> foldr (combLabels d book) NONE [isEtaLong d span book nam l, isEtaLong d span book nam a, isEtaLong d span book nam b]
-  Tst x       -> isEtaLong d span book nam x
+  Pri _       -> (NONE, False)
+  Pat ss ms cs -> foldr (combLabels d book) (NONE, False) (map (isEtaLong d span book nam) ss ++ map (isEtaLong d span book nam . snd) ms ++ concatMap (\(ps, rhs) -> map (isEtaLong d span book nam) ps ++ [isEtaLong d span book nam rhs]) cs)
+  Frk l a b   -> foldr (combLabels d book) (NONE, False) [isEtaLong d span book nam l, isEtaLong d span book nam a, isEtaLong d span book nam b]
+  Tst x       -> let (lab, _) = isEtaLong d span book nam x in (lab, True)
 
 -- Auxiliary definitions / Utils
 -- ------------------------------
@@ -443,43 +458,47 @@ data ElimLabel
 --    - Annotated types (NATM/LSTM/SIGM/ENUM): merge annotations via combAnns, STOP if incompatible
 --    - ENUM special case: also unions symbol sets and conjoins completeness flags
 -- 4) Different eliminator types yield STOP (mixed patterns can't be eta-reduced)
+-- 5) Combines the flags that indicate finding of a Tst node via an OR operation.
 --
 -- Returns: NATM [p,q] <+> NATM [r,q] -> NATM [p,q]
 --          NATM [p,q] <+> BITM       -> STOP
-combLabels :: Int -> Book -> ElimLabel -> ElimLabel -> ElimLabel
-combLabels d book lab1 lab2 = case (lab1, lab2) of
-  (STOP, x)                      -> STOP
-  (x, STOP)                      -> STOP
-  (NONE, x)                      -> x
-  (x, NONE)                      -> x
-  (UNIM l1, UNIM l2)             -> UNIM l1
-  (BITM l1, BITM l2)             -> BITM l1
-  (EMPM l1, EMPM l2)             -> EMPM l1
-  (EQLM l1, EQLM l2)             -> EQLM l1
-  (NATM l1 s1 a1, NATM l2 s2 a2) -> case (combAnns a1 a2) of
-    Just a -> NATM l1 s1 a
-    _      -> STOP
-  (LSTM l1 s1 a1, LSTM l2 s2 a2) -> case (combAnns a1 a2) of 
-    Just a -> LSTM l1 s1 a
-    _      -> STOP
-  (SIGM l1 s1 a1, SIGM l2 s2 a2) -> case (combAnns a1 a2) of 
-    Just a -> SIGM l1 s1 a
-    _      -> STOP
-  (ENUM l1 s1 b1 d1 a1, ENUM l2 s2 b2 d2 a2) -> case (combAnns a1 a2) of 
-    Just a -> ENUM l1 (s1 `union` s2) (b1 && b2) d1 a
-    _      -> STOP
-  (_, _)                               -> STOP
-  where combAnns [] [] = Just []
-        combAnns (Nothing:as) (b:bs)                  = do
-          rest <- combAnns as bs
-          Just $ b:rest
-        combAnns (a:as) (Nothing:bs)                  = do
-          rest <- combAnns as bs
-          Just $ a:rest
-        combAnns (Just a:as) (Just b:bs) | eql False d book a b = do
-          rest <- combAnns as bs
-          Just $ (Just a):rest
-        combAnns _ _ = Nothing
+combLabels :: Int -> Book -> (ElimLabel, Bool) -> (ElimLabel, Bool) -> (ElimLabel, Bool)
+combLabels d book (lab1, tst1) (lab2, tst2) = (merged, flag)
+  where
+    merged = case (lab1, lab2) of
+      (STOP, _)                      -> STOP
+      (_, STOP)                      -> STOP
+      (NONE, x)                      -> x
+      (x, NONE)                      -> x
+      (UNIM l1, UNIM l2)             -> UNIM l1
+      (BITM l1, BITM l2)             -> BITM l1
+      (EMPM l1, EMPM l2)             -> EMPM l1
+      (EQLM l1, EQLM l2)             -> EQLM l1
+      (NATM l1 s1 a1, NATM l2 s2 a2) -> case combAnns a1 a2 of
+        Just a -> NATM l1 s1 a
+        _      -> STOP
+      (LSTM l1 s1 a1, LSTM l2 s2 a2) -> case combAnns a1 a2 of 
+        Just a -> LSTM l1 s1 a
+        _      -> STOP
+      (SIGM l1 s1 a1, SIGM l2 s2 a2) -> case combAnns a1 a2 of 
+        Just a -> SIGM l1 s1 a
+        _      -> STOP
+      (ENUM l1 s1 b1 d1 a1, ENUM l2 s2 b2 d2 a2) -> case combAnns a1 a2 of 
+        Just a -> ENUM l1 (s1 `union` s2) (b1 && b2) d1 a
+        _      -> STOP
+      (_, _)                               -> STOP
+    flag = tst1 || tst2
+    combAnns [] [] = Just []
+    combAnns (Nothing:as) (b:bs)                  = do
+      rest <- combAnns as bs
+      Just $ b:rest
+    combAnns (a:as) (Nothing:bs)                  = do
+      rest <- combAnns as bs
+      Just $ a:rest
+    combAnns (Just a:as) (Just b:bs) | eql False d book a b = do
+      rest <- combAnns as bs
+      Just $ (Just a):rest
+    combAnns _ _ = Nothing
 
 
 -- Extracts variable names from eliminator/lambda branches
