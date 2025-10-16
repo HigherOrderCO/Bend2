@@ -59,7 +59,7 @@ generateDefinitions _file book mainFQN genInfos = do
 
   where
     renderDefinition (info, term) =
-      case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
+      case prettyGenerated info term of
         Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
         Right txt -> Right (giSimpleName info, txt)
 

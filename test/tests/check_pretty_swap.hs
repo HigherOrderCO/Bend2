@@ -3,16 +3,15 @@
 import Test (assert, findProjectRoot, has)
 
 import Control.Exception (finally)
-import System.Directory (createDirectory, createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, removeDirectoryRecursive)
-import System.Environment (getEnvironment)
+import System.Directory (createDirectory, createDirectoryIfMissing, doesDirectoryExist, getEnvironment, getTemporaryDirectory, removeDirectoryRecursive)
 import System.FilePath ((</>))
-import System.Process (proc, readCreateProcessWithExitCode, CreateProcess(..))
+import System.Process (CreateProcess(..), proc, readCreateProcessWithExitCode)
 import System.Exit (ExitCode(..))
 
 main :: IO ()
-main = withTempDirectory "bend-pretty-test" $ \tmpDir -> do
+main = withTempDirectory "bend-pretty-swap-test" $ \tmpDir -> do
   let bendRoot = tmpDir </> "BendRoot"
-      bendFile = bendRoot </> "main.bend"
+      bendFile = bendRoot </> "swap.bend"
   createDirectory bendRoot
   writeFile bendFile generatorSource
 
@@ -27,7 +26,7 @@ main = withTempDirectory "bend-pretty-test" $ \tmpDir -> do
                 , "bend"
                 , "--project-dir=" ++ projectDir
                 , "--"
-                , "main.bend"
+                , "swap.bend"
                 ]) { cwd = Just bendRoot
                     , env = Just envVars
                     }
@@ -35,34 +34,38 @@ main = withTempDirectory "bend-pretty-test" $ \tmpDir -> do
 
   assert (exitCode == ExitSuccess)
   assert (null err)
-  -- bend prints progress with ANSI colors; just ensure we saw success marker
-  assert (out `has` "✓ main::mul2")
+  assert (out `has` "✓ swap::swap")
 
   final <- readFile bendFile
   assert (final == expectedOutput)
 
 generatorSource :: String
 generatorSource = unlines
-  [ "gen mul2(n: Nat) -> Nat"
+  [ "gen swap(a: (Nat & Nat)) -> (Nat & Nat)"
   , ""
-  , "assert mul2(2n) == 4n : Nat"
-  , "assert mul2(0n) == 0n : Nat"
-  , "assert mul2(3n) == 6n : Nat"
+  , "assert swap((1n, 2n)) == (2n, 1n) : Nat & Nat"
+  , "assert swap((0n, 5n)) == (5n, 0n) : Nat & Nat"
+  , "assert swap((0n, 0n)) == (0n, 0n) : Nat & Nat"
+  , ""
+  , "def main() -> Nat & Nat:"
+  , "  swap((3n, 0n))"
   ]
 
 expectedOutput :: String
 expectedOutput = unlines
-  [ "def mul2(n: Nat) -> Nat:"
-  , "  match n:"
-  , "    case 0n:"
-  , "      return 0n"
-  , "    case 1n+p:"
-  , "      return 2n+mul2(p)"
+  [ "def swap(a: (Nat & Nat)) -> (Nat & Nat):"
+  , "  match a:"
+  , "    case (a1, b):"
+  , "      return (b, a1)"
   , ""
   , ""
-  , "assert mul2(2n) == 4n : Nat"
-  , "assert mul2(0n) == 0n : Nat"
-  , "assert mul2(3n) == 6n : Nat"
+  , ""
+  , "assert swap((1n, 2n)) == (2n, 1n) : Nat & Nat"
+  , "assert swap((0n, 5n)) == (5n, 0n) : Nat & Nat"
+  , "assert swap((0n, 0n)) == (0n, 0n) : Nat & Nat"
+  , ""
+  , "def main() -> Nat & Nat:"
+  , "  swap((3n, 0n))"
   ]
 
 withTempDirectory :: String -> (FilePath -> IO a) -> IO a

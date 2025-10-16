@@ -51,6 +51,8 @@ library
                       Target.Haskell,
                       Target.JavaScript,
                       Package.Index
+    other-modules:    Core.Gen.HVM.Parse,
+                      Core.Gen.HVM.Pretty
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
                       containers == 0.7,

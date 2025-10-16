@@ -10,6 +10,7 @@
 module Target.HVM
   ( compile
   , CompileError(..)
+  , HCore(..)
   ) where
 
 import Control.Exception (throw)
@@ -846,7 +847,8 @@ showHDefn (_, HDefn nick mtyp body) =
     HRfl -> case mtyp of
       -- Assert: body is Rfl and type is Eql - print as !Type{lhs==rhs};
       Just (HEql typ lhs rhs) ->
-        "!" ++ showHCore 0 typ ++ "{" ++ showHCore 0 lhs ++ "==" ++ showHCore 0 rhs ++ "};"
+        "!" ++ paren (showHCore 0 typ)
+          ++ "{" ++ showHCore 0 lhs ++ "==" ++ showHCore 0 rhs ++ "};"
       _ -> -- Regular definition with Rfl body
         case mtyp of
           Nothing -> "@" ++ nick ++ " = " ++ showHCore 0 body ++ " ;"
