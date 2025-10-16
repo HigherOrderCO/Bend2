@@ -1,4 +1,4 @@
-module Core.CLI 
+module Core.CLI
   ( parseFile
   , runMain
   , processFile
@@ -10,26 +10,33 @@ module Core.CLI
   , getGenDeps
   ) where
 
-import Control.Monad (unless, forM_, foldM)
+import Control.Monad (unless, when, forM_, foldM)
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.List (isSuffixOf)
 import Data.Maybe (fromJust)
 import Debug.Trace
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.Process (readProcessWithExitCode)
 import System.Exit (ExitCode(..))
-import Control.Exception (catch, IOException, try)
-import System.IO (hPutStrLn, stderr, hFlush, stdout)
+import Control.Exception (catch, IOException, throwIO, try)
+import System.IO (hFlush, hPutStr, hPutStrLn, stderr, stdout)
+import Data.Typeable (Typeable)
 import Text.Read (readMaybe)
 
+import Core.CLI.Gen
+  ( applyGenerated
+  , bookHasMet
+  , buildGenDepsBook
+  , collectGenInfos
+  , generateDefinitions
+  )
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Adjust.SplitAnnotate (check, infer)
 import Core.Bind
 -- import Core.Check
 import Core.Deps
-import Core.Import (autoImport, autoImportWithExplicit, extractModuleName)
+import Core.Import (autoImportWithExplicit, extractModuleName)
 import Core.Parse.Book (doParseBook)
 import Core.Parse.Parse (ParserState(..))
 import Core.Type
@@ -133,17 +140,58 @@ runMain filePath book = do
 -- | Process a Bend file: parse, check, and run
 processFile :: FilePath -> IO ()
 processFile file = do
-  book <- parseFile file
-  result <- try $ do
-    bookAdj <- case adjustBook book of
-      Done b -> return b
-      Fail e -> showErrAndDie e
-    bookChk <- checkBook bookAdj
-    -- putStrLn $ show bookChk
-    runMain file bookChk
+  result <- try $ processFileInternal file True
   case result of
     Left (BendException e) -> showErrAndDie e
     Right () -> return ()
+
+processFileInternal :: FilePath -> Bool -> IO ()
+processFileInternal file allowGeneration = do
+  content <- readFile file
+  (rawBook, importedBook) <- parseBookWithAuto file content
+  let moduleName = extractModuleName file
+      mainFQN = moduleName ++ "::main"
+      genInfos = collectGenInfos file rawBook
+
+  bookAdj <- case adjustBook importedBook of
+    Done b -> return b
+    Fail e -> showErrAndDie e
+  let metasPresent = bookHasMet bookAdj
+  bookChk <- checkBook bookAdj
+
+  if null genInfos
+    then do
+      when metasPresent $
+        throwCliError "Meta variables remain after generation; run `bend verify` for detailed errors."
+      runMain file bookChk
+    else do
+      when (not allowGeneration) $
+        throwCliError "Meta variables remain after generation; generation already attempted."
+      bookForHVM <- case adjustBook importedBook of
+        Done b -> return b
+        Fail e -> showErrAndDie e
+      generatedDefsResult <- generateDefinitions file bookForHVM mainFQN genInfos
+      generatedDefs <- case generatedDefsResult of
+        Left err   -> throwCliError err
+        Right defs -> pure defs
+      let updatedContentResult = applyGenerated content genInfos generatedDefs
+      updatedContent <- case updatedContentResult of
+        Left err      -> throwCliError err
+        Right updated -> pure updated
+      writeFile file updatedContent
+      processFileInternal file False
+
+parseBookWithAuto :: FilePath -> String -> IO (Book, Book)
+parseBookWithAuto file content =
+  case doParseBook file content of
+    Left err -> showErrAndDie err
+    Right (book, parserState) -> do
+      autoImportedBook <- autoImportWithExplicit file book parserState
+      return (book, autoImportedBook)
+
+
+throwCliError :: String -> IO a
+throwCliError msg = throwIO (BendException $ Unsupported noSpan (Ctx []) (Just msg))
 
 -- | Process a Bend file and return it's Core form
 processFileToCore :: FilePath -> IO ()
@@ -160,7 +208,7 @@ processFileToCore file = do
     Right () -> return ()
   where
     showBookWithFQN (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
-    showDefn k (_, x, t) = k ++ " : " ++ showTerm True False t ++ " = " ++ showTerm True False x
+    showDefn k (_, x, t) = k ++ " : " ++ showTerm True t ++ " = " ++ showTerm True x
 
 -- | Try to format JavaScript code using prettier if available
 formatJavaScript :: String -> IO String
@@ -201,7 +249,7 @@ processFileToHVM file = do
   let mainFQN = moduleName ++ "::main"
   book <- parseFile file
   result <- try $ do
-    bookAdj <- case adjustBookWithPats book of
+    bookAdj <- case adjustBook book of
       Done b -> return b
       Fail e -> showErrAndDie e
     -- putStrLn $ show bookAdj
@@ -246,32 +294,10 @@ listDependencies file = do
 getGenDeps :: FilePath -> IO ()
 getGenDeps file = do
   book <- parseFile file
-  bookAdj@(Book defs names) <- case adjustBook book of
+  bookAdj <- case adjustBook book of
     Done b -> return b
     Fail e -> showErrAndDie e
-  
-  -- Find all definitions that are `try` definitions (i.e., contain a Met)
-  let tryDefs = M.filter (\(_, term, _) -> hasMet term) defs
-  let tryNames = M.keysSet tryDefs
-
-  -- Find all reverse dependencies (examples)
-  let allDefs = M.toList defs
-  let reverseDeps = S.fromList [ name | (name, (_, term, typ)) <- allDefs, not (name `S.member` tryNames), not (S.null (S.intersection tryNames (S.union (getDeps term) (getDeps typ)))) ]
-
-  -- Get all dependencies of the `try` definitions and the reverse dependencies
-  let targetDefs = M.filterWithKey (\k _ -> k `S.member` tryNames || k `S.member` reverseDeps) defs
-  let allDeps = S.unions $ map (\(_, term, typ) -> S.union (getDeps term) (getDeps typ)) (M.elems targetDefs)
-
-  -- Also include the names of the try defs and reverse deps themselves
-  let allNames = S.union tryNames reverseDeps
-  let finalDepNames = S.union allNames allDeps
-
-  -- Filter the book to get the definitions we want to print
-  let finalDefs = M.filterWithKey (\k _ -> k `S.member` finalDepNames) defs
-  let finalNames = filter (`S.member` finalDepNames) names
-  
-  -- Print the resulting book
-  print $ Book finalDefs finalNames
+  print $ buildGenDepsBook bookAdj
 
 -- | Collect all refs from a Book
 collectAllRefs :: Book -> S.Set Name
@@ -280,46 +306,7 @@ collectAllRefs (Book defs _) =
   where
     collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)
 
--- | Check if a term contains a Metavar
-hasMet :: Term -> Bool
-hasMet term = case term of
-  Met {}      -> True
-  Sub t       -> hasMet t
-  Fix _ f     -> hasMet (f (Var "" 0))
-  Let k t v f -> case t of
-    Just t    -> hasMet t || hasMet v || hasMet (f (Var k 0))
-    Nothing   -> hasMet v || hasMet (f (Var k 0))
-  Use k v f   -> hasMet v || hasMet (f (Var k 0))
-  Chk x t     -> hasMet x || hasMet t
-  EmpM        -> False
-  UniM f      -> hasMet f
-  BitM f t    -> hasMet f || hasMet t
-  Suc n       -> hasMet n
-  NatM z s    -> hasMet z || hasMet s
-  Lst t       -> hasMet t
-  Con h t     -> hasMet h || hasMet t
-  LstM n c    -> hasMet n || hasMet c
-  EnuM cs e   -> any (hasMet . snd) cs || hasMet e
-  Op2 _ a b   -> hasMet a || hasMet b
-  Op1 _ a     -> hasMet a
-  Sig a b     -> hasMet a || hasMet b
-  Tup a b     -> hasMet a || hasMet b
-  SigM f      -> hasMet f
-  All a b     -> hasMet a || hasMet b
-  Lam _ t f   -> maybe False hasMet t || hasMet (f (Var "" 0))
-  App f x     -> hasMet f || hasMet x
-  Eql t a b   -> hasMet t || hasMet a || hasMet b
-  EqlM f      -> hasMet f
-  Rwt e f     -> hasMet e || hasMet f
-  Sup _ a b   -> hasMet a || hasMet b
-  SupM l f    -> hasMet l || hasMet f
-  Loc _ t     -> hasMet t
-  Log s x     -> hasMet s || hasMet x
-  Pat s m c   -> any hasMet s || any (hasMet . snd) m || any (\(p,b) -> any hasMet p || hasMet b) c
-  Frk l a b   -> hasMet l || hasMet a || hasMet b
-  _           -> False
-
-showErrAndDie :: Show a => a -> IO b
+showErrAndDie :: (Show a, Typeable a) => a -> IO b
 showErrAndDie err = do
   let rendered = case readMaybe (show err) :: Maybe String of
         Just txt -> txt

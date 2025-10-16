@@ -27,17 +27,17 @@ import Core.Show
 
 -- | Book parsing
 
--- | Syntax: def name : Type = term | type Name<T>(i) -> Type: cases | name : Type = term | try name : Type | assert A == B : T
+-- | Syntax: def name : Type = term | type Name<T>(i) -> Type: cases | name : Type = term | gen name : Type | assert A == B : T
 parseDefinition :: Parser (Name, Defn)
 parseDefinition = do
-  (name, defn) <- choice [ parseType , parseDef , parseTry , parseAssert ]
+  (name, defn) <- choice [ parseType , parseDef , parseGen , parseAssert ]
   return $ (name, defn)
 
 -- | Syntax: def name : Type = term | def name(x: T1, y: T2) -> RetType: body
 parseDef :: Parser (Name, Defn)
 parseDef = do
   _ <- symbol "def"
-  f <- name
+  f <- definitionName
   qualifiedName <- qualifyName f
   choice
     [ parseDefFunction qualifiedName
@@ -75,54 +75,32 @@ parseDefFunction f = label "function definition" $ do
     -- TODO: refactor parseArg to use a do-block instead. DO IT BELOW:
     nestTypeBod (argName, argType) (currType, currBod) = (All argType (Lam argName (Just argType) (\v -> currType)), Lam argName (Just argType) (\v -> currBod))
 
--- | Parse a module path like Path/To/Lib
-parseModulePath :: Parser String
-parseModulePath = do
-  firstPart <- name
-  restParts <- many (try $ char '/' >> name)
-  skip -- consume whitespace after path
-  return $ intercalate "/" (firstPart : restParts)
-
 addImport :: Import -> Parser ()
 addImport imp = do
   st <- get
   put st { parsedImports = imp : parsedImports st }
 
--- | Syntax: import module [as alias] | from module import name1, name2
+-- | Syntax: import <target> as <alias>
 parseImport :: Parser ()
-parseImport = choice
-  [ try parseFromImport         -- from module import name1, name2
-  , parseModuleImport           -- import module [as alias]
-  ]
-
--- | Parse: from module_path import name1, name2, ...
-parseFromImport :: Parser ()
-parseFromImport = do
-  _ <- symbol "from"
-  path <- parseModulePath
+parseImport = do
   _ <- symbol "import"
-  -- Parse either: name1 [as alias1], name2 [as alias2], ...  or  (name1 [as alias1], name2 [as alias2], ...)
-  nameAliases <- choice
-    [ parens (sepBy1 parseNameWithAlias (symbol ","))
-    , sepBy1 parseNameWithAlias (symbol ",")
-    ]
-  addImport (SelectiveImport path nameAliases)
+  target <- parseImportTarget
+  _ <- symbol "as"
+  alias <- name
+  addImport (ImportAlias target alias)
 
--- | Parse: name [as alias]
-parseNameWithAlias :: Parser (String, Maybe String)
-parseNameWithAlias = do
-  n <- name
-  maybeAlias <- optional (symbol "as" *> name)
-  return (n, maybeAlias)
+-- | Parse the import target, allowing both path-only and FQN forms.
+parseImportTarget :: Parser String
+parseImportTarget = lexeme $ do
+  pathParts <- sepBy1 parseSegment (char '/')
+  pure $ intercalate "/" pathParts
+  where
+    parseSegment :: Parser String
+    parseSegment = some (satisfy isSegmentChar <?> "path character")
 
--- | Parse: import module_path [as alias]
-parseModuleImport :: Parser ()
-parseModuleImport = do
-  _ <- symbol "import"  
-  path <- parseModulePath
-  -- Optional alias
-  maybeAlias <- optional (symbol "as" *> name)
-  addImport (ModuleImport path maybeAlias)
+    isSegmentChar :: Char -> Bool
+    isSegmentChar c =
+      isAsciiLower c || isAsciiUpper c || isDigit c || c == '_' || c == '@' || c == '-'
 
 
 -- | Syntax: import statements followed by definitions
@@ -139,7 +117,7 @@ parseBook = do
 parseType :: Parser (Name, Defn)
 parseType = label "datatype declaration" $ do
   _       <- symbol "type"
-  tName   <- name
+  tName   <- definitionName
   qualifiedTypeName <- qualifyName tName
   params  <- option [] $ angles (sepEndBy (parseArg True) (symbol ","))
   indices <- option [] $ parens (sepEndBy (parseArg False) (symbol ","))
@@ -194,27 +172,27 @@ parseArg expr = do
   t <- if expr then parseTerm else parseTerm
   return (k, t)
 
--- | Syntax: try name : Type { t1, t2, ... } | try name(x: Type1, y: Type2) -> Type { t1, t2, ... }
-parseTry :: Parser (Name, Defn)
-parseTry = do
+-- | Syntax: gen name : Type { t1, t2, ... } | gen name(x: Type1, y: Type2) -> Type { t1, t2, ... }
+parseGen :: Parser (Name, Defn)
+parseGen = do
   -- Insert a Loc span for text replacement in bendgen
   (sp, (f, x, t)) <- withSpan $ do
-    _ <- symbol "try"
-    f <- name
+    _ <- symbol "gen"
+    f <- definitionName
     qualifiedName <- qualifyName f
-    (x, t) <- choice [parseTryFunction qualifiedName, parseTrySimple qualifiedName]
+    (x, t) <- choice [parseGenFunction qualifiedName, parseGenSimple qualifiedName]
     return (qualifiedName, x, t)
   return (f, (False, Loc sp x, t))
 
-parseTrySimple :: Name -> Parser (Term, Type)
-parseTrySimple nam = do
+parseGenSimple :: Name -> Parser (Term, Type)
+parseGenSimple nam = do
   _   <- symbol ":"
   typ <- parseTerm
   ctx <- option [] $ braces $ sepEndBy parseTerm (symbol ",")
   return (Met nam typ ctx, typ)
 
-parseTryFunction :: Name -> Parser (Term, Type)
-parseTryFunction nam = label "try definition" $ do
+parseGenFunction :: Name -> Parser (Term, Type)
+parseGenFunction nam = label "gen definition" $ do
   tyParams <- option [] $ angles $ sepEndBy name (symbol ",")
   regularArgs <- parens $ sepEndBy (parseArg False) (symbol ",")
   let args = [(tp, Set) | tp <- tyParams] ++ regularArgs
@@ -251,7 +229,7 @@ parseAssert = do
 -- | Parse a book from a string, returning both the book and the import information
 doParseBook :: FilePath -> String -> Either String (Book, ParserState)
 doParseBook file input =
-  case runState (runParserT p file input) (ParserState True input [] M.empty [] 0 file) of
+  case runState (runParserT p file input) (ParserState True input [] [] 0 file) of
     (Left err, _)    -> Left (formatError input err)
     (Right res, st)  -> Right (res, st)
   where

@@ -19,13 +19,8 @@ import Test
 --   Location: (line 17, column 3)
 --   17 |   a+b
 
-infix_nat_add_isnt_op2 :: String
-infix_nat_add_isnt_op2 = """
-def Nat/add(a:Nat, b:Nat) -> Nat:
-  match a:
-    case 0n: b
-    case 1n+p: 1n+Nat/add(p,b)
-
+main_bend :: String
+main_bend = """
 def add_x_y (a:Nat, b:Nat) -> Nat{(a+b) == Nat/add(a,b)}:
   match a:
     case 0n:
@@ -34,5 +29,21 @@ def add_x_y (a:Nat, b:Nat) -> Nat{(a+b) == Nat/add(a,b)}:
       finally
 """
 
+nat_add_bend :: String
+nat_add_bend = """
+def add(a:Nat, b:Nat) -> Nat:
+  match a:
+    case 0n:
+      b
+    case 1n+p:
+      1n+add(p,b)
+"""
+
 main :: IO ()
-main = testFileChecks infix_nat_add_isnt_op2
+main =
+  test "bend main.bend"
+    [ ("main.bend", main_bend)
+    , ("Nat/add.bend", nat_add_bend)
+    ]
+    "Nat/add should back application of '+'"
+    $ \_ err -> assert (err == "")

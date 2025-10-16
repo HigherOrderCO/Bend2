@@ -344,3 +344,45 @@ collectVars t = case t of
                   concatMap (\(ps, t) -> concatMap collectVars ps ++ collectVars t) cs
   Frk l a b -> collectVars l ++ collectVars a ++ collectVars b
   _ -> []
+
+-- | Checks whether a term contains any metavariables.
+termHasMet :: Term -> Bool
+termHasMet term = case term of
+  Met{}         -> True
+  Sub t         -> termHasMet t
+  Fix k f       -> termHasMet (f (Var k 0))
+  Let k mt v f  -> maybe False termHasMet mt
+                    || termHasMet v
+                    || termHasMet (f (Var k 0))
+  Use k v f     -> termHasMet v || termHasMet (f (Var k 0))
+  Chk x t       -> termHasMet x || termHasMet t
+  Tst x         -> termHasMet x
+  EmpM          -> False
+  UniM f        -> termHasMet f
+  BitM f t      -> termHasMet f || termHasMet t
+  Suc n         -> termHasMet n
+  NatM z s      -> termHasMet z || termHasMet s
+  Lst t'        -> termHasMet t'
+  Con h t       -> termHasMet h || termHasMet t
+  LstM n c      -> termHasMet n || termHasMet c
+  EnuM cs e     -> any (termHasMet . snd) cs || termHasMet e
+  Op2 _ a b     -> termHasMet a || termHasMet b
+  Op1 _ a       -> termHasMet a
+  Sig a b       -> termHasMet a || termHasMet b
+  Tup a b       -> termHasMet a || termHasMet b
+  SigM f        -> termHasMet f
+  All a b       -> termHasMet a || termHasMet b
+  Lam k mt f    -> maybe False termHasMet mt || termHasMet (f (Var k 0))
+  App f x       -> termHasMet f || termHasMet x
+  Eql t a b     -> termHasMet t || termHasMet a || termHasMet b
+  EqlM f        -> termHasMet f
+  Rwt e f       -> termHasMet e || termHasMet f
+  Sup l a b     -> termHasMet l || termHasMet a || termHasMet b
+  SupM l f      -> termHasMet l || termHasMet f
+  Loc _ t       -> termHasMet t
+  Log s x       -> termHasMet s || termHasMet x
+  Pat ts ms cs  -> any termHasMet ts
+                    || any (termHasMet . snd) ms
+                    || any (\(ps, t) -> any termHasMet ps || termHasMet t) cs
+  Frk l a b     -> termHasMet l || termHasMet a || termHasMet b
+  _             -> False
