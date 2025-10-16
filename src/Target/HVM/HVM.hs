@@ -7,7 +7,7 @@
 --
 -- This module consolidates the former KolmoC backend into a single file and
 -- exposes it as the HVM target.
-module Target.HVM
+module Target.HVM.HVM
   ( compile
   , CompileError(..)
   , HCore(..)

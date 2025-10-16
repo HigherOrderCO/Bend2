@@ -26,10 +26,7 @@ library
                       Core.Adjust.Adjust,
                       Core.Bind,
                       Core.CLI,
-                      Core.CLI.Gen,
-                      Core.Gen.Info,
-                      Core.Gen.Parser,
-                      Core.Gen.Pretty,
+                      Core.Gen,
                       Core.Check,
                       Core.Deps,
                       Core.Equal,
@@ -47,12 +44,13 @@ library
                       Core.Rewrite,
                       Core.Termination,
                       Core.WHNF,
-                      Target.HVM,
+                      Target.HVM.HVM,
+                      Target.HVM.Parse,
+                      Target.HVM.Pretty,
                       Target.Haskell,
                       Target.JavaScript,
                       Package.Index
-    other-modules:    Core.Gen.HVM.Parse,
-                      Core.Gen.HVM.Pretty
+    other-modules:
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
                       containers == 0.7,

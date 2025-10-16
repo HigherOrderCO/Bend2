@@ -1,6 +1,7 @@
-module Core.CLI.Gen
+module Core.Gen
   ( GenInfo(..)
   , collectGenInfos
+  , extractSimpleName
   , bookHasMet
   , generateDefinitions
   , applyGenerated
@@ -9,7 +10,8 @@ module Core.CLI.Gen
 
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.List (foldl', sortOn)
+import Data.List (foldl', isPrefixOf, sortOn)
+import Data.Maybe (mapMaybe)
 import System.Exit (ExitCode(..))
 import System.IO (hClose, hPutStr)
 import System.IO.Temp (withSystemTempFile)
@@ -18,28 +20,91 @@ import System.Timeout (timeout)
 
 import Core.Deps (getDeps)
 import Core.Type
-import Core.Gen.Info (GenInfo(..), collectGenInfos)
-import Core.Gen.Parser (parseGeneratedTerms)
-import Core.Gen.Pretty (prettyGenerated)
-import qualified Target.HVM as HVM
+import Target.HVM.HVM (HCore)
+import qualified Target.HVM.HVM as HVM
+import Target.HVM.Parse (parseGeneratedTerm)
+import Target.HVM.Pretty (prettyGenerated)
+
+-------------------------------------------------------------------------------
+-- Metadata about generator targets
+-------------------------------------------------------------------------------
+
+data GenInfo = GenInfo
+  { giFullName   :: Name
+  , giSimpleName :: String
+  , giSpan       :: Span
+  , giMetTerm    :: Term
+  , giType       :: Type
+  , giCtxTerms   :: [Term]
+  }
+
+collectGenInfos :: FilePath -> Book -> [GenInfo]
+collectGenInfos file (Book defs names) =
+  mapMaybe lookupGen names
+  where
+    lookupGen name = do
+      (_, term, typ) <- M.lookup name defs
+      case term of
+        Loc sp inner
+          | spanPth sp == file ->
+              case stripLoc inner of
+                met@(Met _ metType metCtx) ->
+                  let simple = extractSimpleName name
+                  in Just (GenInfo name simple sp met metType metCtx)
+                _ -> Nothing
+        _ -> Nothing
+
+    stripLoc t = case t of
+      Loc _ inner -> stripLoc inner
+      other       -> other
+
+extractSimpleName :: Name -> String
+extractSimpleName name =
+  case reverse (splitOnSep "::" name) of
+    (simple:_) -> simple
+    []         -> name
+
+splitOnSep :: String -> String -> [String]
+splitOnSep sep str = go str
+  where
+    go [] = [""]
+    go s =
+      case breakOnSep s of
+        (chunk, Nothing)    -> [chunk]
+        (chunk, Just rest') -> chunk : go rest'
+
+    breakOnSep s
+      | sep `isPrefixOf` s = ("", Just (drop (length sep) s))
+      | otherwise = case s of
+          []     -> ("", Nothing)
+          (c:cs) ->
+            let (chunk, rest) = breakOnSep cs
+            in (c:chunk, rest)
+
+-------------------------------------------------------------------------------
+-- Generation pipeline
+-------------------------------------------------------------------------------
 
 bookHasMet :: Book -> Bool
-bookHasMet (Book defs _) = any (\(_, term, _) -> hasMet term) (M.elems defs)
+bookHasMet (Book defs _) =
+  any (\(_, term, _) -> hasMet term) (M.elems defs)
 
-generateDefinitions :: FilePath -> Book -> Name -> [GenInfo] -> IO (Either String (M.Map String String))
+generateDefinitions :: FilePath -> Book -> Name -> [GenInfo]
+                    -> IO (Either String (M.Map String String))
 generateDefinitions _file book mainFQN genInfos = do
   let hvmCode = HVM.compile book mainFQN
   withSystemTempFile "bend-gen.hvm4" $ \tmpPath tmpHandle -> do
     hPutStr tmpHandle hvmCode
     hClose tmpHandle
-    result <- timeout (5 * 1000000) (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
+    result <- timeout (5 * 1000000)
+      (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
     case result of
       Nothing -> pure $ Left "hvm4 timed out while generating code."
       Just (exitCode, stdoutStr, stderrStr) -> case exitCode of
         ExitSuccess ->
           if not (null stderrStr)
             then pure $ Left $ "hvm4 reported an error: " ++ stderrStr
-            else case parseGeneratedTerms stdoutStr of
+            else case parseGenerated stdoutStr of
               Left err -> pure (Left err)
               Right terms ->
                 if length terms < length genInfos
@@ -56,12 +121,14 @@ generateDefinitions _file book mainFQN genInfos = do
                         pure (Right (M.fromList rendered))
         ExitFailure code ->
           pure $ Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
-
   where
     renderDefinition (info, term) =
-      case prettyGenerated info term of
+      case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
         Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
         Right txt -> Right (giSimpleName info, txt)
+
+parseGenerated :: String -> Either String [HCore]
+parseGenerated input = fmap pure (parseGeneratedTerm input)
 
 applyGenerated :: String -> [GenInfo] -> M.Map String String -> Either String String
 applyGenerated content genInfos generated = do
@@ -97,10 +164,12 @@ applySpanReplacements original replacements = do
       if start <= end && end <= length reference
         then Right (start, end, txt)
         else Left "Invalid span information for generator replacement."
+
     nonOverlapping [] = True
     nonOverlapping [_] = True
-    nonOverlapping ((_,e1,_):(s2,e2,x2):rest) =
-      e1 <= s2 && nonOverlapping ((s2,e2,x2):rest)
+    nonOverlapping ((_,e1,_):(s2,e2,t2):rest) =
+      e1 <= s2 && nonOverlapping ((s2,e2,t2):rest)
+
     applyOne acc (start, end, txt) =
       let (prefix, rest) = splitAt start acc
           (_, suffix) = splitAt (end - start) rest
@@ -123,6 +192,10 @@ lineStartOffset src linesToSkip = go src linesToSkip 0
       in case after of
            []       -> consumed
            (_:rest) -> go rest (n - 1) (consumed + 1)
+
+-------------------------------------------------------------------------------
+-- Dependency closure for generator books
+-------------------------------------------------------------------------------
 
 buildGenDepsBook :: Book -> Book
 buildGenDepsBook book@(Book defs names) =
@@ -151,6 +224,10 @@ buildGenDepsBook book@(Book defs names) =
 
     finalDefs = M.filterWithKey (\k _ -> k `S.member` finalDepNames) defs
     finalNames = filter (`S.member` finalDepNames) names
+
+-------------------------------------------------------------------------------
+-- Met detection
+-------------------------------------------------------------------------------
 
 hasMet :: Term -> Bool
 hasMet term = case term of

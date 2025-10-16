@@ -22,7 +22,7 @@ import System.IO (hFlush, hPutStr, hPutStrLn, stderr, stdout)
 import Data.Typeable (Typeable)
 import Text.Read (readMaybe)
 
-import Core.CLI.Gen
+import Core.Gen
   ( applyGenerated
   , bookHasMet
   , buildGenDepsBook
@@ -41,7 +41,7 @@ import Core.Show (showTerm, BendException(..))
 import Core.WHNF
 
 import qualified Target.JavaScript as JS
-import qualified Target.HVM as HVM
+import qualified Target.HVM.HVM as HVM
 import qualified Target.Haskell as HS
 
 -- IO Runtime

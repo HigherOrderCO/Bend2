@@ -1,12 +1,11 @@
-module Core.Gen.HVM.Pretty
+module Target.HVM.Pretty
   ( PrettyError(..)
   , prettyGenerated
   ) where
 
-import Core.Gen.Info (GenInfo(..))
 import Core.Show (showTerm)
 import Core.Type
-import Target.HVM (HCore(..))
+import Target.HVM.HVM (HCore(..))
 
 import Control.Monad.State.Strict (State, execState, get, modify)
 import Data.Char (toLower)
@@ -69,20 +68,20 @@ decIndent = PrettyM $ modify (\st -> st { psIndent = max 0 (psIndent st - 1) })
 -- Public entry point
 -------------------------------------------------------------------------------
 
-prettyGenerated :: GenInfo -> HCore -> Either PrettyError String
-prettyGenerated info rawTerm = do
-  SignaturePieces tyParams valParams retType <- extractSignature (giType info)
+prettyGenerated :: String -> Type -> [Term] -> HCore -> Either PrettyError String
+prettyGenerated simpleName funType ctxTerms rawTerm = do
+  SignaturePieces tyParams valParams retType <- extractSignature funType
 
-  let helperNames = map showHelper (giCtxTerms info)
+  let helperNames = map showHelper ctxTerms
       initialQueue = map (uncurry QueueEntry) valParams
-      usedSeed = S.fromList (giSimpleName info : helperNames ++ map fst valParams)
+      usedSeed = S.fromList (simpleName : helperNames ++ map fst valParams)
       env0 = Env initialQueue M.empty usedSeed
 
-  (stripped, env1) <- stripInitialLambdas helperNames (giSimpleName info) rawTerm env0
+  (stripped, env1) <- stripInitialLambdas helperNames simpleName rawTerm env0
   bodyWriter <- emitBody env1 stripped
 
   let doc = runPretty $ do
-        emitDef (giSimpleName info) tyParams valParams retType
+        emitDef simpleName tyParams valParams retType
         incIndent
         bodyWriter
         decIndent

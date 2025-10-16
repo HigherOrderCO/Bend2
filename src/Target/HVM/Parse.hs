@@ -1,8 +1,8 @@
-module Core.Gen.HVM.Parse
+module Target.HVM.Parse
   ( parseGeneratedTerm
   ) where
 
-import Target.HVM (HCore(..))
+import Target.HVM.HVM (HCore(..))
 
 import Control.Applicative (empty, (<|>))
 import Data.Functor (($>))
