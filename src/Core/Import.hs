@@ -2,6 +2,7 @@ module Core.Import
   ( autoImport
   , autoImportWithExplicit
   , extractModuleName
+  , ensureBendRoot
   ) where
 
 import Control.Monad (when)

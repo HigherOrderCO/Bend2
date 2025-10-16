@@ -1,14 +1,16 @@
 module Main where
 
 import System.Environment (getArgs)
-import System.Exit (exitFailure)
 import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, getGenDeps, processFileToCore, processFileToHS)
 import Core.Adjust.ReduceEtas
+import Package.Publish (runPublishCommand)
 
 -- | Show usage information
 showUsage :: IO ()
 showUsage = do
-  putStrLn "Usage: bend <file.bend> [options]"
+  putStrLn "Usage:"
+  putStrLn "  bend publish"
+  putStrLn "  bend <file.bend> [options]"
   putStrLn ""
   putStrLn "Options:"
   putStrLn "  --to-javascript    Compile to JavaScript"
@@ -23,6 +25,7 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
+    ["publish"]                          -> runPublishCommand
     [file, "--to-javascript"] | ".bend"    `isSuffixOf` file -> processFileToJS file
     [file, "--to-javascript"] | ".bend.py" `isSuffixOf` file -> processFileToJS file
     [file, "--to-hvm"] | ".bend"    `isSuffixOf` file -> processFileToHVM file
