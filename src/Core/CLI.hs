@@ -10,10 +10,12 @@ module Core.CLI
   , getGenDeps
   ) where
 
-import Control.Monad (unless, when)
+import Control.Monad (unless, when, forM_, foldM)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Maybe (fromJust)
+import Debug.Trace
+import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.Process (readProcessWithExitCode)
 import System.Exit (ExitCode(..))
@@ -30,8 +32,9 @@ import Core.Gen
   , generateDefinitions
   )
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
+import Core.Adjust.SplitAnnotate (check, infer)
 import Core.Bind
-import Core.Check
+-- import Core.Check
 import Core.Deps
 import Core.Import (autoImportWithExplicit, extractModuleName)
 import Core.Parse.Book (doParseBook)
@@ -75,30 +78,28 @@ executeIO book action = case whnf book action of
       executeIO book (whnf book (App cont result))
     _ -> return One
 
--- Type-check all definitions in a book
 checkBook :: Book -> IO Book
 checkBook book@(Book defs names) = do
   let orderedDefs = [(name, fromJust (M.lookup name defs)) | name <- names]
-  success <- checkAll book orderedDefs
+  (annotatedDefs, success) <- foldM checkAndAccumulate ([], True) orderedDefs
   unless success exitFailure
-  return book
+  return $ Book (M.fromList (reverse annotatedDefs)) names
   where
-    checkDef bk term typ = do
-      check 0 noSpan bk (Ctx []) typ Set
-      check 0 noSpan bk (Ctx []) term typ
-      return ()
-    checkAll :: Book -> [(Name, Defn)] -> IO Bool
-    checkAll bk [] = return True
-    checkAll bk ((name, (inj, term, typ)):rest) = do
-      case checkDef bk term typ of
-        Done () -> do
+    checkAndAccumulate (accDefs, accSuccess) (name, (inj, term, typ)) = do
+      let checkResult = do 
+            typ'  <- check 0 noSpan book (Ctx []) typ Set
+            term' <- check 0 noSpan book (Ctx []) term typ'
+            -- traceM $ "-chec: " ++ show term'
+            return (inj, term', typ')
+      case checkResult of
+        Done (inj', term', typ') -> do
           putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
-          checkAll bk rest
+          return ((name, (inj', term', typ')) : accDefs, accSuccess)
         Fail e -> do
           hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
           hPutStrLn stderr $ show e
-          success <- checkAll bk rest
-          return False
+          -- Keep original term when check fails
+          return ((name, (inj, term, typ)) : accDefs, False)
 
 -- | Parse a Bend file into a Book
 parseFile :: FilePath -> IO Book

@@ -3,349 +3,642 @@
 -- Eta-Form
 -- ========
 --
--- This module performs eta-reduction with lambda-inject optimization, transforming
--- nested lambda-match patterns into more efficient forms.
+-- This module performs a generalized eta-reduction, 
+-- transforming nested lambda-match patterns into more efficient forms.
+--
+-- The final form has pulled up to the surface-most level of the term tree 
+-- all lambda matches applied on variables (i.e. subterms like λ{..}(x))
+--
+-- Important: this does not changes `SupM` eliminators.
 --
 -- Basic Transformation:
 -- --------------------
--- λx. λy. λz. (λ{...} x) ~> λ{0n:λy.λz.A; 1n+:λy.λz.B}
 --
--- The optimization moves intermediate lambdas inside match branches. It also handles
--- passthrough constructs (Let, Use, Chk, Loc, Log, App) and reconstructs the scrutinee
--- when needed using 'use' bindings.
+-- λx. λy. (1n, λ{A: 2n ;B: 3n}(x))
+-- ---------------------------------- reduceEtas
+-- λ{A: λy.(1n, 2n); B: λy.(1n, 3n)}
+--
+--
+-- In General:
+-- ----------
+--
+-- λx. t[
+--        λ{A(a1,..):tA_1[x, a1..]; ..; B(b1,..): tB_1[x, b1..]; ..}(x),
+--        λ{A(a1,..):tA_2[x, a1..]; ..; B(b1,..): tB_2[x, b1..]; ..}(x),
+--   ...] 
+--  ------------------------------------------------------------------- reduceEtas
+--  λ{
+--    A: t[
+--          tA_1[A(a1,..), a1..]],
+--          tA_2[A(a1,..), a1..]],
+--     ...];
+--    B: t[
+--          tB_1[B(b1,..), b1..]],
+--          tB_2[B(b1,..), b2..]],
+--     ...];
+--    ...
+--  }
+--
+--  That is, finding a pattern λx. term[λ{..}(x)] triggers the rewriting of the term into a λ{..} form,
+--  where each clause of the new λ{..} is the original `term` after substituting its subterms of form λ{..}(x)
+--  by the value that those subterms should have given that `x` has the value dictated by the clause within which it is now located
 --
 -- Examples:
 -- ---------
 -- 1. Simple eta-reduction:
---    λn. (λ{0n:Z; 1n+:S} n) ~> λ{0n:Z; 1n+:S}
+--    λn. λ{0n:Z; 1n+:S}(n) ~> λ{0n:Z; 1n+:S}
 --
 -- 2. With intermediate lambdas:
---    λa. λb. (λ{0n:Z; 1n+:S} a) ~> λ{0n:λb.Z; 1n+:λp.λb.S}
+--    λa. λb. λ{0n:Z; 1n+:S}(a) ~> λ{0n:λb.Z; 1n+:λp.λb.S}
 --
 -- 3. With scrutinee reconstruction:
---    λa. (λ{0n:a; 1n+:λp. 1n+p} a) ~> λ{0n:use a=0n a; 1n+:λp. use a=1n+p 1n+p}
+--    λa. λ{0n:a; 1n+:λp. 1n+p}(a) ~> λ{0n: 0n; 1n+:λp. 1n+p}
 --
--- 4. Reconstruction disabled when field name matches scrutinee:
---    λb. (λ{0n:Z; 1n+:λb. S} b) ~> λ{0n:use b=0n Z; 1n+:λb. S} (no reconstruction in 1n+ case)
+-- Implementation:
+-- ---------------
+-- reduceEtas -> at each subterm λx.f, uses isEtaLong to check 
+--               whether f contains λ{..}(x). If it does,
+--               then it uses resolveMatches to produce its output. If isEtaLong indicates
+--               that Tst has been found, and rewriting needs to happen, then wrap the result in Tst.
+--               this is necessary so that the `trust` in  `def f() -> ..: trust ...` has the effect over
+--               the entire function's body
+-- isEtaLong nam -> at each subterm f(x), if x is the variable 'nam'
+--               from the lambda given from reduceEtas, and f is a λ{..}, 
+--               then return a label encoding which kind of λ{..}. Store information about
+--               clause argument types, and return STOP if incompatible information is found.
+--               moreover, if a Tst node is found, returns Bool flag so that reduceEtas can
+--               wrap the result in Tst
+-- resolveMatches -> given elim label, at each term f(x), if `f` is λ{..} 
+--               of a kind matching the elim label, then replace this application by
+--               the the clause of f that corresponds to the one determined by reduceEtas
 --
--- Key Points:
--- ----------
--- - Field lambdas are injected first, then intermediate constructs
--- - Scrutinee is reconstructed with 'use' bindings unless field names conflict
--- - Handles Let, Use, Chk, Loc, Log, and App as passthrough constructs
+-- Supporting Utilities:
+-- ---------------------
+-- ElimLabel      -> records which eliminator was matched and the span/binder metadata to rebuild it later
+-- combLabels     -> merges multiple ElimLabel findings, halting when incompatible eliminators are mixed
+-- getVarNames    -> extracts the parameter names used by eliminator branches, allowing preservation of var names when the user defined them
+-- getAnnotations -> extract argument annotations out of eliminator branches so the reconstructed clauses can preserve them
 
+{-# LANGUAGE ViewPatterns #-}
 module Core.Adjust.ReduceEtas where
 
 import Core.Type
+import Core.Equal
+import Core.Bind
 import Core.Show
 import qualified Data.Set as S
+import qualified Data.Map as M
+import Data.List (union)
 import Debug.Trace
-import Data.Maybe (isJust, fromJust)
+import Data.Maybe (isJust, fromJust, fromMaybe)
+import Control.Applicative
 
--- Main eta-reduction function with lambda-inject optimization
-reduceEtas :: Int -> Term -> Term
-reduceEtas d t = case t of
-  -- Check for the lambda-inject pattern: λx. ... (λ{...} x)
-  Lam n ty f ->
-    case isEtaLong n d (f (Var n d)) of
-      Just (lmat, inj, hadTrust) ->
-        let t'  = injectInto inj n lmat in
-        let t'' = reduceEtas d t' in
-        -- If a top-level `trust` was encountered on the path to the match,
-        -- preserve it as an outer wrapper around the reduced case-tree.
-        if hadTrust then Tst t'' else t''
-      Nothing                    -> Lam n (fmap (reduceEtas d) ty) (\v -> reduceEtas (d+1) (f v))
-  
-  -- Recursive cases for all other constructors
-  Var n i      -> Var n i
-  Ref n i      -> Ref n i
-  Sub t'       -> Sub (reduceEtas d t')
-  Fix n f      -> Fix n (\v -> reduceEtas (d+1) (f v))
-  Let k mt v f -> Let k (fmap (reduceEtas d) mt) (reduceEtas d v) (\v' -> reduceEtas (d+1) (f v'))
-  Use k v f    -> Use k (reduceEtas d v) (\v' -> reduceEtas (d+1) (f v'))
+-- Main eta-reduction function
+-- 1) Assumes the `term` at call time is completely in HOAS bind form.
+--    Otherwise, (f Var nam d) is not useful, and variable capture/shadowing can happen.
+-- 2) Uses bindVarByName for the reconstructions x ~> A(a1,a2,..) and rebindings (after (f (Var nam d)) destroyed them)
+--    bindVarByIndex/Name is blind to `d`, hence the use of unique `nam`
+-- 3) Receives the eliminator type and var names a1.. from isEtaLong
+-- 4) The span in the ElimLabel is the span of the inner eliminator found by isEtaLong.
+--    This span bubbles up to become the span of the new outer eliminator we synthesize,
+--    since the new eliminator has no natural span of its own (it didn't exist in the source).
+-- 5) Rewrites the subterms using resolveMatches. If isEtaLong gives True for a Tst being found,
+--    then also wrap the result in Tst
+--
+-- Returns  : term in the form λ{A(a1..):λ{B:..}; ..}
+-- Important: this does not changes `SupM` eliminators.
+reduceEtas :: Int -> Span -> Book -> Term -> Term
+reduceEtas d span book (Loc l term) = Loc l (reduceEtas d l book term)
+reduceEtas d span book term = 
+  case term of
+  Lam k mty f ->
+      -- The "$" prefix ensures `nam` won't clash with user variables
+      let nam = "$"++show d in
+      let (eta, needsTst) = isEtaLong d span book nam (f (Var nam d)) in
+      let wrapTerm = \t -> case (eta, needsTst, t) of
+            (NONE, _, _)            -> t
+            (STOP, _, _)            -> t
+            (_, False, _)           -> t
+            (_, True, Loc spa body) -> Loc spa (Tst body)
+            _                       -> Tst t
+      in
+      wrapTerm $ case eta of
+        EMPM spa -> Loc spa EmpM
+        EQLM spa -> Loc spa $ EqlM refl 
+            where
+            refl = reduceEtas d span book $ bindVarByName nam Rfl (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+        UNIM spa -> Loc spa $ UniM u
+            where
+            u    = reduceEtas d span book $ bindVarByName nam One (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+        BITM spa -> Loc spa $ BitM fl tr 
+            where
+            fl   = reduceEtas d span book $ bindVarByName nam Bt0 (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+            tr   = reduceEtas d span book $ bindVarByName nam Bt1 (resolveMatches span nam eta 1 "" [] (f (Var nam d)))
+        NATM spa nams@[p] anns@[pAnn] -> Loc spa $ NatM z s 
+            where
+            z    = reduceEtas d span book $ bindVarByName nam Zer (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+            s    = reduceEtas d span book $ (Lam p pAnn (\q -> 
+                                             bindVarByName nam (Suc q) (resolveMatches span nam eta 1 "" [Sub q] (f (Var nam d)))))
+        LSTM spa nams@[h,t] anns@[hAnn, tAnn] -> Loc spa $ LstM nil cons 
+            where
+            nil  = reduceEtas d span book $ bindVarByName nam Nil (resolveMatches span nam eta 0 "" [] (f (Var nam d)))
+            cons = reduceEtas d span book $ (Lam h hAnn (\h ->
+                                             Lam t tAnn (\t ->
+                                             bindVarByName nam (Con h t) (resolveMatches span nam eta 1 "" [Sub h, Sub t] (f (Var nam d))))))
+        SIGM spa nams@[a,b] anns@[aAnn, bAnn] -> Loc spa $ SigM pair
+            where
+            pair = reduceEtas d span book $ (Lam a aAnn (\a ->
+                                             Lam b bAnn (\b ->
+                                             bindVarByName nam (Tup a b) (resolveMatches span nam eta 0 "" [Sub a, Sub b] (f (Var nam d))))))
+        ENUM spa syms compl nams@[de] anns@[deAnn] -> Loc spa $ EnuM cases def 
+          where
+          cases = map (\sym -> (sym, reduceEtas d span book $ bindVarByName nam (Sym sym) (resolveMatches span nam eta 0 sym [] (f (Var nam d))))) syms
+          def = if compl
+                then reduceEtas d span book (Lam de deAnn (\q -> bindVarByName nam q (resolveMatches span nam eta (-1) "" [Sub q] (f (Var nam d)))))
+                else One
+        _ -> Lam k mty (\x -> reduceEtas (d+1) span book (f x))
+        -- SUPM lab -> not reduced
+  Var n i       -> Var n i
+  Ref n i       -> Ref n i
+  Sub t'        -> Sub t'
+  Fix n f       -> Fix n (\v -> reduceEtas (d+1) span book (f v))
+  Let n mty v f -> Let n (fmap (reduceEtas d span book) mty) (reduceEtas d span book v) (\v' -> reduceEtas (d+1) span book (f v'))
+  Use n v f     -> Use n (reduceEtas d span book v) (\v' -> reduceEtas (d+1) span book (f v'))
+  Set           -> Set
+  Chk t' ty     -> Chk (reduceEtas d span book t') (reduceEtas d span book ty)
+  Emp           -> Emp
+  EmpM          -> EmpM
+  Uni           -> Uni
+  One           -> One
+  UniM f        -> UniM (reduceEtas d span book f)
+  Bit           -> Bit
+  Bt0           -> Bt0
+  Bt1           -> Bt1
+  BitM f g      -> BitM (reduceEtas d span book f) (reduceEtas d span book g)
+  Nat           -> Nat
+  Zer           -> Zer
+  Suc t'        -> Suc (reduceEtas d span book t')
+  NatM z s      -> NatM (reduceEtas d span book z) (reduceEtas d span book s)
+  IO t          -> IO (reduceEtas d span book t)
+  Lst ty        -> Lst (reduceEtas d span book ty)
+  Nil           -> Nil
+  Con h t'      -> Con (reduceEtas d span book h) (reduceEtas d span book t')
+  LstM nil c    -> LstM (reduceEtas d span book nil) (reduceEtas d span book c)
+  Enu ss        -> Enu ss
+  Sym s         -> Sym s
+  EnuM cs def   -> EnuM [(s, reduceEtas d span book v) | (s,v) <- cs] (reduceEtas d span book def)
+  Num nt        -> Num nt
+  Val nv        -> Val nv
+  Op2 o a b     -> Op2 o (reduceEtas d span book a) (reduceEtas d span book b)
+  Op1 o a       -> Op1 o (reduceEtas d span book a)
+  Sig a b       -> Sig (reduceEtas d span book a) (reduceEtas d span book b)
+  Tup a b       -> Tup (reduceEtas d span book a) (reduceEtas d span book b)
+  SigM f        -> SigM (reduceEtas d span book f)
+  All a b       -> All (reduceEtas d span book a) (reduceEtas d span book b)
+  App f x -> case cut f of
+    Lam k Nothing b -> reduceEtas d span book (b x)
+    _ -> let f' = reduceEtas d span book f in
+         case cut f' of
+           Lam k Nothing b -> reduceEtas d span book (b x)
+           _ -> App f' (reduceEtas d span book x)
+  Eql ty a b    -> Eql (reduceEtas d span book ty) (reduceEtas d span book a) (reduceEtas d span book b)
+  Rfl           -> Rfl
+  EqlM f        -> EqlM (reduceEtas d span book f)
+  Rwt e f       -> Rwt (reduceEtas d span book e) (reduceEtas d span book f)
+  Met n ty args -> Met n (reduceEtas d span book ty) (map (reduceEtas d span book) args)
+  Era           -> Era
+  Sup l a b     -> Sup (reduceEtas d span book l) (reduceEtas d span book a) (reduceEtas d span book b)
+  SupM l f      -> SupM (reduceEtas d span book l) (reduceEtas d span book f)
+--Loc s t'      -> Loc s (reduceEtas d span t')
+  Log s x       -> Log (reduceEtas d span book s) (reduceEtas d span book x)
+  Pri p         -> Pri p
+  Pat ss ms cs  -> Pat (map (reduceEtas d span book) ss) [(k, reduceEtas d span book v) | (k,v) <- ms] [(map (reduceEtas d span book) ps, reduceEtas d span book rhs) | (ps,rhs) <- cs]
+  Frk l a b     -> Frk (reduceEtas d span book l) (reduceEtas d span book a) (reduceEtas d span book b)
+  Tst x         -> Tst (reduceEtas d span book x)
+
+-- Substitution of eliminator applications with their clauses
+-- 1) Finds App nodes where f is an eliminator and x is 'nam'
+-- 2) Replaces the application with the branch selected by 'clause':
+--    2.1) clause 0 = first branch (e.g., zero for Nat, nil for List)
+--    2.2) clause 1 = second branch (e.g., successor for Nat, cons for List)
+--    2.3) For enums, 'sym' determines which symbol's branch to use
+-- 3) For branches with parameters, uses 'args' to apply them via appInnerArg
+-- 4) Recursively processes the selected branch to handle nested eliminators
+--
+-- Returns: NatM z s applied to 'nam' with clause=0           -> returns z
+--          NatM z s applied to 'nam' with clause=1, args=[p] -> returns s(p)[nam -> 1n+p]
+resolveMatches :: Span -> Name -> ElimLabel -> Int -> String -> [Term] -> Term -> Term
+resolveMatches span nam elim clause sym args (Loc span' term) = Loc span' (resolveMatches span' nam elim clause sym args term)
+resolveMatches span nam elim clause sym args t = case t of
+  App f x      ->
+    case cut x of
+      (Var k i) -> if k == nam
+        then case (cut f, elim, args) of
+          (UniM u       , UNIM _        , [])    -> resolveMatches span nam elim clause sym args $ u
+          (BitM fl tr   , BITM _        , [])    -> resolveMatches span nam elim clause sym args $ ([fl, tr] !! clause)
+          (NatM z s     , NATM _ _ _    , [])    -> resolveMatches span nam elim clause sym args $ z
+          (NatM z s     , NATM _ _ _    , [p])   -> resolveMatches span nam elim clause sym args $ appArgs s args 0
+       -- (EmpM         , EMPM _        , [])    -> resolveMatches span nam elim clause sym args $ 
+          (LstM nil cons, LSTM _ _ _    , [])    -> resolveMatches span nam elim clause sym args $ nil
+          (LstM nil cons, LSTM _ _ _    , [h,t]) -> resolveMatches span nam elim clause sym args $ appArgs cons args 0
+          (SigM pair    , SIGM _ _ _    , [a,b]) -> resolveMatches span nam elim clause sym args $ appArgs pair args 0
+          (EqlM refl    , EQLM _        , [])    -> resolveMatches span nam elim clause sym args refl
+          (EnuM cs def  , ENUM _ _ _ _ _, [q])   -> resolveMatches span nam elim clause sym args $ appArgs def args 0
+          (EnuM cs def  , ENUM _ _ _ _ _, [])    -> case lookup sym cs of
+                                Just branch  -> resolveMatches span nam elim clause sym args $ branch
+                                Nothing      -> resolveMatches span nam elim clause sym args $ appArgs def [(Var k i)] 0
+          _ -> App (resolveMatches span nam elim clause sym args f) (resolveMatches span nam elim clause sym args x)
+        else   App (resolveMatches span nam elim clause sym args f) (resolveMatches span nam elim clause sym args x)
+      _     -> App (resolveMatches span nam elim clause sym args f) (resolveMatches span nam elim clause sym args x)
+    where
+      appArgs :: Term -> [Term] -> Int -> Term
+      appArgs f [] _ = f
+      appArgs (Use k v b) args skip    = Use k v (\v -> (appArgs (b v) args skip))
+      appArgs (Let k mt v b) args skip = Let k mt v (\v -> (appArgs (b v) args skip))
+      appArgs (Chk x t) args skip      = Chk (appArgs t args skip) t
+      appArgs (Loc l t) args skip      = Loc l (appArgs t args skip)
+      appArgs (Log s t) args skip      = Log s (appArgs t args skip)
+      appArgs (App f x) args skip      = App (appArgs f args (skip+1)) x -- skip arguments consumed by x
+      appArgs f args@(arg:rest) skip@0 = case cut f of 
+        Lam k mt b  -> appArgs (b arg) rest skip
+        EqlM f      -> App (EqlM (appArgs f rest skip)) arg
+        UniM f      -> App (UniM (appArgs f rest skip)) arg
+        BitM f t    -> App (BitM (appArgs f rest skip) (appArgs f rest     skip)) arg
+        NatM z s    -> App (NatM (appArgs z rest skip) (appArgs s rest (skip+1))) arg
+        LstM n c    -> App (LstM (appArgs n rest skip) (appArgs c rest (skip+2))) arg
+        SigM g      -> App (SigM (appArgs g rest (skip+2))) arg
+        EnuM cs def -> App (EnuM (map (\(s,t) -> (s, appArgs t rest skip)) cs) (appArgs def rest (skip+1))) arg
+        _           -> foldl App f args 
+      appArgs f args@(arg:rest) skip = case cut f of 
+        Lam k mt b  -> Lam k mt (\x -> (appArgs (b x) args (skip-1)))
+        EqlM f      -> EqlM (appArgs f args (skip-1))
+        UniM f      -> UniM (appArgs f args (skip-1))
+        BitM f t    -> BitM (appArgs f args (skip-1)) (appArgs f args (skip-1))
+        NatM z s    -> NatM (appArgs z args (skip-1)) (appArgs s args (skip-1+1))
+        LstM n c    -> LstM (appArgs n args (skip-1)) (appArgs c args (skip-1+2))
+        SigM g      -> SigM (appArgs g args (skip-1+2))
+        EnuM cs def -> EnuM (map (\(s,t) -> (s, appArgs t args (skip-1))) cs) (appArgs def args (skip-1+1))
+        _           -> foldl App f args
+  -- Not an eliminator application, just propagate deeper
+  Lam k ty f   -> Lam k (fmap (resolveMatches span nam elim clause sym args) ty) (\x -> resolveMatches span nam elim clause sym args (f x))
+  Var k i      -> Var k i
+  Ref k i      -> Ref k i
+  Sub t'       -> Sub (resolveMatches span nam elim clause sym args t')
+  Fix k f      -> Fix k (\x -> resolveMatches span nam elim clause sym args (f x))
+  Let k ty v f -> Let k (fmap (resolveMatches span nam elim clause sym args) ty) (resolveMatches span nam elim clause sym args v) (\x -> resolveMatches span nam elim clause sym args (f x))
+  Use k v f    -> Use k (resolveMatches span nam elim clause sym args v) (\x -> resolveMatches span nam elim clause sym args (f x))
   Set          -> Set
-  Chk a b      -> Chk (reduceEtas d a) (reduceEtas d b)
-  Tst a        -> Tst (reduceEtas d a)
+  Chk t' ty    -> Chk (resolveMatches span nam elim clause sym args t') (resolveMatches span nam elim clause sym args ty)
   Emp          -> Emp
   EmpM         -> EmpM
   Uni          -> Uni
   One          -> One
-  UniM a       -> UniM (reduceEtas d a)
+  UniM f       -> UniM (resolveMatches span nam elim clause sym args f)
   Bit          -> Bit
   Bt0          -> Bt0
   Bt1          -> Bt1
-  BitM a b     -> BitM (reduceEtas d a) (reduceEtas d b)
+  BitM f g     -> BitM (resolveMatches span nam elim clause sym args f) (resolveMatches span nam elim clause sym args g)
   Nat          -> Nat
   Zer          -> Zer
-  Suc n        -> Suc (reduceEtas d n)
-  NatM a b     -> NatM (reduceEtas d a) (reduceEtas d b)
-  IO t         -> IO (reduceEtas d t)
-  Lst t'       -> Lst (reduceEtas d t')
+  Suc t'       -> Suc (resolveMatches span nam elim clause sym args t')
+  NatM z s     -> NatM (resolveMatches span nam elim clause sym args z) (resolveMatches span nam elim clause sym args s)
+  IO t         -> IO (resolveMatches span nam elim clause sym args t)
+  Lst ty       -> Lst (resolveMatches span nam elim clause sym args ty)
   Nil          -> Nil
-  Con h t'     -> Con (reduceEtas d h) (reduceEtas d t')
-  LstM a b     -> LstM (reduceEtas d a) (reduceEtas d b)
-  Enu ss       -> Enu ss
+  Con h t'     -> Con (resolveMatches span nam elim clause sym args h) (resolveMatches span nam elim clause sym args t')
+  LstM nil c   -> LstM (resolveMatches span nam elim clause sym args nil) (resolveMatches span nam elim clause sym args c)
+  Enu syms     -> Enu syms
   Sym s        -> Sym s
-  EnuM cs e    -> EnuM [(s, reduceEtas d v) | (s,v) <- cs] (reduceEtas d e)
-  Num nt       -> Num nt
-  Val nv       -> Val nv
-  Op2 o a b    -> Op2 o (reduceEtas d a) (reduceEtas d b)
-  Op1 o a      -> Op1 o (reduceEtas d a)
-  Sig a b      -> Sig (reduceEtas d a) (reduceEtas d b)
-  Tup a b      -> Tup (reduceEtas d a) (reduceEtas d b)
-  SigM a       -> SigM (reduceEtas d a)
-  All a b      -> All (reduceEtas d a) (reduceEtas d b)
-  App f x      -> App (reduceEtas d f) (reduceEtas d x)
-  Eql t' a b   -> Eql (reduceEtas d t') (reduceEtas d a) (reduceEtas d b)
+  EnuM cs def  -> EnuM (map (\(s,t') -> (s, resolveMatches span nam elim clause sym args t')) cs) (resolveMatches span nam elim clause sym args def)
+  Num typ      -> Num typ
+  Val v        -> Val v
+  Op2 op a b   -> Op2 op (resolveMatches span nam elim clause sym args a) (resolveMatches span nam elim clause sym args b)
+  Op1 op a     -> Op1 op (resolveMatches span nam elim clause sym args a)
+  Sig a b      -> Sig (resolveMatches span nam elim clause sym args a) (resolveMatches span nam elim clause sym args b)
+  Tup a b      -> Tup (resolveMatches span nam elim clause sym args a) (resolveMatches span nam elim clause sym args b)
+  SigM f       -> SigM (resolveMatches span nam elim clause sym args f)
+  All a b      -> All (resolveMatches span nam elim clause sym args a) (resolveMatches span nam elim clause sym args b)
+  Eql ty a b   -> Eql (resolveMatches span nam elim clause sym args ty) (resolveMatches span nam elim clause sym args a) (resolveMatches span nam elim clause sym args b)
   Rfl          -> Rfl
-  EqlM f       -> EqlM (reduceEtas d f)
-  Met n t' cs  -> Met n (reduceEtas d t') (map (reduceEtas d) cs)
+  EqlM f       -> EqlM (resolveMatches span nam elim clause sym args f)
+  Rwt e f      -> Rwt (resolveMatches span nam elim clause sym args e) (resolveMatches span nam elim clause sym args f)
+  Met name ty as -> Met name (resolveMatches span nam elim clause sym args ty) (map (resolveMatches span nam elim clause sym args) as)
   Era          -> Era
-  Sup l a b    -> Sup (reduceEtas d l) (reduceEtas d a) (reduceEtas d b)
-  SupM l f'    -> SupM (reduceEtas d l) (reduceEtas d f')
-  Loc s t'     -> Loc s (reduceEtas d t')
-  Log s x      -> Log (reduceEtas d s) (reduceEtas d x)
-  Pri p        -> Pri p
-  Pat ss ms cs -> Pat (map (reduceEtas d) ss) [(k, reduceEtas d v) | (k,v) <- ms] [(map (reduceEtas d) ps, reduceEtas d rhs) | (ps,rhs) <- cs]
-  Frk l a b    -> Frk (reduceEtas d l) (reduceEtas d a) (reduceEtas d b)
-  Rwt e f      -> Rwt (reduceEtas d e) (reduceEtas d f)
+  Sup l' a b   -> Sup (resolveMatches span nam elim clause sym args l') (resolveMatches span nam elim clause sym args a) (resolveMatches span nam elim clause sym args b)
+  SupM l' f    -> SupM (resolveMatches span nam elim clause sym args l') (resolveMatches span nam elim clause sym args f)
+--Loc l t'     -> Loc span (resolveMatches span nam elim clause sym args t')
+  Log s x      -> Log (resolveMatches span nam elim clause sym args s) (resolveMatches span nam elim clause sym args x)
+  Pri pf       -> Pri pf
+  Pat ss ms cs -> Pat (map (resolveMatches span nam elim clause sym args) ss)
+                      (map (\(m,t') -> (m, resolveMatches span nam elim clause sym args t')) ms)
+                      (map (\(ps,rhs) -> (map (resolveMatches span nam elim clause sym args) ps, resolveMatches span nam elim clause sym args rhs)) cs)
+  Frk l' a b   -> Frk (resolveMatches span nam elim clause sym args l') 
+                      (resolveMatches span nam elim clause sym args a) 
+                      (resolveMatches span nam elim clause sym args b)
+  Tst x        -> Tst (resolveMatches span nam elim clause sym args x)
 
--- Check if a term matches the eta-long pattern: ... (λ{...} x)
--- Returns the lambda-match, an injection function, and whether a `trust`
--- marker was seen along the way (to be preserved outside after reduction).
-isEtaLong :: Name -> Int -> Term -> Maybe (Term, Term -> Term, Bool)
-isEtaLong target depth = go id depth False where
-  go :: (Term -> Term) -> Int -> Bool -> Term -> Maybe (Term, Term -> Term, Bool)
-  go inj d hadT term = case cut term of
-    -- Found intermediate lambda - add to injection
-    Lam n ty f -> 
-      go (\h -> inj (Lam n ty (\_ -> h))) (d+1) hadT (f (Var n d))
-    
-    -- Found Let - add to injection
-    Let k mt v f ->
-      go (\h -> inj (Let k mt v (\_ -> h))) (d+1) hadT (f (Var k d))
-    
-    -- Found Use - add to injection
-    Use k v f ->
-      go (\h -> inj (Use k v (\_ -> h))) (d+1) hadT (f (Var k d))
-    
-    -- Found Chk - add to injection
-    Chk x t ->
-      go (\h -> inj (Chk h t)) d hadT x
-    -- Found Tst - record and continue, but don't push it inside branches
-    Tst x ->
-      go inj d True x
-    
-    -- Found Loc - check if it wraps a lambda-match
-    Loc s x ->
-      if isLambdaMatch x
-        then go inj d hadT (Loc s x)  -- Don't inject Loc if it wraps a lambda-match
-        else go (\h -> inj (Loc s h)) d hadT x  -- Otherwise, add to injection
-    
-    -- Found Log - add to injection
-    Log s x ->
-      go (\h -> inj (Log s h)) d hadT x
+-- Detection of the pattern λnam. ... λ{..}(nam)
+-- 1) At App nodes: checks if argument is 'nam' and function is an eliminator
+-- 2) Collects parameter names from eliminators for later reconstruction
+--    2.1) NONE means no eliminator on 'nam' was found
+--    2.2) Multiple compatible eliminators combine (e.g., NATM <+> NATM = NATM)
+--    2.3) Incompatible eliminators cancel (e.g., NATM <+> BITM = NONE)
+-- 3) Uses getVarNames to get the names of the clause arguments, if they are given
+-- 4) Captures the span of each eliminator found, which will become the span of
+--    the synthesized outer eliminator in reduceEtas (since that new eliminator
+--    has no span of its own)
+--  5) If a Tst node is found, returns True, indicating that reduceEtas must wrap 
+--    the result in Tst.
+--
+-- Returns: from λx. (λ{0:Z; S:...}(x), λ{0:W; S:...}(x)) 
+-- the label NATM [pred_name_from_S]
+isEtaLong :: Int -> Span -> Book -> Name -> Term -> (ElimLabel, Bool)
+isEtaLong d span book nam (Loc spa t) = isEtaLong d spa book nam t
+isEtaLong d span book nam t = case t of
+  Lam k mt f  -> case mt of
+    Just t  -> if k == nam then isEtaLong d span book nam t else combLabels d book (isEtaLong d span book nam t) (isEtaLong (d+1) span book nam (f (Var k d)))
+    Nothing -> if k == nam then (NONE, False) else isEtaLong (d+1) span book nam (f (Var k d))
+  App f x     ->
+    case cut x of
+      (Var k _) -> if k == nam
+        then
+          case (cut f, getAnnotations d book f) of
+       -- SupM l _    -> not eliminated
+          (EqlM _  , _)            -> combLabels d book (EQLM span, False) (isEtaLong d span book nam f)
+          (EmpM    , _)            -> combLabels d book (EMPM span, False) (isEtaLong d span book nam f)
+          (UniM _  , _)            -> combLabels d book (UNIM span, False) (isEtaLong d span book nam f)
+          (BitM _ _, _)            -> combLabels d book (BITM span, False) (isEtaLong d span book nam f)
+          (NatM _ s   , Just anns) -> combLabels d book (NATM span (getVarNames s ["p"]    ) anns, False) (isEtaLong d span book nam f)
+          (LstM _ c   , Just anns) -> combLabels d book (LSTM span (getVarNames c ["h","t"]) anns, False) (isEtaLong d span book nam f)
+          (SigM g     , Just anns) -> combLabels d book (SIGM span (getVarNames g ["a","b"]) anns, False) (isEtaLong d span book nam f)
+          (EnuM cs def, Just anns) -> combLabels d book (ENUM span (map fst cs) (isLam def) (getVarNames def ["t"]) anns, False) (isEtaLong d span book nam f)
+          (NatM _ s   , Nothing)   -> (STOP, False)
+          (LstM _ c   , Nothing)   -> (STOP, False)
+          (SigM g     , Nothing)   -> (STOP, False)
+          (EnuM cs def, Nothing)   -> (STOP, False)
+          (_,_)           -> isEtaLong d span book nam f
+        else
+            combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam x)
+      _ -> combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam x)
+  Var _ _     -> (NONE, False)
+  Ref _ _     -> (NONE, False)
+  Sub t'      -> isEtaLong d span book nam t'
+  Fix k f     -> isEtaLong (d+1) span book nam (f (Var k d))
+  Let k t v f -> let def = combLabels d book (isEtaLong d span book nam v) (isEtaLong (d+1) span book nam (f (Var k d))) 
+                 in fromMaybe def (fmap (\typ -> combLabels d book def (isEtaLong d span book nam typ)) t)
+  Use k v f   -> combLabels d book (isEtaLong d span book nam v) (isEtaLong (d+1) span book nam (f (Var k d)))
+  Set         -> (NONE, False)
+  Chk t' ty   -> combLabels d book (isEtaLong d span book nam t') (isEtaLong d span book nam ty)
+  Emp         -> (NONE, False)
+  EmpM        -> (NONE, False)
+  Uni         -> (NONE, False)
+  One         -> (NONE, False)
+  UniM f      -> isEtaLong d span book nam f
+  Bit         -> (NONE, False)
+  Bt0         -> (NONE, False)
+  Bt1         -> (NONE, False)
+  BitM f g    -> combLabels d book (isEtaLong d span book nam f) (isEtaLong d span book nam g)
+  Nat         -> (NONE, False)
+  Zer         -> (NONE, False)
+  Suc t'      -> isEtaLong d span book nam t'
+  NatM z s    -> combLabels d book (isEtaLong d span book nam z) (isEtaLong d span book nam s)
+  IO t        -> isEtaLong d span book nam t
+  Lst ty      -> isEtaLong d span book nam ty
+  Nil         -> (NONE, False)
+  Con h t'    -> combLabels d book (isEtaLong d span book nam h) (isEtaLong d span book nam t')
+  LstM nil c  -> combLabels d book (isEtaLong d span book nam nil) (isEtaLong d span book nam c)
+  Enu _       -> (NONE, False)
+  Sym _       -> (NONE, False)
+  EnuM cs def -> foldr (combLabels d book) (isEtaLong d span book nam def) (map (isEtaLong d span book nam . snd) cs)
+  Num _       -> (NONE, False)
+  Val _       -> (NONE, False)
+  Op2 _ a b   -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
+  Op1 _ a     -> isEtaLong d span book nam a
+  Sig a b     -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
+  Tup a b     -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
+  SigM f      -> isEtaLong d span book nam f
+  All a b     -> combLabels d book (isEtaLong d span book nam a) (isEtaLong d span book nam b)
+  Eql ty a b  -> foldr (combLabels d book) (NONE, False) [isEtaLong d span book nam ty, isEtaLong d span book nam a, isEtaLong d span book nam b]
+  Rfl         -> (NONE, False)
+  EqlM f      -> isEtaLong d span book nam f
+  Rwt e f     -> combLabels d book (isEtaLong d span book nam e) (isEtaLong d span book nam f)
+  Met _ ty cx -> combLabels d book (isEtaLong d span book nam ty) (foldr (combLabels d book) (NONE, False) (map (isEtaLong d span book nam) cx))
+  Era         -> (NONE, False)
+  Sup l a b   -> foldr (combLabels d book) (NONE, False) [isEtaLong d span book nam l, isEtaLong d span book nam a, isEtaLong d span book nam b]
+  SupM l f    -> combLabels d book (isEtaLong d span book nam l) (isEtaLong d span book nam f)
+  -- Loc _ t'    -> isEtaLong d span book nam t'
+  Log s x     -> combLabels d book (isEtaLong d span book nam s) (isEtaLong d span book nam x)
+  Pri _       -> (NONE, False)
+  Pat ss ms cs -> foldr (combLabels d book) (NONE, False) (map (isEtaLong d span book nam) ss ++ map (isEtaLong d span book nam . snd) ms ++ concatMap (\(ps, rhs) -> map (isEtaLong d span book nam) ps ++ [isEtaLong d span book nam rhs]) cs)
+  Frk l a b   -> foldr (combLabels d book) (NONE, False) [isEtaLong d span book nam l, isEtaLong d span book nam a, isEtaLong d span book nam b]
+  Tst x       -> let (lab, _) = isEtaLong d span book nam x in (lab, True)
 
-    -- Pass through single-body lambda-matches (commuting conversion)
-    UniM b ->
-      case go id d hadT b of
-        Just (lmat, injB, tB) -> Just (lmat, \h -> inj (UniM (injB h)), tB)
-        Nothing           -> Nothing
+-- Auxiliary definitions / Utils
+-- ------------------------------
 
-    SigM b ->
-      case go id d hadT b of
-        Just (lmat, injB, tB) -> Just (lmat, \h -> inj (SigM (injB h)), tB)
-        Nothing           -> Nothing
+-- SUPM not reduced
+data ElimLabel
+  = UNIM Span                                     -- Span of the original eliminator
+  | BITM Span                                     -- Span of the original eliminator
+  | NATM Span [String] [Maybe Term]               -- Span of the original eliminator, [predName], [clause arg annotations]
+  | EMPM Span                                     -- Span of the original eliminator
+  | LSTM Span [String] [Maybe Term]               -- Span of the original eliminator, [headName,tailName], [clause arg annotations]
+  | SIGM Span [String] [Maybe Term]               -- Span of the original eliminator, [fstName , sndName], [clause arg annotations]
+  | EQLM Span                                     -- Span of the original eliminator
+  | ENUM Span [String] Bool [String] [Maybe Term] -- Span of the original eliminator, [symbolNames], isNotComplete, [defaultArgName], [clause arg annotations]
+  | NONE
+  | STOP
+  deriving Show -- SUPM not reduced
 
-    SupM l b ->
-      case go id d hadT b of
-        Just (lmat, injB, tB) -> Just (lmat, \h -> inj (SupM l (injB h)), tB)
-        Nothing           -> Nothing
+-- Combines eliminator labels from multiple λ{..}(nam) occurrences
+-- 1) STOP propagates: any combination with STOP yields STOP
+-- 2) NONE acts as identity: anything combined with NONE stays unchanged
+-- 3) Same eliminator types combine by keeping first's parameters
+--    - Simple types (UNIM/BITM/EMPM/EQLM): just keep first
+--    - Annotated types (NATM/LSTM/SIGM/ENUM): merge annotations via combAnns, STOP if incompatible
+--    - ENUM special case: also unions symbol sets and conjoins completeness flags
+-- 4) Different eliminator types yield STOP (mixed patterns can't be eta-reduced)
+-- 5) Combines the flags that indicate finding of a Tst node via an OR operation.
+--
+-- Returns: NATM [p,q] <+> NATM [r,q] -> NATM [p,q]
+--          NATM [p,q] <+> BITM       -> STOP
+combLabels :: Int -> Book -> (ElimLabel, Bool) -> (ElimLabel, Bool) -> (ElimLabel, Bool)
+combLabels d book (lab1, tst1) (lab2, tst2) = (merged, flag)
+  where
+    merged = case (lab1, lab2) of
+      (STOP, _)                      -> STOP
+      (_, STOP)                      -> STOP
+      (NONE, x)                      -> x
+      (x, NONE)                      -> x
+      (UNIM l1, UNIM l2)             -> UNIM l1
+      (BITM l1, BITM l2)             -> BITM l1
+      (EMPM l1, EMPM l2)             -> EMPM l1
+      (EQLM l1, EQLM l2)             -> EQLM l1
+      (NATM l1 s1 a1, NATM l2 s2 a2) -> case combAnns a1 a2 of
+        Just a -> NATM l1 s1 a
+        _      -> STOP
+      (LSTM l1 s1 a1, LSTM l2 s2 a2) -> case combAnns a1 a2 of 
+        Just a -> LSTM l1 s1 a
+        _      -> STOP
+      (SIGM l1 s1 a1, SIGM l2 s2 a2) -> case combAnns a1 a2 of 
+        Just a -> SIGM l1 s1 a
+        _      -> STOP
+      (ENUM l1 s1 b1 d1 a1, ENUM l2 s2 b2 d2 a2) -> case combAnns a1 a2 of 
+        Just a -> ENUM l1 (s1 `union` s2) (b1 && b2) d1 a
+        _      -> STOP
+      (_, _)                               -> STOP
+    flag = tst1 || tst2
+    combAnns [] [] = Just []
+    combAnns (Nothing:as) (b:bs)                  = do
+      rest <- combAnns as bs
+      Just $ b:rest
+    combAnns (a:as) (Nothing:bs)                  = do
+      rest <- combAnns as bs
+      Just $ a:rest
+    combAnns (Just a:as) (Just b:bs) | eql False d book a b = do
+      rest <- combAnns as bs
+      Just $ (Just a):rest
+    combAnns _ _ = Nothing
 
-    EqlM b ->
-      case go id d hadT b of
-        Just (lmat, injB, tB) -> Just (lmat, \h -> inj (EqlM (injB h)), tB)
-        Nothing           -> Nothing
 
-    -- Conservative multi-arm pass-through: only if all arms agree on a common λ-match shape
-    BitM t f ->
-      case (go id d hadT t, go id d hadT f) of
-        (Just (l1, injT, tT), Just (l2, injF, tF))
-          | sameLambdaShape l1 l2 ->
-              Just (l1, \h -> inj (BitM (injT h) (injF h)), tT || tF)
+-- Extracts variable names from eliminator/lambda branches
+-- 1) Traverses i' layers deep to find lambda-bound names
+--    When no lambda gives a name to the argument 
+--    (i.e. it's implicit in a λ{..}), call it "$noname"
+-- 2) Uses `j` to skip already-applied arguments when inside an (App f x) chain
+-- 3) For multi-branch eliminators, combines names from all branches
+--    3.1) When names conflict, prefers actual names over "$noname"
+--    3.2) NatM/LstM/SigM need special handling for their argument counts
+--
+-- Returns: from          λp.s     , extracts ["p"] 
+--          from  NatM z (λp.s)    , extracts ["$noname", "p"]
+--          from (NatM z (λp.s)) x), extracts ["p"]
+getVarNames :: Term -> [String] -> [String]
+getVarNames term defs = go (length defs) 0 term [] defs
+  where
+    go :: Int -> Int -> Term -> [String] -> [String] -> [String]
+    go 0 j term nams defs = nams
+    -- go, not skipping the names of the arguments
+    go i 0 term nams defs@(def:rest) = case cut term of
+      App f x   -> go i 1 f nams defs
+      Lam k _ b -> (k   : go (i-1) 0 (b (Var "_" 0)) nams rest)
+      UniM f    -> (def : go (i-1) 0 f nams rest)
+      BitM f t  -> (def : combine (go (i-1) 0 f nams rest) (go (i-1) 0 t nams rest) rest)
+      NatM z s  -> (def : combine (go (i-1) 0 z nams rest) (go (i-1) 1 s nams rest) rest)
+      LstM n c  -> (def : combine (go (i-1) 0 n nams rest) (go (i-1) 2 c nams rest) rest)
+      EnuM c d  -> (def : go (i-1) 1 d nams rest)
+      SigM g    -> (def : go (i-1) 2 g nams rest)
+      EqlM f    -> (def : go (i-1) 0 f nams rest)
+      _ -> defs
+    -- go, but skip j arguments
+    go i j term nams defs@(def:rest) = case cut term of
+      App f x   -> go i (j+1) f nams defs
+      Lam k _ b -> go i (j-1) (b (Var "_" 0)) nams defs
+      UniM f    -> go i (j-1) f nams defs
+      BitM f t  -> combine (go i (j-1) f nams defs) (go i (j-1)   t nams defs) defs
+      NatM z s  -> combine (go i (j-1) z nams defs) (go i (j-1+1) s nams defs) defs
+      LstM n c  -> combine (go i (j-1) n nams defs) (go i (j-1+2) c nams defs) defs
+      EnuM c d  -> go i (j-1+1) d nams defs
+      SigM g    -> go i (j-1+2) g nams defs
+      EqlM f    -> go i (j-1) f nams defs
+      _ -> defs
+    go i j term nams [] = error "unreachable A" -- i > 0, no remaining defaults
+    combine :: [String] -> [String] -> [String] -> [String]
+    combine a b defs@(def:rest) = 
+      case (a,b) of
+      (a:as,b:bs) -> case (a,b) of
+        (a,b) | a == def -> b:(combine as bs rest)
+        (a,b)            -> a:(combine as bs rest)
+      _           -> a
+    combine [] [] [] = []
+    combine a  b  [] = error "unreachable B" -- called with go without enough defaults
+
+
+-- Extracts argument annotations from eliminator branches
+-- 1) Traverses the lambda towers inside each clause, collecting explicit type annotations
+-- 2) Merges annotations across branches, stopping when they disagree
+-- 3) Returns `Nothing` when no annotations can be recovered (or when structure diverges)
+--
+-- Returns: from NatM z (λp. ...) -> Just [Nothing, Just τ] when the successor branch annotates its binder with τ
+getAnnotations :: Int -> Book -> Term -> Maybe [Maybe Term]
+getAnnotations d book term = case cut term of
+  NatM _ s -> go d 1 0 s [] [Nothing]
+  EnuM _ e -> go d 1 0 e [] [Nothing]
+  LstM _ c -> go d 2 0 c [] [Nothing, Nothing]
+  SigM g   -> go d 2 0 g [] [Nothing, Nothing]
+  _ -> Nothing  -- or however you want to handle non-NatM cases
+  where
+    go :: Int -> Int -> Int -> Term -> [Maybe Term] -> [Maybe Term] -> Maybe [Maybe Term]
+    go d 0 j term anns defs = Just anns
+    -- go, not skipping the names of the arguments
+    go d i 0 term anns defs@(def:rest) = case cut term of
+      App f x   -> go d i 1 f anns defs
+      Lam k t b -> do
+        anns' <- go (d+1) (i-1) 0 (b (Var k d)) anns rest
+        return (t : anns')
+      UniM f    -> do
+        anns' <- go d (i-1) 0 f anns rest
+        return (Nothing : anns')
+      BitM f t  -> do
+        fAnns <- go d (i-1) 0 f anns rest
+        tAnns <- go d (i-1) 0 t anns rest
+        anns' <- combine fAnns tAnns rest
+        return (Nothing : anns')
+      NatM z s  -> do
+        zAnns <- go d (i-1) 0 z anns rest
+        sAnns <- go d (i-1) 1 s anns rest
+        anns' <- combine zAnns sAnns rest
+        return (Nothing : anns')
+      LstM n c  -> do
+        nAnns <- go d (i-1) 0 n anns rest
+        cAnns <- go d (i-1) 2 c anns rest
+        anns' <- combine nAnns cAnns rest
+        return (Nothing : anns')
+      EnuM c d' -> do
+        anns' <- go d (i-1) 1 d' anns rest
+        return (Nothing : anns')
+      SigM g    -> do
+        anns' <- go d (i-1) 2 g anns rest
+        return (Nothing : anns')
+      EqlM f    -> do
+        anns' <- go d (i-1) 0 f anns rest
+        return (Nothing : anns')
+      _ -> Just defs
+    -- go, but skip j arguments
+    go d i j term anns defs@(def:rest) = case cut term of
+      App f x   -> go d i (j+1) f anns defs
+      Lam k _ b -> go (d+1) i (j-1) (b (Var k d)) anns defs
+      UniM f    -> go d i (j-1) f anns defs
+      BitM f t  -> do
+        fAnns <- go d i (j-1) f anns defs
+        tAnns <- go d i (j-1) t anns defs
+        combine fAnns tAnns defs
+      NatM z s  -> do
+        zAnns <- go d i (j-1) z anns defs
+        sAnns <- go d i (j-1+1) s anns defs
+        combine zAnns sAnns defs
+      LstM n c  -> do
+        nAnns <- go d i (j-1) n anns defs
+        cAnns <- go d i (j-1+2) c anns defs
+        combine nAnns cAnns defs
+      EnuM c d' -> go d i (j-1+1) d' anns defs
+      SigM g    -> go d i (j-1+2) g anns defs
+      EqlM f    -> go d i (j-1) f anns defs
+      _ -> Just defs
+    go d i j term nams [] = Nothing -- i > 0, no remaining defaults
+
+    combine :: [Maybe Term] -> [Maybe Term] -> [Maybe Term] -> Maybe [Maybe Term]
+    combine a b defs@(def:rest) = 
+      case (a,b) of
+        (Nothing:as,b:bs) -> do
+          rest' <- combine as bs rest
+          return (b : rest')
+        (a:as,Nothing:bs) -> do
+          rest' <- combine as bs rest
+          return (a : rest')
+        (Just a:as, Just b:bs) | eql False d book a b -> do
+          rest' <- combine as bs rest
+          return (Just a : rest')
         _ -> Nothing
-
-    NatM z s ->
-      case (go id d hadT z, go id d hadT s) of
-        (Just (l1, injZ, tZ), Just (l2, injS, tS))
-          | sameLambdaShape l1 l2 ->
-              Just (l1, \h -> inj (NatM (injZ h) (injS h)), tZ || tS)
-        _ -> Nothing
-
-    LstM n c ->
-      case (go id d hadT n, go id d hadT c) of
-        (Just (l1, injN, tN), Just (l2, injC, tC))
-          | sameLambdaShape l1 l2 ->
-              Just (l1, \h -> inj (LstM (injN h) (injC h)), tN || tC)
-        _ -> Nothing
-
-    EnuM cs e ->
-      let rs = [(s, go id d hadT v) | (s,v) <- cs]
-          re = go id d hadT e
-      in
-      if all (isJust . snd) rs && isJust re then
-        let rcs       = [(s, fromJust m) | (s,m) <- rs]
-            (l0, _, _) = fromJust re
-            shapes = [lmShape l | (_, (l,_,_)) <- rcs] ++ [lmShape l0]
-        in case sequence shapes of
-             Just (sh0:rest) | all (== sh0) rest ->
-               let injCs          = [(s, injB) | (s, (_, injB, _)) <- rcs]
-                   (lmatE, injE, tE) = fromJust re
-                   tAny          = tE || or [t | (_, (_,_,t)) <- rcs]
-               in Just (lmatE, \h -> inj (EnuM [(s, injB h) | (s, injB) <- injCs] (injE h)), tAny)
-             _ -> Nothing
-      else Nothing
-
-    -- Found application - check if it's (λ{...} x) or if we can pass through
-    App f arg ->
-      case (f, cut f, cut arg) of
-        -- Check if f is a Loc-wrapped lambda-match and arg is our target variable
-        -- Keep the Loc wrapper on the lambda-match
-        (Loc s lmat, _, Var v_n _) | v_n == target && isLambdaMatch lmat ->
-          Just (Loc s lmat, inj, hadT)
-        -- Check if f is a lambda-match and arg is our target variable
-        (_, lmat, Var v_n _) | v_n == target && isLambdaMatch lmat ->
-          Just (lmat, inj, hadT)
-        -- Otherwise, pass through the application
-        _ -> go (\h -> inj (app h arg)) d hadT f
-    
-    -- Any other form doesn't match our pattern
-    _ -> Nothing
-
--- FIXME: are the TODO cases below reachable? reason about it
-
--- Inject the injection function into each case of a lambda-match
-injectInto :: (Term -> Term) -> Name -> Term -> Term
-injectInto inj scrutName term = case term of
-  -- If the lambda-match is wrapped in Loc, preserve it
-  Loc s lmat -> Loc s (injectInto inj scrutName lmat)
-  
-  -- Empty match - no cases to inject into
-  EmpM -> EmpM
-  
-  -- Unit match - inject into the single case
-  UniM f -> UniM (injectBody [] inj scrutName (\_ -> One) f)
-  
-  -- Bool match - inject into both cases
-  BitM f t -> BitM (injectBody [] inj scrutName (\_ -> Bt0) f) 
-                   (injectBody [] inj scrutName (\_ -> Bt1) t)
-  
-  -- Nat match - special handling for successor case (1 field)
-  NatM z s -> NatM (injectBody [] inj scrutName (\_ -> Zer) z) 
-                   (injectBody ["p"] inj scrutName (\vars -> case vars of [p] -> Suc p; _ -> error $ "TODO: " ++ (show term)) s)
-  
-  -- List match - special handling for cons case (2 fields)
-  LstM n c -> LstM (injectBody [] inj scrutName (\_ -> Nil) n) 
-                   (injectBody ["h", "t"] inj scrutName (\vars -> case vars of [h,t] -> Con h t; _ -> error $ "TODO: " ++ (show term)) c)
-
-  -- Enum match - inject into each case and default (apply default-case fix)
-  EnuM cs e -> EnuM [(s, injectBody [] inj scrutName (\_ -> Sym s) v) | (s,v) <- cs]
-                    (injectBody ["x"] inj scrutName (\vars -> case vars of [x] -> x; _ -> error $ "TODO: " ++ (show term)) e)
-  
-  -- Sigma match - special handling for pair case (2 fields)
-  SigM f -> SigM (injectBody ["a", "b"] inj scrutName (\vars -> case vars of [a,b] -> Tup a b; _ -> error $ "TODO: " ++ (show term)) f)
-  
-  -- Superposition match - special handling (2 fields)
-  SupM l f -> SupM l (injectBody ["a", "b"] inj scrutName (\vars -> case vars of [a,b] -> Sup l a b; _ -> error $ "TODO: " ++ (show term)) f)
-  
-  -- Equality match - inject into the single case
-  EqlM f -> EqlM (injectBody [] inj scrutName (\_ -> Rfl) f)
-  
-  -- Not a lambda-match
-  _ -> term
-
--- Helper to inject the injection function, skipping existing field lambdas
--- Also handles scrutinee reconstruction
-injectBody :: [Name] -> (Term -> Term) -> Name -> ([Term] -> Term) -> Term -> Term
-injectBody fields inj scrutName mkScrut body = go 0 fields [] [] body where
-  go :: Int -> [Name] -> [Term] -> [Name] -> Term -> Term
-  go d []     vars fieldNames body = 
-    let scrutVal = mkScrut (reverse vars)
-        -- Remove shadowed bindings from the injection
-        cleanedInj = removeShadowed fieldNames inj
-        -- Add scrutinee reconstruction if not shadowed
-        fullInj = if scrutName `notElem` fieldNames
-                  then \h -> Use scrutName scrutVal (\_ -> cleanedInj h)
-                  else cleanedInj
-    in fullInj body
-  go d (f:fs) vars fieldNames body = case cut body of
-    -- Existing field lambda - preserve it
-    Lam n ty b -> Lam n ty (\v -> go (d+1) fs (v:vars) (n:fieldNames) (b v))
-    -- Missing field lambda - add it
-    _          -> Lam f Nothing (\v -> go (d+1) fs (v:vars) (f:fieldNames) body)
-
--- Remove shadowed bindings from an injection function
-removeShadowed :: [Name] -> (Term -> Term) -> (Term -> Term)
-removeShadowed fieldNames inj = \body -> removeFromTerm fieldNames (inj body) where
-  removeFromTerm :: [Name] -> Term -> Term
-  removeFromTerm names term = case term of
-    -- Skip Use bindings that are shadowed
-    Use k v f | k `elem` names -> removeFromTerm names (f (Var k 0))
-    Use k v f                  -> Use k v (\x -> removeFromTerm names (f x))
-    
-    -- Skip Let bindings that are shadowed
-    Let k mt v f | k `elem` names -> removeFromTerm names (f (Var k 0))
-    Let k mt v f                  -> Let k mt v (\x -> removeFromTerm names (f x))
-    
-    -- For other constructs, just return as-is
-    _ -> term
-
--- Check if a term is a lambda-match (one of the match constructors)
-isLambdaMatch :: Term -> Bool
-isLambdaMatch term = case term of
-  EmpM     -> True
-  UniM _   -> True
-  BitM _ _ -> True
-  NatM _ _ -> True
-  LstM _ _ -> True
-  EnuM _ _ -> True
-  SigM _   -> True
-  SupM _ _ -> True
-  EqlM _   -> True
-  Loc _ t  -> isLambdaMatch t
-  _        -> False
-
--- Shapes of lambda-matches, used to conservatively commute multi-arm frames
-data LmShape
-  = LM_Emp
-  | LM_Uni
-  | LM_Bit
-  | LM_Nat
-  | LM_Lst
-  | LM_Enu [String]
-  | LM_Sig
-  | LM_Sup
-  | LM_Eql
-  deriving (Eq, Show)
-
-lmShape :: Term -> Maybe LmShape
-lmShape t = case cut t of
-  EmpM       -> Just LM_Emp
-  UniM _     -> Just LM_Uni
-  BitM _ _   -> Just LM_Bit
-  NatM _ _   -> Just LM_Nat
-  LstM _ _   -> Just LM_Lst
-  EnuM cs _  -> Just (LM_Enu (map fst cs))
-  SigM _     -> Just LM_Sig
-  SupM _ _   -> Just LM_Sup
-  EqlM _     -> Just LM_Eql
-  Chk x _    -> lmShape x
-  Loc _ x    -> lmShape x
-  _          -> Nothing
-
-sameLambdaShape :: Term -> Term -> Bool
-sameLambdaShape a b = lmShape a == lmShape b
-
-app :: Term -> Term -> Term
-app (Lam k _ f) x = Use k x f
-app f           x = App f x
+    combine [] [] [] = Just []
+    combine a b [] = Nothing -- called with go without enough defaults

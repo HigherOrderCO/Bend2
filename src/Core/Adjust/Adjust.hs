@@ -62,6 +62,8 @@
 module Core.Adjust.Adjust where
 
 import Control.Monad.State
+import Control.Monad (unless, foldM)
+import Data.Maybe (fromJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
@@ -77,6 +79,8 @@ import Core.FreeVars
 import Core.Show
 import Core.Type
 import Core.WHNF
+import GHC.IO (unsafePerformIO)
+import System.IO (hPutStrLn, stderr)
 
 -- | Adjusts a single term, simplifying pattern matching and other constructs.
 -- It uses a book of already-adjusted definitions for context during flattening.
@@ -92,9 +96,12 @@ adjust book term = do
   let chkd = checkPatternCompleteness 0 noSpan book flat
   npat <- desugarPats 0 noSpan chkd
   let nfrk = desugarFrks book 0 npat
-  let etas = reduceEtas 0 nfrk
-  Done $ bind etas
-
+  let hoas = bind nfrk
+  let etas = reduceEtas 0 noSpan book hoas
+  return $ 
+    -- trace ("-hoas: " ++ show hoas) $
+    -- trace ("-etas: " ++ show etas) $
+    etas
 
 -- | Adjusts a term. simplifying patterns but leaving terms as Pats.
 adjustWithPats :: Book -> Term -> Result Term
@@ -120,8 +127,10 @@ adjustBook book@(Book defs names) = do
   let adjustFn b t = case adjust b t of
         Done t' -> t'
         Fail e  -> throw (BendException e)
-  let adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
-  Done adjustedBook -- checkFreeVarsInBook disabled: not in main branch
+  let adjustedBook  = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
+  -- let (annSplitBook, success) = unsafePerformIO $ annotateSplitBook adjustedBook 
+  -- Done annSplitBook
+  Done adjustedBook
 
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
 adjustBookWithPats :: Book -> Result Book
