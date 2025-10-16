@@ -27,7 +27,6 @@ library
                       Core.Bind,
                       Core.CLI,
                       Core.Gen,
-                      Core.Check,
                       Core.Deps,
                       Core.Equal,
                       Core.Adjust.SplitAnnotate,
