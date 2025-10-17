@@ -38,7 +38,9 @@ ensureFile config posixPath = do
     else downloadFile localPath
   where
     downloadFile localPath = do
-      let url = apiBaseUrl config ++ "/api/files/" ++ posixPath
+      let encodedPath = encodePath posixPath
+          url = apiBaseUrl config ++ "/api/files/" ++ encodedPath
+      putStrLn $ "[package-index] GET " ++ url
       result <- try $ do
         request <- parseRequest ("GET " ++ url)
         response <- httpLBS request
@@ -55,3 +57,11 @@ ensureFile config posixPath = do
 
     fromPosixPath :: FilePath -> FilePath
     fromPosixPath = FP.joinPath . splitOn "/"
+
+    encodePath :: FilePath -> String
+    encodePath = concatMap encodeChar
+
+    encodeChar :: Char -> String
+    encodeChar '#' = "%23"
+    encodeChar ' ' = "%20"
+    encodeChar c   = [c]

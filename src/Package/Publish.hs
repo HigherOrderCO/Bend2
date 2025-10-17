@@ -2,6 +2,7 @@
 
 module Package.Publish
   ( runPublishCommand
+  , AuthMode(..)
   ) where
 
 import Control.Exception (SomeException, try)
@@ -13,7 +14,7 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (sort, sortOn, isPrefixOf)
 import Data.Maybe (catMaybes)
-import qualified Data.Text as T
+import Data.Char (toLower)
 import Network.HTTP.Client (RequestBody (RequestBodyBS))
 import Network.HTTP.Client.MultipartFormData
   ( formDataBody
@@ -40,7 +41,7 @@ import Text.Printf (printf)
 import Text.Read (readMaybe)
 
 import Core.Import (ensureBendRoot)
-import Package.Auth
+import Package.Auth (AuthMode(..), AuthSession(..), AuthUser(..), ensureAuthenticated)
 import Package.Index
 
 data PackageCandidate = PackageCandidate
@@ -85,29 +86,31 @@ instance Aeson.FromJSON ErrorResponse where
     ErrorResponse <$> o .: "error"
                   <*> o .:? "details"
 
-runPublishCommand :: IO ()
-runPublishCommand = do
+runPublishCommand :: AuthMode -> IO ()
+runPublishCommand authMode = do
   root <- ensureBendRoot
   rootCanonical <- canonicalizePath root
   indexCfg <- defaultIndexConfig rootCanonical
-  session <- ensureAuthenticated indexCfg
+  session <- ensureAuthenticated authMode indexCfg
+  putStrLn $ "Using session cookie: connect.sid=" ++ asCookie session
 
-  let owner = auUsername (asUser session)
-      ownerDir = rootCanonical </> ("@" ++ owner)
+  let ownerRaw = auUsername (asUser session)
+      ownerDir = rootCanonical </> ("@" ++ ownerRaw)
 
   exists <- doesDirectoryExist ownerDir
   unless exists $
-    fail $ "No directory found for @" ++ owner ++ ". Expected: " ++ ownerDir
+    fail $ "No directory found for @" ++ ownerRaw ++ ". Expected: " ++ ownerDir
 
-  candidates <- discoverPackages rootCanonical owner ownerDir
+  candidates <- discoverPackages rootCanonical ownerRaw ownerDir
   when (null candidates) $
     fail "No publishable packages found under your BendRoot directory."
 
   package <- promptForPackage candidates
-  version <- determineNextVersion indexCfg session (owner, pcName package)
+  let packageRaw = pcName package
+  version <- determineNextVersion indexCfg session (ownerRaw, packageRaw)
 
   putStrLn ""
-  putStrLn $ "Preparing to publish @" ++ owner ++ "/" ++ pcName package ++ " version " ++ show version
+  putStrLn $ "Preparing to publish @" ++ ownerRaw ++ "/" ++ packageRaw ++ " version " ++ show version
   forM_ (pcFiles package) $ \lf ->
     putStrLn $ "  - " ++ lfRelative lf
 
@@ -115,7 +118,8 @@ runPublishCommand = do
   unless confirmed $
     fail "Publish aborted by user."
 
-  result <- publishPackage indexCfg session owner package version
+  result <- publishPackage indexCfg session ownerRaw packageRaw package version
+
   case result of
     Left err -> fail ("Publish failed: " ++ err)
     Right resp -> do
@@ -199,8 +203,8 @@ promptConfirmation = do
       | otherwise = c
 
 determineNextVersion :: IndexConfig -> AuthSession -> (String, String) -> IO Int
-determineNextVersion cfg session (owner, packageName) = do
-  let url = apiBaseUrl cfg ++ "/api/packages/" ++ owner ++ "/" ++ packageName
+determineNextVersion cfg session (ownerRaw, packageName) = do
+  let url = apiBaseUrl cfg ++ "/api/packages/" ++ ownerRaw ++ "/" ++ packageName
   request' <- parseRequest ("GET " ++ url)
   let cookieHeader = "connect.sid=" ++ asCookie session
       request = addRequestHeader "Cookie" (BSC.pack cookieHeader) request'
@@ -220,15 +224,15 @@ determineNextVersion cfg session (owner, packageName) = do
 publishPackage
   :: IndexConfig
   -> AuthSession
-  -> String
+  -> String   -- ^ owner name
+  -> String   -- ^ package name
   -> PackageCandidate
   -> Int
   -> IO (Either String PublishResponse)
-publishPackage cfg session owner candidate version = do
-  let packageName = pcName candidate
-      packageRoot = "@" ++ owner ++ "/" ++ packageName
+publishPackage cfg session ownerRaw packageRaw candidate version = do
+  let packageBase = "@" ++ ownerRaw ++ "/" ++ packageRaw ++ "#" ++ show version ++ "/"
       canonicalPaths =
-        map (buildCanonicalPath packageRoot version . lfRelative) (pcFiles candidate)
+        map (packageBase ++) (map (relativeWithinPackage (pcDirectory candidate)) (pcFiles candidate))
   fileParts <- forM (pcFiles candidate) $ \localFile -> do
     content <- BS.readFile (lfAbsolute localFile)
     let fileName = takeFileName (lfAbsolute localFile)
@@ -237,12 +241,18 @@ publishPackage cfg session owner candidate version = do
   let versionPart = partBS "version" (BSC.pack (show version))
       pathsPart = partLBS "paths" (Aeson.encode canonicalPaths)
       parts = versionPart : pathsPart : fileParts
-      url = apiBaseUrl cfg ++ "/api/publish/@" ++ owner ++ "/" ++ packageName
+      url = apiBaseUrl cfg ++ "/api/publish/@" ++ ownerRaw ++ "/" ++ packageRaw
 
-  requestBase <- parseRequest ("PUT " ++ url)
+  putStrLn "Attempting publish request:"
+  putStrLn $ "  URL: " ++ url
+  putStrLn $ "  Version: " ++ show version
+  putStrLn $ "  Paths: " ++ show canonicalPaths
+
+  requestBase <- parseRequest url
   let cookieHeader = "connect.sid=" ++ asCookie session
       withCookie = addRequestHeader "Cookie" (BSC.pack cookieHeader) requestBase
-  request <- formDataBody parts withCookie
+  requestWithBody <- formDataBody parts withCookie
+  let request = setRequestMethod "PUT" requestWithBody
 
   result <- try (httpLBS request) :: IO (Either SomeException (Response LBS.ByteString))
   case result of
@@ -251,16 +261,14 @@ publishPackage cfg session owner candidate version = do
       let status = getResponseStatusCode response
       if status == 201
         then pure $ Aeson.eitherDecode (getResponseBody response)
-        else pure $ Left (formatErrorResponse (getResponseBody response) status)
+        else do
+          putStrLn $ "Publish failed with HTTP " ++ show status
+          putStrLn $ "Response body: " ++ BSC.unpack (BSC.take 500 (LBS.toStrict (getResponseBody response)))
+          pure $ Left (formatErrorResponse (getResponseBody response) status)
 
-buildCanonicalPath :: String -> Int -> FilePath -> String
-buildCanonicalPath packageRoot version relPath =
-  let packagePrefix = packageRoot ++ "/"
-  in case T.stripPrefix (T.pack packagePrefix) (T.pack relPath) of
-       Just rest ->
-         packageRoot ++ "#" ++ show version ++ "/" ++ T.unpack rest
-       Nothing ->
-         packageRoot ++ "#" ++ show version ++ "/" ++ T.unpack (T.pack relPath)
+relativeWithinPackage :: FilePath -> LocalFile -> FilePath
+relativeWithinPackage packageDir localFile =
+  toPosix (FP.makeRelative packageDir (lfAbsolute localFile))
 
 formatErrorResponse :: LBS.ByteString -> Int -> String
 formatErrorResponse body status =

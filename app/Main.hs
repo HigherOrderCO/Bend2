@@ -3,13 +3,13 @@ module Main where
 import System.Environment (getArgs)
 import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, getGenDeps, processFileToCore, processFileToHS)
 import Core.Adjust.ReduceEtas
-import Package.Publish (runPublishCommand)
+import Package.Publish (runPublishCommand, AuthMode(..))
 
 -- | Show usage information
 showUsage :: IO ()
 showUsage = do
   putStrLn "Usage:"
-  putStrLn "  bend publish"
+  putStrLn "  bend publish [--manual-cookie]"
   putStrLn "  bend <file.bend> [options]"
   putStrLn ""
   putStrLn "Options:"
@@ -25,7 +25,8 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    ["publish"]                          -> runPublishCommand
+    ["publish"]                          -> runPublishCommand AuthAuto
+    ["publish", "--manual-cookie"]       -> runPublishCommand AuthManual
     [file, "--to-javascript"] | ".bend"    `isSuffixOf` file -> processFileToJS file
     [file, "--to-javascript"] | ".bend.py" `isSuffixOf` file -> processFileToJS file
     [file, "--to-hvm"] | ".bend"    `isSuffixOf` file -> processFileToHVM file
