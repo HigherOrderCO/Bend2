@@ -7,7 +7,7 @@ module Core.Show where
 import Core.Type
 import Control.Exception (Exception)
 import qualified Data.Map as M
-import Data.List (intercalate)
+import Data.List (intercalate, unsnoc)
 import Data.List.Split (splitOn)
 import Highlight (highlightError)
 
@@ -61,7 +61,7 @@ showTerm _ term = go 0 M.empty term
       Bit          -> "Bool"
       Bt0          -> "False"
       Bt1          -> "True"
-      BitM f t     -> "λ{False:" ++ go d vars f ++ ";True:" ++ go d vars t ++ "}"
+      BitM f t     -> "λ{False:" ++ go d vars f ++ "; True:" ++ go d vars t ++ "}"
 
       -- Nat
       Nat          -> "Nat"
@@ -126,11 +126,9 @@ showTerm _ term = go 0 M.empty term
         Lam "_" _ f -> "(" ++ go (d+1) vars a ++ " & " ++ go (d+1) vars (f (Var "_" d)) ++ ")"
         Lam k _ f   -> "Σ" ++ k ++ ":" ++ go d vars a ++ ". " ++ go (d+1) vars (f (Var k d))
         _           -> "Σ" ++ go d vars a ++ ". " ++ go d vars b
-      Tup _ _      ->
-        let plain = "(" ++ intercalate "," (map (\t -> go d vars t) (flattenTup term)) ++ ")"
-        in case flattenTup term of
-             (Sym name : xs) -> "@" ++ shortName name ++ "{" ++ intercalate "," (map show xs) ++ "}"
-             _               -> plain
+      Tup _ _      -> case unsnoc (flattenTup term) of
+             Just ((Sym name : xs),One) -> "@" ++ shortName name ++ "{" ++ intercalate "," (map show xs) ++ "}"
+             _                          -> "(" ++ intercalate "," (map (\t -> go d vars t) (flattenTup term)) ++ ")"
       SigM f       -> "λ{(,):" ++ go d vars f ++ "}"
 
       -- Function
@@ -145,9 +143,9 @@ showTerm _ term = go 0 M.empty term
         where
           (fn, args) = collectApps term []
           fnStr = case cut fn of
-            Var k i -> showName vars k i
-            Ref k _ -> k
-            _       -> "(" ++ go d vars fn ++ ")"
+            Var{} -> go d vars fn
+            Ref{} -> go d vars fn
+            _     -> "(" ++ go d vars fn ++ ")"
 
       -- Equality
       Eql t a b    -> typeStr ++ "{" ++ go d vars a ++ "==" ++ go d vars b ++ "}"
