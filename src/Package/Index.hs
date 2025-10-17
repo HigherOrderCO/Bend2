@@ -63,5 +63,6 @@ ensureFile config posixPath = do
 
     encodeChar :: Char -> String
     encodeChar '#' = "%23"
+    encodeChar '$' = "%24"
     encodeChar ' ' = "%20"
     encodeChar c   = [c]

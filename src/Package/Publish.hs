@@ -133,7 +133,7 @@ discoverPackages root _ ownerDir = do
   let dirs = sort entries
   catMaybes <$> forM dirs (\entry -> do
     let packageDir = ownerDir </> entry
-    if "." `isPrefixOf` entry
+    if "." `isPrefixOf` entry || '$' `elem` entry
       then pure Nothing
       else do
         isDir <- doesDirectoryExist packageDir
@@ -230,7 +230,7 @@ publishPackage
   -> Int
   -> IO (Either String PublishResponse)
 publishPackage cfg session ownerRaw packageRaw candidate version = do
-  let packageBase = "@" ++ ownerRaw ++ "/" ++ packageRaw ++ "#" ++ show version ++ "/"
+  let packageBase = "@" ++ ownerRaw ++ "/" ++ packageRaw ++ "$" ++ show version ++ "/"
       canonicalPaths =
         map (packageBase ++) (map (relativeWithinPackage (pcDirectory candidate)) (pcFiles candidate))
   fileParts <- forM (pcFiles candidate) $ \localFile -> do
