@@ -9,209 +9,198 @@ import Control.Exception (Exception)
 import qualified Data.Map as M
 import Data.List (intercalate)
 import Data.List.Split (splitOn)
-import Data.Maybe (fromMaybe)
 import Highlight (highlightError)
 
+import Debug.Trace
 import System.Exit
 import System.IO
 import System.IO.Unsafe (unsafePerformIO)
 
 -- Simple term display with no shadowing or prefix logic
 showTerm :: Bool -> Term -> String
-showTerm _ term = showPlain term 0
-
-showPlain :: Term -> Int -> String
-showPlain term depth = case term of
-  Var k i      -> showVar k i
-  Ref k _      -> k
-  Sub t        -> showPlain t depth
-  Fix k f      -> "μ" ++ k ++ ". " ++ showPlain (f (Var k depth)) (depth + 1)
-  Let k t v f  -> showLet k t v f depth
-  Use k v f    -> "use " ++ k ++ " = " ++ showPlain v depth ++ " " ++ showPlain (f (Var k depth)) (depth + 1)
-  Set          -> "Set"
-  Chk x t      -> "(" ++ showPlain x depth ++ "::" ++ showPlain t depth ++ ")"
-  Tst x        -> "trust " ++ showPlain x depth
-  Emp          -> "Empty"
-  EmpM         -> "λ{}"
-  Uni          -> "Unit"
-  One          -> "()"
-  UniM f       -> "λ{():" ++ showPlain f depth ++ "}"
-  Bit          -> "Bool"
-  Bt0          -> "False"
-  Bt1          -> "True"
-  BitM f t     -> "λ{False:" ++ showPlain f depth ++ ";True:" ++ showPlain t depth ++ "}"
-  Nat          -> "Nat"
-  Zer          -> "0n"
-  Suc _        -> showSuc term depth
-  NatM z s     -> "λ{0n:" ++ showPlain z depth ++ ";1n+:" ++ showPlain s depth ++ "}"
-  Lst t        -> showPlain t depth ++ "[]"
-  Nil          -> "[]"
-  Con h t      -> showCon h t depth
-  LstM n c     -> "λ{[]:" ++ showPlain n depth ++ ";<>:" ++ showPlain c depth ++ "}"
-  Enu s        -> "enum{" ++ intercalate "," (map (("&" ++) . shortName) s) ++ "}"
-  Sym s        -> "&" ++ shortName s
-  EnuM cs d    -> showEnuM cs d depth
-  Sig a b      -> showSig a b depth
-  Tup _ _      -> showTup term depth
-  SigM f       -> "λ{(,):" ++ showPlain f depth ++ "}"
-  All a b      -> showAll a b depth
-  Lam k t f    -> showLam k t f depth
-  App _ _      -> showApp term depth
-  Eql t a b    -> showEql t a b depth
-  Rfl          -> "{==}"
-  EqlM f       -> "λ{{==}:" ++ showPlain f depth ++ "}"
-  Rwt e f      -> "rewrite " ++ showPlain e depth ++ " " ++ showPlain f depth
-  Met n t ctx  -> "?" ++ n ++ ":" ++ showPlain t depth ++ "{" ++ intercalate "," (map (\c -> showPlain c depth) ctx) ++ "}"
-  Era          -> "*"
-  Sup l a b    -> "&" ++ showPlain l depth ++ "{" ++ showPlain a depth ++ "," ++ showPlain b depth ++ "}"
-  SupM l f     -> "λ{&" ++ showPlain l depth ++ "{,}:" ++ showPlain f depth ++ "}"
-  Loc _ t      -> showPlain t depth
-  Log s x      -> "log " ++ showPlain s depth ++ " " ++ showPlain x depth
-  Pri p        -> showPri p
-  Num t        -> showNum t
-  Val v        -> showVal v
-  Op2 o a b    -> showOp2 o a b depth
-  Op1 o a      -> showOp1 o a depth
-  Pat ts ms cs -> showPat ts ms cs depth
-  Frk l a b    -> "fork " ++ showPlain l depth ++ ":" ++ showPlain a depth ++ " else:" ++ showPlain b depth
-  IO t         -> "IO<" ++ showPlain t depth ++ ">"
-
-showVar :: String -> Int -> String
-showVar k _ = k
-
-showLet :: String -> Maybe Term -> Term -> Body -> Int -> String
-showLet k mt v f depth = case mt of
-  Just t  -> k ++ " : " ++ showPlain t depth ++ " = " ++ showPlain v depth ++ " " ++ showPlain (f (Var k depth)) (depth + 1)
-  Nothing -> k ++ " = " ++ showPlain v depth ++ " " ++ showPlain (f (Var k depth)) (depth + 1)
-
-showSuc :: Term -> Int -> String
-showSuc term depth = case count term of
-  (k, Zer) -> show (k :: Integer) ++ "n"
-  (k, r)   -> show (k :: Integer) ++ "n+" ++ showPlain r depth
+showTerm _ term = go 0 M.empty term
   where
-    count (cut -> Suc t) = let (c, r) = count t in (c + 1, r)
-    count t              = (0 :: Integer, t)
+    showName vars k i = case M.lookup k vars of
+      Just j | i < j -> k ++ "^" ++ show i
+      _              -> k
 
-showCon :: Term -> Term -> Int -> String
-showCon h t depth = fromMaybe plain (showStr (Con h t) depth)
-  where plain = showPlain h depth ++ "<>" ++ showPlain t depth
+    go :: Int -> M.Map Name Int -> Term -> String
+    go d vars term = case term of
+      -- Variables
+      Var k i      -> showName vars k i
+      Ref k _      -> k
+      Sub t        -> go d vars t
 
-showEnuM :: [(String,Term)] -> Term -> Int -> String
-showEnuM cs d depth = "λ{" ++ intercalate ";" cases ++ ";" ++ showPlain d depth ++ "}"
-  where cases = map (\(s,t) -> "&" ++ shortName s ++ ":" ++ showPlain t depth) cs
+      -- IO type
+      IO t         -> "IO<" ++ go d vars t ++ ">"
 
-showSig :: Term -> Term -> Int -> String
-showSig a b depth = case cut b of
-  Lam "_" _ f -> "(" ++ showPlain a depth ++ " & " ++ showPlain (f (Var "_" depth)) (depth + 1) ++ ")"
-  Lam k _ f   -> "Σ" ++ k ++ ":" ++ showPlain a depth ++ ". " ++ showPlain (f (Var k depth)) (depth + 1)
-  _           -> "Σ" ++ showPlain a depth ++ ". " ++ showPlain b depth
+      -- Definitions
+      Fix k f      -> "μ" ++ k ++ ". " ++ go (d+1) vars (f (Var k d))
+      Let k mt v f -> case mt of
+        Just t  -> k ++ " : " ++ go d vars t ++ " = " ++ go d vars v ++ " " ++ go (d+1) vars (f (Var k d))
+        Nothing -> k ++                         " = " ++ go d vars v ++ " " ++ go (d+1) vars (f (Var k d))
+      Use k v f    -> "use " ++ k ++ " = " ++ go d vars v ++ " " ++ go (d+1) vars (f (Var k d))
 
-showAll :: Term -> Term -> Int -> String
-showAll a b depth = case b of
-  Lam "_" _ f -> showPlain a depth ++ " -> " ++ showPlain (f (Var "_" depth)) (depth + 1)
-  Lam k _ f   -> "∀" ++ k ++ ":" ++ showPlain a depth ++ ". " ++ showPlain (f (Var k depth)) (depth + 1)
-  _           -> "∀" ++ showPlain a depth ++ ". " ++ showPlain b depth
+      -- Universe
+      Set          -> "Set"
 
-showLam :: String -> Maybe Term -> Body -> Int -> String
-showLam k mt f depth = case mt of
-  Just t  -> "λ" ++ k ++ ":" ++ showPlain t depth ++ ". " ++ showPlain (f (Var k depth)) (depth + 1)
-  Nothing -> "λ" ++ k ++ ". " ++ showPlain (f (Var k depth)) (depth + 1)
+      -- Annotation
+      Chk x t      -> "(" ++ go d vars x ++ "::" ++ go d vars t ++ ")"
+      Tst x        -> "trust " ++ go d vars x
 
-showApp :: Term -> Int -> String
-showApp term depth = fnStr ++ "(" ++ intercalate "," (map (\arg -> showPlain arg depth) args) ++ ")"
-  where
-    (fn, args) = collectApps term []
-    fnStr = case cut fn of
-      Var k i -> showVar k i
-      Ref k _ -> k
-      _       -> "(" ++ showPlain fn depth ++ ")"
+      -- Empty
+      Emp          -> "Empty"
+      EmpM         -> "λ{}"
 
-showTup :: Term -> Int -> String
-showTup term depth = fromMaybe plain (showCtr term)
-  where plain = "(" ++ intercalate "," (map (\t -> showPlain t depth) (flattenTup term)) ++ ")"
+      -- Unit
+      Uni          -> "Unit"
+      One          -> "()"
+      UniM f       -> "λ{():" ++ go d vars f ++ "}"
 
-showEql :: Term -> Term -> Term -> Int -> String
-showEql t a b depth = typeStr ++ "{" ++ showPlain a depth ++ "==" ++ showPlain b depth ++ "}"
-  where
-    typeStr = case t of
-      Sig _ _ -> "(" ++ showPlain t depth ++ ")"
-      All _ _ -> "(" ++ showPlain t depth ++ ")"
-      _       -> showPlain t depth
+      -- Bool
+      Bit          -> "Bool"
+      Bt0          -> "False"
+      Bt1          -> "True"
+      BitM f t     -> "λ{False:" ++ go d vars f ++ ";True:" ++ go d vars t ++ "}"
 
-showOp2 :: NOp2 -> Term -> Term -> Int -> String
-showOp2 op a b depth = "(" ++ showPlain a depth ++ " " ++ opStr ++ " " ++ showPlain b depth ++ ")"
-  where
-    opStr = case op of
-      ADD -> "+";   SUB -> "-";   MUL -> "*";   DIV -> "/"
-      MOD -> "%";   POW -> "**";  EQL -> "==";  NEQ -> "!=="
-      LST -> "<";    GRT -> ">";   LEQ -> "<=";  GEQ -> ">="
-      AND -> "&&";   OR  -> "|";   XOR -> "^"
-      SHL -> "<<";   SHR -> ">>"
+      -- Nat
+      Nat          -> "Nat"
+      Zer          -> "0n"
+      Suc _        -> case count term of
+        (k, Zer) -> show (k :: Integer) ++ "n"
+        (k, r)   -> show (k :: Integer) ++ "n+" ++ go d vars r
+        where
+          count (cut -> Suc t) = let (c, r) = count t in (c + 1, r)
+          count t              = (0 :: Integer, t)
+      NatM z s     -> "λ{0n:" ++ go d vars z ++ ";1n+:" ++ go d vars s ++ "}"
 
-showOp1 :: NOp1 -> Term -> Int -> String
-showOp1 op a depth = case op of
-  NOT -> "(not " ++ showPlain a depth ++ ")"
-  NEG -> "(-" ++ showPlain a depth ++ ")"
+      -- List
+      Lst t        -> go d vars t ++ "[]"
+      Nil          -> "[]"
+      Con h t      ->
+        let plain = go d vars h ++ "<>" ++ go d vars t
+            go' acc Nil                        = Just ("\"" ++ reverse acc ++ "\"")
+            go' acc (Con (Val (CHR_V c)) rest) = go' (c : acc) rest
+            go' acc (Loc _ t')                 = go' acc t'
+            go' _   _                          = Nothing
+        in case go' [] (Con h t) of
+             Just str -> str
+             Nothing  -> plain
+      LstM n c     -> "λ{[]:" ++ go d vars n ++ ";<>:" ++ go d vars c ++ "}"
 
-showPat :: [Term] -> [Move] -> [Case] -> Int -> String
-showPat ts ms cs depth = "match " ++ unwords (map (\t -> showPlain t depth) ts) ++ " {" ++ moves ++ cases ++ " }"
-  where
-    moves = case ms of
-      [] -> ""
-      _  -> " with " ++ intercalate " with " (map showMove ms)
-    cases = case cs of
-      [] -> ""
-      _  -> " " ++ intercalate " " (map showCase cs)
-    showMove (k,x)   = k ++ "=" ++ showPlain x depth
-    showCase (ps,x)  = "case " ++ unwords (map showPat' ps) ++ ": " ++ showPlain x depth
-    showPat' p       = "(" ++ showPlain p depth ++ ")"
+      -- Enum
+      Enu s        -> "enum{" ++ intercalate "," (map (("&" ++) . shortName) s) ++ "}"
+      Sym s        -> "&" ++ shortName s
+      EnuM cs d'   -> "λ{" ++ intercalate ";" cases ++ ";" ++ go d vars d' ++ "}"
+        where
+          cases = map (\(s,t) -> "&" ++ shortName s ++ ":" ++ go d vars t) cs
 
-showPri :: PriF -> String
-showPri p = case p of
-  U64_TO_CHAR   -> "U64_TO_CHAR"
-  CHAR_TO_U64   -> "CHAR_TO_U64"
-  HVM_INC       -> "HVM_INC"
-  HVM_DEC       -> "HVM_DEC"
-  IO_PRINT      -> "IO_PRINT"
-  IO_PUTC       -> "IO_PUTC"
-  IO_GETC       -> "IO_GETC"
-  IO_READ_FILE  -> "IO_READ_FILE"
-  IO_WRITE_FILE -> "IO_WRITE_FILE"
-  IO_BIND       -> "IO_BIND"
-  IO_PURE       -> "IO_PURE"
+      -- Numbers
+      Num t        -> case t of
+        U64_T -> "U64"
+        I64_T -> "I64"
+        F64_T -> "F64"
+        CHR_T -> "Char"
+      Val v        -> case v of
+        U64_V n -> show n
+        I64_V n -> show n
+        F64_V n -> show n
+        CHR_V c -> "'" ++ (case c of
+          '\n' -> "\\n";  '\t' -> "\\t";  '\r' -> "\\r";  '\0' -> "\\0"
+          '\\' -> "\\\\"; '\'' -> "\\'"
+          _    -> [c]) ++ "'"
+      Op2 o a b    -> "(" ++ go d vars a ++ " " ++ opStr ++ " " ++ go d vars b ++ ")"
+        where
+          opStr = case o of
+            ADD -> "+";   SUB -> "-";   MUL -> "*";   DIV -> "/"
+            MOD -> "%";   POW -> "**";  EQL -> "==";  NEQ -> "!=="
+            LST -> "<";    GRT -> ">";   LEQ -> "<=";  GEQ -> ">="
+            AND -> "&&";   OR  -> "|";   XOR -> "^"
+            SHL -> "<<";   SHR -> ">>"
+      Op1 o a      -> case o of
+        NOT -> "(not " ++ go d vars a ++ ")"
+        NEG -> "(-" ++ go d vars a ++ ")"
 
-showNum :: NTyp -> String
-showNum t = case t of
-  U64_T -> "U64"
-  I64_T -> "I64"
-  F64_T -> "F64"
-  CHR_T -> "Char"
+      -- Pair
+      Sig a b      -> case cut b of
+        Lam "_" _ f -> "(" ++ go (d+1) vars a ++ " & " ++ go (d+1) vars (f (Var "_" d)) ++ ")"
+        Lam k _ f   -> "Σ" ++ k ++ ":" ++ go d vars a ++ ". " ++ go (d+1) vars (f (Var k d))
+        _           -> "Σ" ++ go d vars a ++ ". " ++ go d vars b
+      Tup _ _      ->
+        let plain = "(" ++ intercalate "," (map (\t -> go d vars t) (flattenTup term)) ++ ")"
+        in case flattenTup term of
+             (Sym name : xs) -> "@" ++ shortName name ++ "{" ++ intercalate "," (map show xs) ++ "}"
+             _               -> plain
+      SigM f       -> "λ{(,):" ++ go d vars f ++ "}"
 
-showVal :: NVal -> String
-showVal v = case v of
-  U64_V n -> show n
-  I64_V n -> show n
-  F64_V n -> show n
-  CHR_V c -> "'" ++ showCharLit c ++ "'"
+      -- Function
+      All a b      -> case b of
+        Lam "_" _ f -> go d vars a ++ " -> " ++ go (d+1) vars (f (Var "_" d))
+        Lam k _ f   -> "∀" ++ k ++ ":" ++ go d vars a ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
+        _           -> "∀" ++ go d vars a ++ ". " ++ go d vars b
+      Lam k mt f   -> case mt of
+        Just t  -> "λ" ++ k ++ "^" ++ show d ++ ":" ++ go d vars t ++ ". " ++ go (d+1) vars (f (Var k d))
+        Nothing -> "λ" ++ k ++  ". " ++ go (d+1) vars (f (Var k d))
+      App _ _      -> fnStr ++ "(" ++ intercalate "," (map (\arg -> go d vars arg) args) ++ ")"
+        where
+          (fn, args) = collectApps term []
+          fnStr = case cut fn of
+            Var k i -> showName vars k i
+            Ref k _ -> k
+            _       -> "(" ++ go d vars fn ++ ")"
 
-showCharLit :: Char -> String
-showCharLit c = case c of
-  '\n' -> "\\n";  '\t' -> "\\t";  '\r' -> "\\r";  '\0' -> "\\0"
-  '\\' -> "\\\\"; '\'' -> "\\'"
-  _    -> [c]
+      -- Equality
+      Eql t a b    -> typeStr ++ "{" ++ go d vars a ++ "==" ++ go d vars b ++ "}"
+        where
+          typeStr = case t of
+            Sig _ _ -> "(" ++ go d vars t ++ ")"
+            All _ _ -> "(" ++ go d vars t ++ ")"
+            _       -> go d vars t
+      Rfl          -> "{==}"
+      EqlM f       -> "λ{{==}:" ++ go d vars f ++ "}"
+      Rwt e f      -> "rewrite " ++ go d vars e ++ " " ++ go d vars f
 
-showStr :: Term -> Int -> Maybe String
-showStr term depth = go [] term
-  where
-    go acc Nil                        = Just ("\"" ++ reverse acc ++ "\"")
-    go acc (Con (Val (CHR_V c)) rest) = go (c:acc) rest
-    go acc (Loc _ t)                  = go acc t
-    go _   _                          = Nothing
+      -- MetaVar
+      Met n t ctx  -> "?" ++ n ++ ":" ++ go d vars t ++ "{" ++ intercalate "," (map (\c -> go d vars c) ctx) ++ "}"
 
-showCtr :: Term -> Maybe String
-showCtr t = case flattenTup t of
-  (Sym name : xs) -> Just ("@" ++ shortName name ++ "{" ++ intercalate "," (map show xs) ++ "}")
-  _               -> Nothing
+      -- Supperpositions
+      Era          -> "*"
+      Sup l a b    -> "&" ++ go d vars l ++ "{" ++ go d vars a ++ "," ++ go d vars b ++ "}"
+      SupM l f     -> "λ{&" ++ go d vars l ++ "{,}:" ++ go d vars f ++ "}"
+
+      -- Errors
+      Loc _ t      -> go d vars t
+
+      -- Logging
+      Log s x      -> "log " ++ go d vars s ++ " " ++ go d vars x
+
+      -- Primitive
+      Pri p        -> case p of
+        U64_TO_CHAR   -> "U64_TO_CHAR"
+        CHAR_TO_U64   -> "CHAR_TO_U64"
+        HVM_INC       -> "HVM_INC"
+        HVM_DEC       -> "HVM_DEC"
+        IO_PRINT      -> "IO_PRINT"
+        IO_PUTC       -> "IO_PUTC"
+        IO_GETC       -> "IO_GETC"
+        IO_READ_FILE  -> "IO_READ_FILE"
+        IO_WRITE_FILE -> "IO_WRITE_FILE"
+        IO_BIND       -> "IO_BIND"
+        IO_PURE       -> "IO_PURE"
+
+      -- Sugars
+      Pat ts ms cs -> "match " ++ unwords (map (\t -> go d vars t) ts) ++ " {" ++ moves ++ cases ++ " }"
+        where
+          moves = case ms of
+            [] -> ""
+            _  -> " with " ++ intercalate " with " (map showMove ms)
+          cases = case cs of
+            [] -> ""
+            _  -> " " ++ intercalate " " (map showCase cs)
+          showMove (k,x)   = k ++ "=" ++ go d vars x
+          showCase (ps,x)  = "case " ++ unwords (map showPat' ps) ++ ": " ++ go d vars x
+          showPat' p       = "(" ++ go d vars p ++ ")"
+      Frk l a b    -> "fork " ++ go d vars l ++ ":" ++ go d vars a ++ " else:" ++ go d vars b
 
 shortName :: String -> String
 shortName name = case splitOn "::" name of
