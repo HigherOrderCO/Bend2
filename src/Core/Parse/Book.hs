@@ -100,7 +100,7 @@ parseImportTarget = lexeme $ do
 
     isSegmentChar :: Char -> Bool
     isSegmentChar c =
-      isAsciiLower c || isAsciiUpper c || isDigit c || c == '_' || c == '@' || c == '-'
+      isAsciiLower c || isAsciiUpper c || isDigit c || c == '_' || c == '@' || c == '-' || c == '=' || c == '$'
 
 
 -- | Syntax: import statements followed by definitions

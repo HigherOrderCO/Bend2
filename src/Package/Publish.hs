@@ -1,8 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Package.Publish
-  ( runPublishCommand
-  , AuthMode(..)
+  ( AuthMode(..)
+  , runPublishCommand
+  , runBumpCommand
   ) where
 
 import Control.Exception (SomeException, try)
@@ -12,9 +13,13 @@ import Data.Aeson ((.:), (.:?))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as LBS
-import Data.List (sort, sortOn, isPrefixOf)
-import Data.Maybe (catMaybes)
 import Data.Char (toLower)
+import Data.Either (partitionEithers)
+import Data.List (find, foldl', maximumBy, sort, sortOn, isPrefixOf)
+import Data.Maybe (catMaybes)
+import Data.Ord (comparing)
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Network.HTTP.Client (RequestBody (RequestBodyBS))
 import Network.HTTP.Client.MultipartFormData
   ( formDataBody
@@ -28,6 +33,7 @@ import System.Directory
   , doesFileExist
   , listDirectory
   , canonicalizePath
+  , renameDirectory
   )
 import System.FilePath
   ( takeExtension
@@ -37,17 +43,18 @@ import System.FilePath
   )
 import qualified System.FilePath as FP
 import System.IO (hFlush, stdout)
-import Text.Printf (printf)
 import Text.Read (readMaybe)
 
 import Core.Import (ensureBendRoot)
 import Package.Auth (AuthMode(..), AuthSession(..), AuthUser(..), ensureAuthenticated)
 import Package.Index
 
-data PackageCandidate = PackageCandidate
-  { pcName      :: String
-  , pcDirectory :: FilePath
-  , pcFiles     :: [LocalFile]
+data ModuleCandidate = ModuleCandidate
+  { mcFullName  :: String    -- e.g. "Math=3"
+  , mcBaseName  :: String    -- e.g. "Math"
+  , mcVersion   :: Int       -- e.g. 3
+  , mcDirectory :: FilePath
+  , mcFiles     :: [LocalFile]
   } deriving (Show, Eq)
 
 data LocalFile = LocalFile
@@ -86,8 +93,8 @@ instance Aeson.FromJSON ErrorResponse where
     ErrorResponse <$> o .: "error"
                   <*> o .:? "details"
 
-runPublishCommand :: AuthMode -> IO ()
-runPublishCommand authMode = do
+runPublishCommand :: AuthMode -> Maybe String -> IO ()
+runPublishCommand authMode targetModule = do
   root <- ensureBendRoot
   rootCanonical <- canonicalizePath root
   indexCfg <- defaultIndexConfig rootCanonical
@@ -101,55 +108,138 @@ runPublishCommand authMode = do
   unless exists $
     fail $ "No directory found for @" ++ ownerRaw ++ ". Expected: " ++ ownerDir
 
-  candidates <- discoverPackages rootCanonical ownerRaw ownerDir
-  when (null candidates) $
-    fail "No publishable packages found under your BendRoot directory."
+  (modules, invalids) <- discoverModules rootCanonical ownerRaw ownerDir
+  unless (null invalids) $ do
+    fail $ unlines
+      ( "Found module directories without version suffix:"
+      : map (\name -> "  - " ++ name ++ " (rename to " ++ name ++ "=0)") invalids
+      )
 
-  package <- promptForPackage candidates
-  let packageRaw = pcName package
-  version <- determineNextVersion indexCfg session (ownerRaw, packageRaw)
+  when (null modules) $
+    fail "No publishable modules found under your BendRoot directory."
+
+  modulesToPublish <- case targetModule of
+    Nothing -> pure modules
+    Just raw -> do
+      mc <- selectModule modules raw
+      pure [mc]
 
   putStrLn ""
-  putStrLn $ "Preparing to publish @" ++ ownerRaw ++ "/" ++ packageRaw ++ " version " ++ show version
-  forM_ (pcFiles package) $ \lf ->
-    putStrLn $ "  - " ++ lfRelative lf
+  let shouldConfirm = length modulesToPublish == 1
+  results <- forM modulesToPublish $ \moduleCand -> do
+    putStrLn $ "Preparing to publish @" ++ ownerRaw ++ "/" ++ mcFullName moduleCand
+    forM_ (mcFiles moduleCand) $ \lf ->
+      putStrLn $ "  - " ++ lfRelative lf
+    confirmed <- if shouldConfirm
+                   then promptConfirmation
+                   else pure True
+    if not confirmed
+      then pure (Left "Publish aborted by user.")
+      else publishModule indexCfg session ownerRaw moduleCand
 
-  confirmed <- promptConfirmation
-  unless confirmed $
-    fail "Publish aborted by user."
-
-  result <- publishPackage indexCfg session ownerRaw packageRaw package version
-
-  case result of
-    Left err -> fail ("Publish failed: " ++ err)
-    Right resp -> do
-      putStrLn ""
+  let (errors, successes) = partitionEithers results
+  when (not (null successes)) $ do
+    putStrLn ""
+    forM_ successes $ \resp -> do
       putStrLn $ "Successfully published " ++ prPackage resp ++ " version " ++ show (prVersion resp)
       putStrLn $ "Storage path: " ++ prStoragePath resp
+  unless (null errors) $ fail (unlines errors)
 
-discoverPackages :: FilePath -> String -> FilePath -> IO [PackageCandidate]
-discoverPackages root _ ownerDir = do
-  entries <- listDirectory ownerDir
-  let dirs = sort entries
-  catMaybes <$> forM dirs (\entry -> do
-    let packageDir = ownerDir </> entry
-    if "." `isPrefixOf` entry || '$' `elem` entry
+runBumpCommand :: AuthMode -> String -> IO ()
+runBumpCommand authMode rawModule = do
+  root <- ensureBendRoot
+  rootCanonical <- canonicalizePath root
+  indexCfg <- defaultIndexConfig rootCanonical
+  session <- ensureAuthenticated authMode indexCfg
+  putStrLn $ "Using session cookie: connect.sid=" ++ asCookie session
+
+  let ownerRaw = auUsername (asUser session)
+      ownerDir = rootCanonical </> ("@" ++ ownerRaw)
+
+  exists <- doesDirectoryExist ownerDir
+  unless exists $
+    fail $ "No directory found for @" ++ ownerRaw ++ ". Expected: " ++ ownerDir
+
+  (modules, invalids) <- discoverModules rootCanonical ownerRaw ownerDir
+  unless (null invalids) $ do
+    fail $ unlines
+      ( "Found module directories without version suffix:"
+      : map (\name -> "  - " ++ name ++ " (rename to " ++ name ++ "=0)") invalids
+      )
+
+  when (null modules) $
+    fail "No versioned modules found under your BendRoot directory."
+
+  moduleCand <- selectModule modules rawModule
+
+  let moduleBase = mcBaseName moduleCand
+      currentVersion = mcVersion moduleCand
+
+  latest <- fetchLatestVersion indexCfg session (ownerRaw, moduleBase)
+  let nextLocal = currentVersion + 1
+      remoteNext = maybe nextLocal (+ 1) latest
+      newVersion = max nextLocal remoteNext
+      newFullName = moduleBase ++ "=" ++ show newVersion
+      newDir = ownerDir </> newFullName
+
+  existsNew <- doesDirectoryExist newDir
+  when existsNew $
+    fail $ "Directory '" ++ newFullName ++ "' already exists. Clean it up or choose a different version."
+
+  putStrLn $ "Renaming @" ++ ownerRaw ++ "/" ++ mcFullName moduleCand
+           ++ " -> @" ++ ownerRaw ++ "/" ++ newFullName
+
+  renameDirectory (mcDirectory moduleCand) newDir
+  changed <- rewriteModuleReferences rootCanonical ownerRaw moduleBase currentVersion newVersion newDir
+
+  if null changed
+    then putStrLn "No references needed updating."
+    else do
+      putStrLn "Updated references in:"
+      forM_ changed $ \fp -> putStrLn $ "  - " ++ fp
+
+  putStrLn $ "Bumped @" ++ ownerRaw ++ "/" ++ moduleBase ++ " to version =" ++ show newVersion
+           ++ "."
+  putStrLn $ "Next steps: run 'bend publish " ++ moduleBase ++ "' to publish the new version."
+
+discoverModules :: FilePath -> String -> FilePath -> IO ([ModuleCandidate], [String])
+discoverModules root _ ownerDir = do
+  entries <- sort <$> listDirectory ownerDir
+  classified <- forM entries $ \entry -> do
+    let moduleDir = ownerDir </> entry
+    isDir <- doesDirectoryExist moduleDir
+    if not isDir || "." `isPrefixOf` entry
       then pure Nothing
-      else do
-        isDir <- doesDirectoryExist packageDir
-        if not isDir
-          then pure Nothing
-          else do
-            files <- listBendFiles packageDir
-            if null files
-              then pure Nothing
-              else do
-                localFiles <- mapM (toLocalFile root) files
-                pure $ Just PackageCandidate
-                  { pcName = entry
-                  , pcDirectory = packageDir
-                  , pcFiles = sortOn lfRelative localFiles
-                  })
+      else case parseModuleDirName entry of
+        Nothing -> pure (Just (Left entry))
+        Just (base, version) -> do
+          files <- listBendFiles moduleDir
+          if null files
+            then pure Nothing
+            else do
+              localFiles <- mapM (toLocalFile root) files
+              let candidate = ModuleCandidate
+                    { mcFullName = entry
+                    , mcBaseName = base
+                    , mcVersion = version
+                    , mcDirectory = moduleDir
+                    , mcFiles = sortOn lfRelative localFiles
+                    }
+              pure (Just (Right candidate))
+  let invalids = [name | Just (Left name) <- classified]
+      modules  = [cand | Just (Right cand) <- classified]
+  pure (modules, invalids)
+
+parseModuleDirName :: String -> Maybe (String, Int)
+parseModuleDirName name =
+  case span (/= '=') name of
+    (base, '=':verStr)
+      | not (null base)
+      , '=' `notElem` verStr
+      , Just ver <- readMaybe verStr
+      , ver >= 0
+      -> Just (base, ver)
+    _ -> Nothing
 
 listBendFiles :: FilePath -> IO [FilePath]
 listBendFiles path = do
@@ -177,19 +267,38 @@ toLocalFile root file = do
     , lfRelative = toPosix rel
     }
 
-promptForPackage :: [PackageCandidate] -> IO PackageCandidate
-promptForPackage candidates = do
-  putStrLn "Select a package to publish:"
-  forM_ (zip [1 :: Int ..] candidates) $ \(idx, PackageCandidate name _ files) ->
-    putStrLn (printf "  [%d] %s (%d files)" idx name (length files))
-  putStr "Enter choice: "
-  hFlush stdout
-  selection <- getLine
-  case readMaybe selection of
-    Just n | n >= 1 && n <= length candidates -> pure (candidates !! (n - 1))
-    _ -> do
-      putStrLn "Invalid choice. Please try again."
-      promptForPackage candidates
+data ModuleRef = ModuleRef
+  { mrBase     :: String
+  , mrVersion  :: Maybe Int
+  } deriving (Show, Eq)
+
+parseModuleRef :: String -> Maybe ModuleRef
+parseModuleRef input =
+  case span (/= '=') input of
+    (base, '=':verStr)
+      | not (null base)
+      , '=' `notElem` verStr
+      , Just ver <- readMaybe verStr
+      , ver >= 0
+      -> Just (ModuleRef base (Just ver))
+    (base, "") | not (null base) -> Just (ModuleRef base Nothing)
+    _ -> Nothing
+
+selectModule :: [ModuleCandidate] -> String -> IO ModuleCandidate
+selectModule modules raw =
+  case parseModuleRef raw of
+    Nothing -> fail $ "Invalid module name: " ++ raw
+    Just (ModuleRef base maybeVer) -> do
+      let matches = filter ((== base) . mcBaseName) modules
+      when (null matches) $
+        fail $ "Module '" ++ base ++ "' not found under your BendRoot directory."
+      case maybeVer of
+        Nothing ->
+          pure $ maximumBy (comparing mcVersion) matches
+        Just v ->
+          case find ((== v) . mcVersion) matches of
+            Just cand -> pure cand
+            Nothing   -> fail $ "Module '" ++ base ++ "=" ++ show v ++ "' not found."
 
 promptConfirmation :: IO Bool
 promptConfirmation = do
@@ -202,8 +311,8 @@ promptConfirmation = do
       | 'A' <= c && c <= 'Z' = toEnum (fromEnum c + 32)
       | otherwise = c
 
-determineNextVersion :: IndexConfig -> AuthSession -> (String, String) -> IO Int
-determineNextVersion cfg session (ownerRaw, packageName) = do
+fetchLatestVersion :: IndexConfig -> AuthSession -> (String, String) -> IO (Maybe Int)
+fetchLatestVersion cfg session (ownerRaw, packageName) = do
   let url = apiBaseUrl cfg ++ "/api/packages/" ++ ownerRaw ++ "/" ++ packageName
   request' <- parseRequest ("GET " ++ url)
   let cookieHeader = "connect.sid=" ++ asCookie session
@@ -212,59 +321,65 @@ determineNextVersion cfg session (ownerRaw, packageName) = do
   let status = getResponseStatusCode response
   case status of
     200 -> case Aeson.eitherDecode (getResponseBody response) of
-      Left _ -> pure 1
-      Right details ->
-        case pdLatestVersion (details :: PackageDetails) of
-          Nothing -> pure 1
-          Just v  -> pure (v + 1)
-    404 -> pure 1
+      Left _        -> pure Nothing
+      Right details -> pure (pdLatestVersion (details :: PackageDetails))
+    404 -> pure Nothing
     401 -> fail "Authentication failed while fetching package info."
     _   -> fail $ "Unexpected response while fetching package info: HTTP " ++ show status
 
-publishPackage
+publishModule
   :: IndexConfig
   -> AuthSession
-  -> String   -- ^ owner name
-  -> String   -- ^ package name
-  -> PackageCandidate
-  -> Int
+  -> String          -- ^ owner name
+  -> ModuleCandidate
   -> IO (Either String PublishResponse)
-publishPackage cfg session ownerRaw packageRaw candidate version = do
-  let packageBase = "@" ++ ownerRaw ++ "/" ++ packageRaw ++ "$" ++ show version ++ "/"
-      canonicalPaths =
-        map (packageBase ++) (map (relativeWithinPackage (pcDirectory candidate)) (pcFiles candidate))
-  fileParts <- forM (pcFiles candidate) $ \localFile -> do
-    content <- BS.readFile (lfAbsolute localFile)
-    let fileName = takeFileName (lfAbsolute localFile)
-    pure $ partFileRequestBody "files" fileName (RequestBodyBS content)
+publishModule cfg session ownerRaw candidate = do
+  let moduleBase = mcBaseName candidate
+      version    = mcVersion candidate
+      fullName   = mcFullName candidate
+  latest <- fetchLatestVersion cfg session (ownerRaw, moduleBase)
+  case latest of
+    Just v | v >= version -> do
+      let msg = "Error: module " ++ fullName ++ " already published; run 'bend bump "
+                ++ moduleBase ++ "' to create a new version."
+      putStrLn msg
+      pure (Left msg)
+    _ -> do
+      let packageBase = "@" ++ ownerRaw ++ "/" ++ moduleBase ++ "=" ++ show version ++ "/"
+          canonicalPaths =
+            map (packageBase ++) (map (relativeWithinPackage (mcDirectory candidate)) (mcFiles candidate))
+      fileParts <- forM (mcFiles candidate) $ \localFile -> do
+        content <- BS.readFile (lfAbsolute localFile)
+        let fileName = takeFileName (lfAbsolute localFile)
+        pure $ partFileRequestBody "files" fileName (RequestBodyBS content)
 
-  let versionPart = partBS "version" (BSC.pack (show version))
-      pathsPart = partLBS "paths" (Aeson.encode canonicalPaths)
-      parts = versionPart : pathsPart : fileParts
-      url = apiBaseUrl cfg ++ "/api/publish/@" ++ ownerRaw ++ "/" ++ packageRaw
+      let versionPart = partBS "version" (BSC.pack (show version))
+          pathsPart = partLBS "paths" (Aeson.encode canonicalPaths)
+          parts = versionPart : pathsPart : fileParts
+          url = apiBaseUrl cfg ++ "/api/publish/@" ++ ownerRaw ++ "/" ++ moduleBase
 
-  putStrLn "Attempting publish request:"
-  putStrLn $ "  URL: " ++ url
-  putStrLn $ "  Version: " ++ show version
-  putStrLn $ "  Paths: " ++ show canonicalPaths
+      putStrLn "Attempting publish request:"
+      putStrLn $ "  URL: " ++ url
+      putStrLn $ "  Version: " ++ show version
+      putStrLn $ "  Paths: " ++ show canonicalPaths
 
-  requestBase <- parseRequest url
-  let cookieHeader = "connect.sid=" ++ asCookie session
-      withCookie = addRequestHeader "Cookie" (BSC.pack cookieHeader) requestBase
-  requestWithBody <- formDataBody parts withCookie
-  let request = setRequestMethod "PUT" requestWithBody
+      requestBase <- parseRequest url
+      let cookieHeader = "connect.sid=" ++ asCookie session
+          withCookie = addRequestHeader "Cookie" (BSC.pack cookieHeader) requestBase
+      requestWithBody <- formDataBody parts withCookie
+      let request = setRequestMethod "PUT" requestWithBody
 
-  result <- try (httpLBS request) :: IO (Either SomeException (Response LBS.ByteString))
-  case result of
-    Left err -> pure (Left ("Network error: " ++ show err))
-    Right response -> do
-      let status = getResponseStatusCode response
-      if status == 201
-        then pure $ Aeson.eitherDecode (getResponseBody response)
-        else do
-          putStrLn $ "Publish failed with HTTP " ++ show status
-          putStrLn $ "Response body: " ++ BSC.unpack (BSC.take 500 (LBS.toStrict (getResponseBody response)))
-          pure $ Left (formatErrorResponse (getResponseBody response) status)
+      result <- try (httpLBS request) :: IO (Either SomeException (Response LBS.ByteString))
+      case result of
+        Left err -> pure (Left ("Network error: " ++ show err))
+        Right response -> do
+          let status = getResponseStatusCode response
+          if status == 201
+            then pure $ Aeson.eitherDecode (getResponseBody response)
+            else do
+              putStrLn $ "Publish failed with HTTP " ++ show status
+              putStrLn $ "Response body: " ++ BSC.unpack (BSC.take 500 (LBS.toStrict (getResponseBody response)))
+              pure $ Left (formatErrorResponse (getResponseBody response) status)
 
 relativeWithinPackage :: FilePath -> LocalFile -> FilePath
 relativeWithinPackage packageDir localFile =
@@ -278,6 +393,24 @@ formatErrorResponse body status =
          let detailText = maybe "" (\d -> " (" ++ d ++ ")") (erDetails err)
          in erError err ++ detailText
        Left _ -> "HTTP " ++ show status
+
+rewriteModuleReferences :: FilePath -> String -> String -> Int -> Int -> FilePath -> IO [String]
+rewriteModuleReferences rootDir owner base oldVersion newVersion moduleDir = do
+  bendFiles <- listBendFiles moduleDir
+  let oldRefs =
+        [ T.pack ("@" ++ owner ++ "/" ++ base ++ "=" ++ show oldVersion)
+        , T.pack ("@" ++ owner ++ "/" ++ base ++ "$" ++ show oldVersion)
+        ]
+      newRef = T.pack ("@" ++ owner ++ "/" ++ base ++ "=" ++ show newVersion)
+  changed <- forM bendFiles $ \file -> do
+    content <- TIO.readFile file
+    let updated = foldl' (\acc ref -> T.replace ref newRef acc) content oldRefs
+    if content == updated
+      then pure Nothing
+      else do
+        TIO.writeFile file updated
+        pure (Just (toPosix (FP.makeRelative rootDir file)))
+  pure (catMaybes changed)
 
 toPosix :: FilePath -> FilePath
 toPosix path =

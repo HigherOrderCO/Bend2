@@ -674,7 +674,7 @@ parseGlobalRef = label "global reference" $ try $ do
   let name = '@' : rest
   return (Var name 0)
   where
-    isGlobalChar c = isNameChar c || c == '$' || c == '#' || c == ':'
+    isGlobalChar c = isNameChar c || c == '=' || c == '#' || c == ':' || c == '$'
 
 -- | Syntax: rewrite expr body
 parseRewrite :: Parser Term

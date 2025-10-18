@@ -56,16 +56,16 @@ Bend uses a package-based versioning system that balances user ergonomics with t
 
 The version number appears at the package level, not per-definition:
 ```
-import VictorTaelin/VecAlg#7/List/dot as dot
+import VictorTaelin/VecAlg=7/List/dot as dot
 ```
 
 This groups related definitions (add, sub, mul, etc.) under a single version, preventing the chaotic scenario where each function has independent versions that may be incompatible when used together.
 
 **Key Properties**
 
-1. **Package-level versioning**: Version `#7` applies to all definitions within `VictorTaelin/VecAlg`, ensuring coherent sets of functions that are tested and published together.
+1. **Package-level versioning**: Version `=7` applies to all definitions within `VictorTaelin/VecAlg`, ensuring coherent sets of functions that are tested and published together.
 
-2. **Individual addressability**: Internally, each definition remains fully independent. The resolver and database treat `VictorTaelin/VecAlg#7/List/dot` as a unique FQP, enabling minimal context loading—only the specific definitions used (plus their dependencies) are pulled into scope.
+2. **Individual addressability**: Internally, each definition remains fully independent. The resolver and database treat `VictorTaelin/VecAlg=7/List/dot` as a unique FQP, enabling minimal context loading—only the specific definitions used (plus their dependencies) are pulled into scope.
 
 3. **Direct reference capability**: Any definition can be referenced anywhere using its full FQP without explicitly importing the package first, maintaining context efficiency.
 
@@ -80,8 +80,8 @@ This groups related definitions (add, sub, mul, etc.) under a single version, pr
 
 Package versions are stored in the global tree with paths like:
 ```
-BendRoot/@VictorTaelin/VecAlg#7/List/dot.bend
-BendRoot/@VictorTaelin/VecAlg#7/Nat/add.bend
+BendRoot/@VictorTaelin/VecAlg=7/List/dot.bend
+BendRoot/@VictorTaelin/VecAlg=7/Nat/add.bend
 ```
 
 The resolver treats the version as part of the path structure, ensuring different versions can coexist in the dependency tree when needed.
@@ -91,10 +91,10 @@ Importing / using `BendRoot/@VictorTaelin/VecAlg/List/dot()` will error out. A v
 In terms of storing, we will always store different versions in different places, meaning:
 
 ```
-@lorenzo/my_app#0
+@lorenzo/my_app=0
 # contains:
-@lorenzo/my_app#0/main/foo
-@lorenzo/my_app#0/main/bar
+@lorenzo/my_app=0/main/foo
+@lorenzo/my_app=0/main/bar
 ```
 
 Then, this get stored in the BendRoot index in that exact structure.
@@ -104,10 +104,10 @@ So, the package needs to be updated.
 Therefore, we now have to create:
 
 ```
-@lorenzo/my_app#1
+@lorenzo/my_app=1
 # contains:
-@lorenzo/my_app#1/main/foo -> changed
-@lorenzo/my_app#1/main/bar -> didnt change
+@lorenzo/my_app=1/main/foo -> changed
+@lorenzo/my_app=1/main/bar -> didnt change
 ```
 
 Note that we're storing bar() twice even though the implementations are identical, but this is the CORRECT way to do so.
@@ -121,7 +121,7 @@ Note that we're storing bar() twice even though the implementations are identica
   - `Nat/add` (brings the file `Nat/add.bend` into scope; its public definition is `add`)
   - `Nat/list/map` (creates a prefix alias so later references like `Alias/map` rewrite back to the fully qualified path)
 - Aliases are stored as `ImportAlias` records in the `ParserState` and later consumed by the resolver—there is no textual rewriting at parse time anymore.
-- Paths that contain package versions (for example `@lorenzo/my_app#1/...`) are accepted verbatim by the parser; the `#` segment is treated as just another path component. There is currently no parser-level enforcement that a version segment actually exists—validation must happen downstream.
+- Paths that contain package versions (for example `@lorenzo/my_app=1/...`) are accepted verbatim by the parser; the `=` segment is treated as just another path component. There is currently no parser-level enforcement that a version segment actually exists—validation must happen downstream.
 - Legacy constructs (`from ... import ...`, implicit module imports, slash aliases, etc.) have been removed; code using them will now fail during parsing.
 
 ### Resolver Pipeline
@@ -166,7 +166,7 @@ All resolution happens inside `Core.Import`. The high-level flow for `autoImport
   - If the file is already present under BendRoot, the function is a no-op.
   - Otherwise, a GET request is issued to `apiBaseUrl ++ "/api/files/" ++ <posix-path>`; on success, the response body is written under the corresponding BendRoot path, creating directories as needed.
   - Any network failure emits a warning and the resolver continues trying other candidates (e.g. the `_.bend` variant). A fatal error is raised only after all candidates and downloads fail.
-- The resolver always works with BendRoot-relative POSIX paths, so the local directory structure mirrors the remote package tree exactly, matching the spec. Version identifiers (the `#N` segments) are carried through untouched and therefore become literal directory names.
+- The resolver always works with BendRoot-relative POSIX paths, so the local directory structure mirrors the remote package tree exactly, matching the spec. Version identifiers (the `=N` segments) are carried through untouched and therefore become literal directory names.
 
 ### Effects on Files and Definitions
 
@@ -187,4 +187,4 @@ Together, these pieces implement the spec’s core principles: every definition 
 
 ### Spec Compliance Gaps
 
-- The resolver does not yet reject imports that omit an explicit package version (e.g. `BendRoot/Nat/add.bend` is still accepted when present locally). The specification requires every external reference to include a `#<version>` segment, so an additional validation pass is needed before module loading to enforce this rule consistently.
+- The resolver does not yet reject imports that omit an explicit package version (e.g. `BendRoot/Nat/add.bend` is still accepted when present locally). The specification requires every external reference to include a `=<version>` segment, so an additional validation pass is needed before module loading to enforce this rule consistently.

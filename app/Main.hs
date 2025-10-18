@@ -3,13 +3,14 @@ module Main where
 import System.Environment (getArgs)
 import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, getGenDeps, processFileToCore, processFileToHS)
 import Core.Adjust.ReduceEtas
-import Package.Publish (runPublishCommand, AuthMode(..))
+import Package.Publish (runPublishCommand, runBumpCommand, AuthMode(..))
 
 -- | Show usage information
 showUsage :: IO ()
 showUsage = do
   putStrLn "Usage:"
-  putStrLn "  bend publish [--manual-cookie]"
+  putStrLn "  bend publish [--manual-cookie] [module]"
+  putStrLn "  bend bump [--manual-cookie] module"
   putStrLn "  bend <file.bend> [options]"
   putStrLn ""
   putStrLn "Options:"
@@ -25,8 +26,8 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    ["publish"]                          -> runPublishCommand AuthAuto
-    ["publish", "--manual-cookie"]       -> runPublishCommand AuthManual
+    ("publish":rest)                     -> runPublish rest
+    ("bump":rest)                        -> runBump rest
     [file, "--to-javascript"] | ".bend"    `isSuffixOf` file -> processFileToJS file
     [file, "--to-javascript"] | ".bend.py" `isSuffixOf` file -> processFileToJS file
     [file, "--to-hvm"] | ".bend"    `isSuffixOf` file -> processFileToHVM file
@@ -43,6 +44,25 @@ main = do
     [file] | ".bend.py" `isSuffixOf` file -> processFile file
     otherwise                             -> showUsage
   where isSuffixOf suffix str = reverse suffix == take (length suffix) (reverse str)
+
+        runPublish xs =
+          let (mode, rest) = withAuthFlag xs
+          in case rest of
+               []           -> runPublishCommand mode Nothing
+               [moduleName] -> runPublishCommand mode (Just moduleName)
+               _            -> showUsage
+
+        runBump xs =
+          let (mode, rest) = withAuthFlag xs
+          in case rest of
+               [moduleName] -> runBumpCommand mode moduleName
+               _            -> showUsage
+
+        withAuthFlag :: [String] -> (AuthMode, [String])
+        withAuthFlag xs =
+          case break (== "--manual-cookie") xs of
+            (before, _:after) -> (AuthManual, before ++ after)
+            (before, [])      -> (AuthAuto, before)
 
 -- main :: IO ()
 -- main = testEtaForm
