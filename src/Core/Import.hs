@@ -2,6 +2,7 @@ module Core.Import
   ( autoImport
   , autoImportWithExplicit
   , extractModuleName
+  , extractMainFQN
   ) where
 
 import Control.Monad (when)
@@ -15,6 +16,7 @@ import System.FilePath ((</>))
 import qualified System.FilePath as FP
 import System.IO (hPutStrLn, stderr)
 import Data.Char (isUpper)
+import Data.Maybe (listToMaybe, isJust)
 
 import Core.Deps
 import Core.Parse.Book (doParseBook)
@@ -469,3 +471,13 @@ extractModuleName path =
                             then take (length withoutBend - 2) withoutBend
                             else withoutBend
   in withoutUnderscore
+
+extractMainFQN :: FilePath -> Book -> String
+extractMainFQN path book = do
+  let moduleName = extractModuleName path
+      mainName = moduleName ++ "::main"
+      candidates  = ['0':mainName, '1':mainName]
+  case [ n | n <- candidates, isJust (getDefn book n) ] of
+    (name:_) -> name
+    []       -> mainName
+  

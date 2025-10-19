@@ -66,6 +66,7 @@ import Control.Monad (unless, foldM)
 import Data.Maybe (fromJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Debug.Trace
 
 import Control.Exception (throw)
 import Core.Adjust.DesugarFrks
@@ -73,6 +74,7 @@ import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ResolveEnums
 import Core.Adjust.ReduceEtas
+import Core.Adjust.SimplifyNames
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -128,9 +130,9 @@ adjustBook book@(Book defs names) = do
         Done t' -> t'
         Fail e  -> throw (BendException e)
   let adjustedBook  = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
-  -- let (annSplitBook, success) = unsafePerformIO $ annotateSplitBook adjustedBook 
-  -- Done annSplitBook
-  Done adjustedBook
+  let simpleNamed = simplifyNames adjustedBook
+  -- Done adjustedBook
+  Done simpleNamed
 
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
 adjustBookWithPats :: Book -> Result Book
@@ -155,7 +157,7 @@ checkFreeVarsInBook book@(Book defs names) =
     [] -> book
     ((name, frees):_) -> 
       let freeName = S.elemAt 0 frees
-      in throw (BendException $ Undefined noSpan (Ctx []) freeName (Just $ "in definition '" ++ name ++ "'"))
+      in throw (BendException $ Undefined noSpan (Ctx []) (show $ Ref freeName 0) (Just $ "in definition '" ++ (show $ Ref name 0) ++ "'"))
 
 -- | The recursive worker function that adjusts a single definition.
 -- It takes a set of names currently in the recursion stack to detect cycles.

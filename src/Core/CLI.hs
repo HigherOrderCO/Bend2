@@ -36,7 +36,7 @@ import Core.Adjust.SplitAnnotate (check, infer)
 import Core.Bind
 -- import Core.Check
 import Core.Deps
-import Core.Import (autoImportWithExplicit, extractModuleName)
+import Core.Import (autoImportWithExplicit, extractModuleName, extractMainFQN)
 import Core.Parse.Book (doParseBook)
 import Core.Parse.Parse (ParserState(..))
 import Core.Type
@@ -93,13 +93,17 @@ checkBook book@(Book defs names) = do
             return (inj, term', typ')
       case checkResult of
         Done (inj', term', typ') -> do
-          putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
+          putStrLn $ "\x1b[32m✓ " ++ hideLabel name ++ "\x1b[0m"
           return ((name, (inj', term', typ')) : accDefs, accSuccess)
         Fail e -> do
-          hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
+          hPutStrLn stderr $ "\x1b[31m✗ " ++ hideLabel name ++ "\x1b[0m"
           hPutStrLn stderr $ show e
           -- Keep original term when check fails
           return ((name, (inj, term, typ)) : accDefs, False)
+      where
+        hideLabel ('0':rest) = rest
+        hideLabel ('1':rest) = rest
+        hideLabel name = name
 
 -- | Parse a Bend file into a Book
 parseFile :: FilePath -> IO Book
@@ -117,8 +121,7 @@ parseFile file = do
 -- | Run the main function from a book
 runMain :: FilePath -> Book -> IO ()
 runMain filePath book = do
-  let moduleName = extractModuleName filePath
-      mainFQN = moduleName ++ "::main"
+  let mainFQN = extractMainFQN filePath book
   case getDefn book mainFQN of
     Nothing -> do
       return ()
@@ -149,15 +152,15 @@ processFileInternal :: FilePath -> Bool -> IO ()
 processFileInternal file allowGeneration = do
   content <- readFile file
   (rawBook, importedBook) <- parseBookWithAuto file content
-  let moduleName = extractModuleName file
-      mainFQN = moduleName ++ "::main"
-      genInfos = collectGenInfos file rawBook
+  let genInfos = collectGenInfos file rawBook
 
   bookAdj <- case adjustBook importedBook of
     Done b -> return b
     Fail e -> showErrAndDie e
   let metasPresent = bookHasMet bookAdj
   bookChk <- checkBook bookAdj
+
+  let mainFQN = extractMainFQN file bookChk
 
   if null genInfos
     then do
@@ -245,14 +248,13 @@ processFileToJS file = do
 -- | Process a Bend file and compile to HVM
 processFileToHVM :: FilePath -> IO ()
 processFileToHVM file = do
-  let moduleName = extractModuleName file
-  let mainFQN = moduleName ++ "::main"
   book <- parseFile file
   result <- try $ do
     bookAdj <- case adjustBook book of
       Done b -> return b
       Fail e -> showErrAndDie e
     -- putStrLn $ show bookAdj
+    let mainFQN = extractMainFQN file bookAdj
     let hvmCode = HVM.compile bookAdj mainFQN
     putStrLn hvmCode
   case result of
@@ -262,8 +264,6 @@ processFileToHVM file = do
 -- | Process a Bend file and compile to Haskell
 processFileToHS :: FilePath -> IO ()
 processFileToHS file = do
-  let moduleName = extractModuleName file
-  let mainFQN = moduleName ++ "::main"
   book <- parseFile file
   result <- try $ do
     bookAdj <- case adjustBook book of
@@ -271,6 +271,7 @@ processFileToHS file = do
       Fail e -> showErrAndDie e
     -- bookChk <- checkBook bookAdj
     -- putStrLn $ show bookChk
+    let mainFQN = extractMainFQN file bookAdj
     let hsCode = HS.compile bookAdj mainFQN
     putStrLn hsCode
   case result of

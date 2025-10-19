@@ -28,7 +28,7 @@ showTerm _ term = go 0 M.empty term
     go d vars term = case term of
       -- Variables
       Var k i      -> showName vars k i
-      Ref k _      -> k
+      Ref k _      -> shortName k
       Sub t        -> go d vars t
 
       -- IO type
@@ -201,9 +201,11 @@ showTerm _ term = go 0 M.empty term
       Frk l a b    -> "fork " ++ go d vars l ++ ":" ++ go d vars a ++ " else:" ++ go d vars b
 
 shortName :: String -> String
-shortName name = case splitOn "::" name of
-  [] -> name
+shortName name@('0':rest) = name
+shortName name@('1':rest) = case splitOn "::" rest of
+  [] -> rest
   xs -> last xs
+shortName name = name
 
 showHint :: Maybe String -> String
 showHint Nothing = ""

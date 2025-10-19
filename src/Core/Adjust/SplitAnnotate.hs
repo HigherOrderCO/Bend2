@@ -139,7 +139,7 @@ infer d span book@(Book defs names) ctx term =
     Ref k i -> do
       case getDefn book k of
         Just (_, _, typ) -> Done typ
-        Nothing          -> Fail $ Undefined span (normalCtx book ctx) k Nothing
+        Nothing          -> Fail $ Undefined span (normalCtx book ctx) (show $ Ref k i) Nothing
 
     -- ctx |- x : T
     -- ------------ infer-Sub
