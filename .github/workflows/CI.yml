@@ -1,0 +1,52 @@
+name: Bend2 CI
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+jobs:
+  bend2-pipeline:
+    name: Bend2 CI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - name: Set up GHC and Cabal
+        uses: haskell-actions/setup@v2
+        id: setup-haskell
+        with:
+          ghc-version: '9.10.1'  # first version with GHC2024 support
+          cabal-version: '3.10'
+          
+      - name: Update Cabal package list
+        run: cabal update
+        
+      - name: Install system dependencies
+        run: |
+          if [ "${{ matrix.os }}" == "macos-latest" ]; then
+            brew install libffi
+          fi
+        shell: bash
+      
+      - name: Cache Cabal packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            ${{ steps.setup-haskell.outputs.cabal-store }}
+            ~/.cabal/packages
+            ~/.cabal/store
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project*') }}
+          restore-keys: |
+            ${{ runner.os }}-cabal-
+            
+      - name: Build dependencies
+        run: cabal build --only-dependencies
+          
+      - name: Build the project
+        run: cabal build
