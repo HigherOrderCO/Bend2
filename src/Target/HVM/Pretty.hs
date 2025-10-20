@@ -89,7 +89,7 @@ prettyGenerated simpleName funType ctxTerms rawTerm = do
   pure (ensureTrailingNewline doc)
 
 showHelper :: Term -> String
-showHelper = showTerm False
+showHelper = showTerm emptyBook
 
 data SignaturePieces = SignaturePieces
   [String]
@@ -266,13 +266,13 @@ emitDef name tyParams valParams retType =
     "def " ++ name
       ++ renderGenerics tyParams
       ++ "(" ++ L.intercalate ", " (map renderParam valParams) ++ ")"
-      ++ " -> " ++ showTerm False retType ++ ":"
+      ++ " -> " ++ showTerm emptyBook retType ++ ":"
   where
     renderGenerics [] = ""
     renderGenerics params = "<" ++ L.intercalate ", " params ++ ">"
 
     renderParam (paramName, paramType) =
-      paramName ++ ": " ++ showTerm False paramType
+      paramName ++ ": " ++ showTerm emptyBook paramType
 
 emitMatch :: String -> PrettyM () -> PrettyM ()
 emitMatch scrutinee body = do

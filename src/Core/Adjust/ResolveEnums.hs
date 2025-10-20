@@ -29,7 +29,7 @@ type EnumMap = M.Map String [String]
 
 -- | Extract all enums from a Book and build the enum map
 extractEnums :: Book -> EnumMap
-extractEnums (Book defs _) =
+extractEnums (Book defs _ _) =
   M.foldrWithKey extractFromDefn M.empty defs
   where
     extractFromDefn :: Name -> Defn -> EnumMap -> EnumMap
@@ -272,7 +272,7 @@ resolveEnumsInDefn emap (inj, term, typ) = do
 
 -- | Resolve enums in an entire Book
 resolveEnumsInBook :: Book -> Result Book
-resolveEnumsInBook book@(Book defs names) = do
+resolveEnumsInBook book@(Book defs names m) = do
   let emap = extractEnums book
   resolvedDefs <- M.traverseWithKey (\_ defn -> resolveEnumsInDefn emap defn) defs
-  Done (Book resolvedDefs names)
+  Done (Book resolvedDefs names m)

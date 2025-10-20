@@ -39,7 +39,7 @@ data GenInfo = GenInfo
   }
 
 collectGenInfos :: FilePath -> Book -> [GenInfo]
-collectGenInfos file (Book defs names) =
+collectGenInfos file (Book defs names _) =
   mapMaybe lookupGen names
   where
     lookupGen name = do
@@ -86,7 +86,7 @@ splitOnSep sep str = go str
 -------------------------------------------------------------------------------
 
 bookHasMet :: Book -> Bool
-bookHasMet (Book defs _) =
+bookHasMet (Book defs _ _) =
   any (\(_, term, _) -> hasMet term) (M.elems defs)
 
 generateDefinitions :: FilePath -> Book -> Name -> [GenInfo]
@@ -198,8 +198,8 @@ lineStartOffset src linesToSkip = go src linesToSkip 0
 -------------------------------------------------------------------------------
 
 buildGenDepsBook :: Book -> Book
-buildGenDepsBook book@(Book defs names) =
-  Book finalDefs finalNames
+buildGenDepsBook book@(Book defs names m) =
+  Book finalDefs finalNames m
   where
     genDefs = M.filter (\(_, term, _) -> hasMet term) defs
     genNames = M.keysSet genDefs

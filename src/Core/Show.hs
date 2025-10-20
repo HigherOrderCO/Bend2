@@ -17,8 +17,8 @@ import System.IO
 import System.IO.Unsafe (unsafePerformIO)
 
 -- Simple term display with no shadowing or prefix logic
-showTerm :: Bool -> Term -> String
-showTerm _ term = go 0 M.empty term
+showTerm :: Book -> Term -> String
+showTerm book@(Book _ _ (refCounts,symCounts)) term = go 0 M.empty term
   where
     showName vars k i = case M.lookup k vars of
       Just j | i < j -> k ++ "^" ++ show i
@@ -28,7 +28,7 @@ showTerm _ term = go 0 M.empty term
     go d vars term = case term of
       -- Variables
       Var k i      -> showName vars k i
-      Ref k _      -> shortName k
+      Ref k _      -> shortName refCounts k
       Sub t        -> go d vars t
 
       -- IO type
@@ -89,11 +89,11 @@ showTerm _ term = go 0 M.empty term
       LstM n c     -> "λ{[]:" ++ go d vars n ++ ";<>:" ++ go d vars c ++ "}"
 
       -- Enum
-      Enu s        -> "enum{" ++ intercalate "," (map (("&" ++) . shortName) s) ++ "}"
-      Sym s        -> "&" ++ shortName s
+      Enu s        -> "enum{" ++ intercalate "," (map (("&" ++) . shortName symCounts) s) ++ "}"
+      Sym s        -> "&" ++ shortName symCounts s
       EnuM cs d'   -> "λ{" ++ intercalate ";" cases ++ ";" ++ go d vars d' ++ "}"
         where
-          cases = map (\(s,t) -> "&" ++ shortName s ++ ":" ++ go d vars t) cs
+          cases = map (\(s,t) -> "&" ++ shortName symCounts s ++ ":" ++ go d vars t) cs
 
       -- Numbers
       Num t        -> case t of
@@ -135,7 +135,7 @@ showTerm _ term = go 0 M.empty term
             Sig _ (Lam k _ _) | k /= "_" -> "(" ++ go (d+1) vars t ++ ")"
             _                           ->         go (d+1) vars t
       Tup _ _      -> case unsnoc (flattenTup term) of
-             Just ((Sym name : xs),One) -> "@" ++ shortName name ++ "{" ++ intercalate "," (map show xs) ++ "}"
+             Just ((Sym name : xs),One) -> "@" ++ shortName symCounts name ++ "{" ++ intercalate "," (map show xs) ++ "}"
              _                          -> "(" ++ intercalate "," (map (\t -> go d vars t) (flattenTup term)) ++ ")"
       SigM f       -> "λ{(,):" ++ go d vars f ++ "}"
 
@@ -216,23 +216,33 @@ showTerm _ term = go 0 M.empty term
           showPat' p       = "(" ++ go d vars p ++ ")"
       Frk l a b    -> "fork " ++ go d vars l ++ ":" ++ go d vars a ++ " else:" ++ go d vars b
 
-shortName :: String -> String
-shortName name@('?':'0':rest) = name
-shortName name@('?':'1':rest) = case splitOn "::" rest of
-  [] -> rest
+shortName :: M.Map Name Int -> String -> String
+-- shortName name@('?':'0':rest) = name
+-- shortName name@('?':'1':rest) = case splitOn "::" rest of
+--   [] -> rest
+--   xs -> last xs
+-- shortName name = name
+
+shortName count name =  case M.lookup (cutName name) count of
+      Just n | n > 1 -> name
+      _              -> cutName name
+  where
+cutName :: String -> String
+cutName name = case splitOn "::" name of
+  [] -> name
   xs -> last xs
-shortName name = name
+
 
 showHint :: Maybe String -> String
 showHint Nothing = ""
 showHint (Just h) = "\x1b[1mHint:\x1b[0m " ++ h ++ "\n"
 
 instance Show Term where
-  show = showTerm False
+  show = showTerm emptyBook 
 
 instance Show Book where
-  show (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
-    where showDefn k (_, x, t) = k ++ " : " ++ show t ++ " = " ++ showTerm True x
+  show book@(Book defs names m) = unlines [showDefn name (defs M.! name) | name <- names]
+    where showDefn k (_, x, t) = k ++ " : " ++ show t ++ " = " ++ showTerm book x
 
 instance Show Span where
   show span = "\n\x1b[1mLocation:\x1b[0m \x1b[2m(line " ++ show (fst $ spanBeg span) ++ ", column " ++ show (snd $ spanBeg span) ++ ")\x1b[0m\n" ++ highlightError (spanBeg span) (spanEnd span) (spanSrc span)
@@ -242,10 +252,10 @@ instance Show Error where
     CantInfer span ctx hint       -> "\x1b[1mCantInfer:\x1b[0m\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     Unsupported span ctx hint     -> "\x1b[1mUnsupported:\x1b[0m\nCurrently, Bend doesn't support matching on non-var expressions.\nThis will be added later. For now, please split this definition.\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     Undefined span ctx name hint  -> "\x1b[1mUndefined:\x1b[0m " ++ name ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    TypeMismatch span ctx goal typ hint -> "\x1b[1mMismatch:\x1b[0m\n- Goal: " ++ showTerm True goal ++ "\n- Type: " ++ showTerm True typ ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    TermMismatch span ctx a b hint -> "\x1b[1mMismatch:\x1b[0m\n- " ++ showTerm True a ++ "\n- " ++ showTerm True b ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    TypeMismatch span book ctx goal typ hint -> "\x1b[1mMismatch:\x1b[0m\n- Goal: " ++ showTerm book goal ++ "\n- Type: " ++ showTerm book typ ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    TermMismatch span book ctx a b hint -> "\x1b[1mMismatch:\x1b[0m\n- " ++ showTerm book a ++ "\n- " ++ showTerm book b ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     IncompleteMatch span ctx hint -> "\x1b[1mIncompleteMatch:\x1b[0m\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    UnknownTermination term       -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
+    UnknownTermination book term       -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
     ImportError span msg          -> "\x1b[1mImportError:\x1b[0m " ++ msg ++ show span
     AmbiguousEnum span ctx ctor fqns hint -> "\x1b[1mAmbiguousEnum:\x1b[0m &" ++ ctor ++ "\nCould be:\n" ++ unlines ["  - &" ++ fqn | fqn <- fqns] ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     CompilationError msg          -> "\x1b[1mCompilationError:\x1b[0m " ++ msg

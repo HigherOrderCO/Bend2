@@ -79,11 +79,11 @@ executeIO book action = case whnf book action of
     _ -> return One
 
 checkBook :: Book -> IO Book
-checkBook book@(Book defs names) = do
+checkBook book@(Book defs names m) = do
   let orderedDefs = [(name, fromJust (M.lookup name defs)) | name <- names]
   (annotatedDefs, success) <- foldM checkAndAccumulate ([], True) orderedDefs
   unless success exitFailure
-  return $ Book (M.fromList (reverse annotatedDefs)) names
+  return $ Book (M.fromList (reverse annotatedDefs)) names m
   where
     checkAndAccumulate (accDefs, accSuccess) (name, (inj, term, typ)) = do
       let checkResult = do 
@@ -210,8 +210,8 @@ processFileToCore file = do
     Left (BendException e) -> showErrAndDie e
     Right () -> return ()
   where
-    showBookWithFQN (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
-    showDefn k (_, x, t) = k ++ " : " ++ showTerm True t ++ " = " ++ showTerm True x
+    showBookWithFQN (Book defs names _) = unlines [showDefn name (defs M.! name) | name <- names]
+    showDefn k (_, x, t) = k ++ " : " ++ showTerm emptyBook t ++ " = " ++ showTerm emptyBook x
 
 -- | Try to format JavaScript code using prettier if available
 formatJavaScript :: String -> IO String
@@ -302,7 +302,7 @@ getGenDeps file = do
 
 -- | Collect all refs from a Book
 collectAllRefs :: Book -> S.Set Name
-collectAllRefs (Book defs _) = 
+collectAllRefs (Book defs _ _) = 
   S.unions $ map collectRefsFromDefn (M.elems defs)
   where
     collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)
