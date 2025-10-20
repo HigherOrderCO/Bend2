@@ -37,8 +37,8 @@ showTerm _ term = go 0 M.empty term
       -- Definitions
       Fix k f      -> "μ" ++ k ++ ". " ++ go (d+1) vars (f (Var k d))
       Let k mt v f -> case mt of
-        Just t  -> k ++ " : " ++ go d vars t ++ " = " ++ go d vars v ++ " " ++ go (d+1) vars (f (Var k d))
-        Nothing -> k ++                         " = " ++ go d vars v ++ " " ++ go (d+1) vars (f (Var k d))
+        Just t  -> k ++ " : " ++ go d vars t ++ " = " ++ go d vars v ++ " " ++ go (d+1) (M.insert k d vars) (f (Var k d))
+        Nothing -> k ++                         " = " ++ go d vars v ++ " " ++ go (d+1) (M.insert k d vars) (f (Var k d))
       Use k v f    -> "use " ++ k ++ " = " ++ go d vars v ++ " " ++ go (d+1) vars (f (Var k d))
 
       -- Universe
@@ -124,7 +124,7 @@ showTerm _ term = go 0 M.empty term
       -- Pair
       Sig a b      -> case cut b of
         Lam "_" t f -> "(" ++ showArg a ++ " & " ++ showCodomain (f (Var "_" d)) ++ ")"
-        Lam k t f   -> "Σ" ++ k ++ ":" ++ showArg a ++ ". " ++ go (d+1) vars (f (Var k d))
+        Lam k t f   -> "Σ" ++ k ++ ":" ++ showArg a ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
         _           -> "Σ"             ++ showArg a ++ ". " ++ go d vars b
         where
           showArg t = case cut t of
@@ -142,7 +142,7 @@ showTerm _ term = go 0 M.empty term
       -- Function
       All a b      -> case b of
         Lam "_" t f -> showArg a ++ " -> " ++ showCodomain (f (Var "_" d))
-        Lam k t f   -> "∀" ++ k ++ ":" ++ showArg a ++ ". " ++ go (d+1) vars (f (Var k d))
+        Lam k t f   -> "∀" ++ k ++ ":" ++ showArg a ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
         _           -> "∀" ++ showArg a ++ ". " ++ go d vars b
         where
           showArg t = case cut t of
@@ -153,8 +153,8 @@ showTerm _ term = go 0 M.empty term
             All _ (Lam k _ _) | k /= "_" -> "(" ++ go (d+1) vars t ++ ")"
             _                           ->         go (d+1) vars t
       Lam k mt f   -> case mt of
-        Just t  -> "λ" ++ k ++ ":" ++ go d vars t ++ ". " ++ go (d+1) vars (f (Var k d))
-        Nothing -> "λ" ++ k ++  ". " ++ go (d+1) vars (f (Var k d))
+        Just t  -> "λ" ++ k ++ ":" ++ go d vars t ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
+        Nothing -> "λ" ++ k ++  ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
       App _ _      -> fnStr ++ "(" ++ intercalate "," (map (\arg -> go d vars arg) args) ++ ")"
         where
           (fn, args) = collectApps term []
