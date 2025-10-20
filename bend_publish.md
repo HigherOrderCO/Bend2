@@ -1,28 +1,53 @@
 
-# Bend-publish command
+# Bend publish & bump commands
 
-This is the specification for the Bend publish command feature.
+Every package that lives under `BendRoot/@<username>` is published as a
+versioned *module snapshot*. Snapshot directories must follow the pattern
+`module=<version>` (for example `@lorenzo/Math=4`).  A snapshot is immutable:
+once `Math=4` is published it can never be modified, and a new version must be
+created instead.
 
-This command is related to `docs/import-system.md`, so read it.
+Key rules:
 
-Basically, this command will be used for a user that wants to publish a specific library to our `BendRoot`, the centralized index of packages.
+- All directories directly under `@<username>` must already carry a version
+  suffix (`=0`, `=1`, …). A directory without a version is treated as an error
+  and the CLI aborts with a helpful message.
+- All imports and internal references must use the same `=<version>` syntax.
+  The CLI does not attempt to infer the version of a reference.
 
-Remember that this assumes that the user will always be working on a `BendRoot/` path (and bend should guarantee that).
+### Publishing
 
-The flow should be the following:
-- User is writing programs on `BendRoot/@username` where `@username` is that user github username.
-- User writes a lib: `BendRoot/@lorenzo/Math/add.bend`
-- Now, user wants to publish this lib, and runs `bend publish`
+- `bend publish` authenticates (device flow or manual cookie) and attempts to
+  publish every versioned module under `@<username>`.
+- `bend publish <module>` publishes a single module. The argument can be either
+  `module=N` (explicit snapshot) or just `module` (the CLI picks the highest
+  local version).
+- Before uploading, the CLI queries the package index:
+  - If the version already exists remotely, the publish is rejected with an
+    error like `module Math=3 already published; run 'bend bump Math'`.
+  - Otherwise the CLI streams the snapshot using canonical paths
+    `@<username>/module=N/...`.
+- When multiple modules are present, the CLI simply walks them all
 
-We have some challenges here. The user must be authenticated through github, and also the user should be able to *choose* what is going to be published.
+### Bumping
 
-So this `bend publish` command should be more a `cli-like` tool, that allows choosing some stuff.
-Therefore, first of all, when running `bend publish`, it should check / try to authenticate the user.
-I think this should be possible through some link, like "click that link, authenticate in the browser and come back". Then, if this worked, we should open something similar to `lazygit` that will basically lists the repositories / libs under `BendRoot/@username` so the user can choose which one it will publish.
+- `bend bump <module>` creates the next version of a module.
+  - The command renames the latest local snapshot to
+    `=<next-version>`.
+  - It updates every occurrence of `@<username>/module=old` inside the new
+    snapshot to reference the new version.
+  - The new version is chosen so that it is strictly greater than both the local
+    snapshot and the latest published version reported by the API.
+  - After the bump you can edit the new directory and run `bend publish`.
 
-Once chosen, we should call the Bend package index API that will correctly publish the package and return the success / failure feedback and the updated version (and something like "oh you can use it via `@lorenzo/Math/add` now.
+### Directory Workflow Summary
 
-The api documentation is at @API_doc.md
+1. Start a module at `BendRoot/@user/module=1`.
+2. Write code referencing other modules with explicit `=version` segments.
+3. When ready, run `bend publish [module]`. The CLI uploads each snapshot that
+   has not been published before.
+4. To iterate on a published module, execute `bend bump module` and then edit
+   the freshly created `module=next` directory.
 
 ## Friendlier Authentication Flow (Future Work)
 

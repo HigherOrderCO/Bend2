@@ -6,7 +6,7 @@ module Package.Publish
   , runBumpCommand
   ) where
 
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException, try, throwIO)
 import Control.Monad (forM, forM_, unless, when)
 import qualified Data.Aeson as Aeson
 import Data.Aeson ((.:), (.:?))
@@ -48,6 +48,8 @@ import Text.Read (readMaybe)
 import Core.Import (ensureBendRoot)
 import Package.Auth (AuthMode(..), AuthSession(..), AuthUser(..), ensureAuthenticated)
 import Package.Index
+import Core.Show (BendException(..), Error(..))
+import Core.Type (noSpan)
 
 data ModuleCandidate = ModuleCandidate
   { mcFullName  :: String    -- e.g. "Math=3"
@@ -56,6 +58,9 @@ data ModuleCandidate = ModuleCandidate
   , mcDirectory :: FilePath
   , mcFiles     :: [LocalFile]
   } deriving (Show, Eq)
+
+throwUserError :: String -> IO a
+throwUserError msg = throwIO (BendException (ImportError noSpan msg))
 
 data LocalFile = LocalFile
   { lfAbsolute :: FilePath
@@ -105,17 +110,17 @@ runPublishCommand authMode targetModule = do
 
   exists <- doesDirectoryExist ownerDir
   unless exists $
-    fail $ "No directory found for @" ++ ownerRaw ++ ". Expected: " ++ ownerDir
+    throwUserError $ "No directory found for @" ++ ownerRaw ++ ". Expected: " ++ ownerDir
 
   (modules, invalids) <- discoverModules rootCanonical ownerRaw ownerDir
   unless (null invalids) $ do
-    fail $ unlines
+    throwUserError $ unlines
       ( "Found module directories without version suffix:"
       : map (\name -> "  - " ++ name ++ " (rename to " ++ name ++ "=0)") invalids
       )
 
   when (null modules) $
-    fail "No publishable modules found under your BendRoot directory."
+    throwUserError "No publishable modules found under your BendRoot directory."
 
   modulesToPublish <- case targetModule of
     Nothing -> pure modules
@@ -142,7 +147,9 @@ runPublishCommand authMode targetModule = do
     forM_ successes $ \resp -> do
       putStrLn $ "Successfully published " ++ prPackage resp ++ " version " ++ show (prVersion resp)
       putStrLn $ "Storage path: " ++ prStoragePath resp
-  unless (null errors) $ fail (unlines errors)
+  case errors of
+    []      -> pure ()
+    (e : _) -> throwUserError e
 
 runBumpCommand :: AuthMode -> String -> IO ()
 runBumpCommand authMode rawModule = do
@@ -156,17 +163,17 @@ runBumpCommand authMode rawModule = do
 
   exists <- doesDirectoryExist ownerDir
   unless exists $
-    fail $ "No directory found for @" ++ ownerRaw ++ ". Expected: " ++ ownerDir
+    throwUserError $ "No directory found for @" ++ ownerRaw ++ ". Expected: " ++ ownerDir
 
   (modules, invalids) <- discoverModules rootCanonical ownerRaw ownerDir
   unless (null invalids) $ do
-    fail $ unlines
+    throwUserError $ unlines
       ( "Found module directories without version suffix:"
       : map (\name -> "  - " ++ name ++ " (rename to " ++ name ++ "=0)") invalids
       )
 
   when (null modules) $
-    fail "No versioned modules found under your BendRoot directory."
+    throwUserError "No versioned modules found under your BendRoot directory."
 
   moduleCand <- selectModule modules rawModule
 
@@ -182,7 +189,7 @@ runBumpCommand authMode rawModule = do
 
   existsNew <- doesDirectoryExist newDir
   when existsNew $
-    fail $ "Directory '" ++ newFullName ++ "' already exists. Clean it up or choose a different version."
+    throwUserError $ "Directory '" ++ newFullName ++ "' already exists. Clean it up or choose a different version."
 
   putStrLn $ "Renaming @" ++ ownerRaw ++ "/" ++ mcFullName moduleCand
            ++ " -> @" ++ ownerRaw ++ "/" ++ newFullName
@@ -322,8 +329,8 @@ fetchLatestVersion cfg session (ownerRaw, packageName) = do
       Left _        -> pure Nothing
       Right details -> pure (pdLatestVersion (details :: PackageDetails))
     404 -> pure Nothing
-    401 -> fail "Authentication failed while fetching package info."
-    _   -> fail $ "Unexpected response while fetching package info: HTTP " ++ show status
+    401 -> throwUserError "Authentication failed while fetching package info."
+    _   -> throwUserError $ "Unexpected response while fetching package info: HTTP " ++ show status
 
 publishModule
   :: IndexConfig
