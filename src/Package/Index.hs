@@ -40,7 +40,6 @@ ensureFile config posixPath = do
     downloadFile localPath = do
       let encodedPath = encodePath posixPath
           url = apiBaseUrl config ++ "/api/files/" ++ encodedPath
-      putStrLn $ "[package-index] GET " ++ url
       result <- try $ do
         request <- parseRequest ("GET " ++ url)
         response <- httpLBS request

@@ -99,7 +99,6 @@ runPublishCommand authMode targetModule = do
   rootCanonical <- canonicalizePath root
   indexCfg <- defaultIndexConfig rootCanonical
   session <- ensureAuthenticated authMode indexCfg
-  putStrLn $ "Using session cookie: connect.sid=" ++ asCookie session
 
   let ownerRaw = auUsername (asUser session)
       ownerDir = rootCanonical </> ("@" ++ ownerRaw)
@@ -151,7 +150,6 @@ runBumpCommand authMode rawModule = do
   rootCanonical <- canonicalizePath root
   indexCfg <- defaultIndexConfig rootCanonical
   session <- ensureAuthenticated authMode indexCfg
-  putStrLn $ "Using session cookie: connect.sid=" ++ asCookie session
 
   let ownerRaw = auUsername (asUser session)
       ownerDir = rootCanonical </> ("@" ++ ownerRaw)
@@ -342,7 +340,6 @@ publishModule cfg session ownerRaw candidate = do
     Just v | v >= version -> do
       let msg = "Error: module " ++ fullName ++ " already published; run 'bend bump "
                 ++ moduleBase ++ "' to create a new version."
-      putStrLn msg
       pure (Left msg)
     _ -> do
       let packageBase = "@" ++ ownerRaw ++ "/" ++ moduleBase ++ "=" ++ show version ++ "/"
@@ -357,11 +354,6 @@ publishModule cfg session ownerRaw candidate = do
           pathsPart = partLBS "paths" (Aeson.encode canonicalPaths)
           parts = versionPart : pathsPart : fileParts
           url = apiBaseUrl cfg ++ "/api/publish/@" ++ ownerRaw ++ "/" ++ moduleBase
-
-      putStrLn "Attempting publish request:"
-      putStrLn $ "  URL: " ++ url
-      putStrLn $ "  Version: " ++ show version
-      putStrLn $ "  Paths: " ++ show canonicalPaths
 
       requestBase <- parseRequest url
       let cookieHeader = "connect.sid=" ++ asCookie session
