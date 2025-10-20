@@ -35,7 +35,7 @@ showTerm _ term = go 0 M.empty term
       IO t         -> "IO<" ++ go d vars t ++ ">"
 
       -- Definitions
-      Fix k f      -> "μ" ++ k ++ ". " ++ go (d+1) vars (f (Var k d))
+      Fix k f      -> "μ" ++ k ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
       Let k mt v f -> case mt of
         Just t  -> k ++ " : " ++ go d vars t ++ " = " ++ go d vars v ++ " " ++ go (d+1) (M.insert k d vars) (f (Var k d))
         Nothing -> k ++                         " = " ++ go d vars v ++ " " ++ go (d+1) (M.insert k d vars) (f (Var k d))
@@ -154,7 +154,7 @@ showTerm _ term = go 0 M.empty term
             _                           ->         go (d+1) vars t
       Lam k mt f   -> case mt of
         Just t  -> "λ" ++ k ++ ":" ++ go d vars t ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
-        Nothing -> "λ" ++ k ++  ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
+        Nothing -> "λ" ++ k ++                       ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
       App _ _      -> fnStr ++ "(" ++ intercalate "," (map (\arg -> go d vars arg) args) ++ ")"
         where
           (fn, args) = collectApps term []
