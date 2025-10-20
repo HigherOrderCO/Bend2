@@ -20,15 +20,15 @@ simplifyNames book@(Book defs nams) = Book newDefs newNames
 -- simplifyNames book@(Book defs nams) = trace ("[variations] " ++ show (variationsMap book)) $ book
   where
     variations@(refVariations, symVariations) = variationsMap book
-    simplifyName count name@('0':_) = name
-    simplifyName count name@('1':_) = name
+    simplifyName count name@('?':'0':_) = name
+    simplifyName count name@('?':'1':_) = name
     simplifyName count name = case M.lookup (shortName name) count of
       Just n | n > 1 -> 
         -- trace ("[" ++ name ++ "] -> " ++ show ("0" ++ name)) $ 
-          "0" ++ name
+          "?0" ++ name
       _              -> 
         -- trace ("[" ++ name ++ "] -> " ++ show ("1" ++ name)) $ 
-          "1" ++ name
+          "?1" ++ name
 
     newNames = map (simplifyName refVariations) nams
     newDefs = M.fromList $ map (\(nam, (inj, term, typ)) -> (simplifyName refVariations nam, (inj, go term, go typ))) (M.toList defs)

@@ -476,7 +476,7 @@ extractMainFQN :: FilePath -> Book -> String
 extractMainFQN path book = do
   let moduleName = extractModuleName path
       mainName = moduleName ++ "::main"
-      candidates  = ['0':mainName, '1':mainName]
+      candidates  = ['?':'0':mainName, '?':'1':mainName]
   case [ n | n <- candidates, isJust (getDefn book n) ] of
     (name:_) -> name
     []       -> mainName

@@ -101,8 +101,8 @@ checkBook book@(Book defs names) = do
           -- Keep original term when check fails
           return ((name, (inj, term, typ)) : accDefs, False)
       where
-        hideLabel ('0':rest) = rest
-        hideLabel ('1':rest) = rest
+        hideLabel ('?':'0':rest) = rest
+        hideLabel ('?':'1':rest) = rest
         hideLabel name = name
 
 -- | Parse a Bend file into a Book

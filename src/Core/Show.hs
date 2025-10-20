@@ -123,9 +123,17 @@ showTerm _ term = go 0 M.empty term
 
       -- Pair
       Sig a b      -> case cut b of
-        Lam "_" _ f -> "(" ++ go (d+1) vars a ++ " & " ++ go (d+1) vars (f (Var "_" d)) ++ ")"
-        Lam k _ f   -> "Σ" ++ k ++ ":" ++ go d vars a ++ ". " ++ go (d+1) vars (f (Var k d))
-        _           -> "Σ" ++ go d vars a ++ ". " ++ go d vars b
+        Lam "_" t f -> "(" ++ showArg a ++ " & " ++ showCodomain (f (Var "_" d)) ++ ")"
+        Lam k t f   -> "Σ" ++ k ++ ":" ++ showArg a ++ ". " ++ go (d+1) vars (f (Var k d))
+        _           -> "Σ"             ++ showArg a ++ ". " ++ go d vars b
+        where
+          showArg t = case cut t of
+            All{} -> "(" ++ go d vars t ++ ")"
+            Sig{} -> "(" ++ go d vars t ++ ")"
+            _     ->        go d vars t
+          showCodomain t = case t of
+            Sig _ (Lam k _ _) | k /= "_" -> "(" ++ go (d+1) vars t ++ ")"
+            _                           ->         go (d+1) vars t
       Tup _ _      -> case unsnoc (flattenTup term) of
              Just ((Sym name : xs),One) -> "@" ++ shortName name ++ "{" ++ intercalate "," (map show xs) ++ "}"
              _                          -> "(" ++ intercalate "," (map (\t -> go d vars t) (flattenTup term)) ++ ")"
@@ -133,11 +141,19 @@ showTerm _ term = go 0 M.empty term
 
       -- Function
       All a b      -> case b of
-        Lam "_" _ f -> go d vars a ++ " -> " ++ go (d+1) vars (f (Var "_" d))
-        Lam k _ f   -> "∀" ++ k ++ ":" ++ go d vars a ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
-        _           -> "∀" ++ go d vars a ++ ". " ++ go d vars b
+        Lam "_" t f -> showArg a ++ " -> " ++ showCodomain (f (Var "_" d))
+        Lam k t f   -> "∀" ++ k ++ ":" ++ showArg a ++ ". " ++ go (d+1) vars (f (Var k d))
+        _           -> "∀" ++ showArg a ++ ". " ++ go d vars b
+        where
+          showArg t = case cut t of
+            All{} -> "(" ++ go d vars t ++ ")"
+            Sig{} -> "(" ++ go d vars t ++ ")"
+            _     ->        go d vars t
+          showCodomain t = case t of
+            All _ (Lam k _ _) | k /= "_" -> "(" ++ go (d+1) vars t ++ ")"
+            _                           ->         go (d+1) vars t
       Lam k mt f   -> case mt of
-        Just t  -> "λ" ++ k ++ "^" ++ show d ++ ":" ++ go d vars t ++ ". " ++ go (d+1) vars (f (Var k d))
+        Just t  -> "λ" ++ k ++ ":" ++ go d vars t ++ ". " ++ go (d+1) vars (f (Var k d))
         Nothing -> "λ" ++ k ++  ". " ++ go (d+1) vars (f (Var k d))
       App _ _      -> fnStr ++ "(" ++ intercalate "," (map (\arg -> go d vars arg) args) ++ ")"
         where
@@ -201,8 +217,8 @@ showTerm _ term = go 0 M.empty term
       Frk l a b    -> "fork " ++ go d vars l ++ ":" ++ go d vars a ++ " else:" ++ go d vars b
 
 shortName :: String -> String
-shortName name@('0':rest) = name
-shortName name@('1':rest) = case splitOn "::" rest of
+shortName name@('?':'0':rest) = name
+shortName name@('?':'1':rest) = case splitOn "::" rest of
   [] -> rest
   xs -> last xs
 shortName name = name
