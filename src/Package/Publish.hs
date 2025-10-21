@@ -48,8 +48,8 @@ import Text.Read (readMaybe)
 import Core.Import (ensureBendRoot)
 import Package.Auth (AuthMode(..), AuthSession(..), AuthUser(..), ensureAuthenticated)
 import Package.Index
-import Core.Show (BendException(..), Error(..))
-import Core.Type (noSpan)
+import Core.Show (BendException(..))
+import Core.Type (noSpan, Error(..))
 
 data ModuleCandidate = ModuleCandidate
   { mcFullName  :: String    -- e.g. "Math=3"
