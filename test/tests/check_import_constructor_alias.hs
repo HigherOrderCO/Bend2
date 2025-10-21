@@ -6,7 +6,7 @@ main_bend :: String
 main_bend = """
 import Tests/Color as Color
 
-def identity(c: Color::Color) -> Color::Color:
+def identity(c: Color) -> Color:
   match c:
     case @Color::Red:
       @Color::Red
@@ -15,17 +15,17 @@ def identity(c: Color::Color) -> Color::Color:
     case @Color::Blue:
       @Color::Blue
 
-def main : Color::Color =
+def main : Color =
   identity(@Color::Green)
 
-def is_red(c: Color::Color) -> Bool:
+def is_red(c: Color) -> Bool:
   match c:
     case @Color::Red:
       True
     case _:
       False
 
-def is_green(c: Color::Color) -> Bool:
+def is_green(c: Color) -> Bool:
   match c:
     case @Color::Green:
       True
