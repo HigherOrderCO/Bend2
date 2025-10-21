@@ -80,9 +80,6 @@ applyNameSubst subst name =
         then fnReplaced
         else name
 
-applyNameSubstSet :: SubstMap -> S.Set Name -> S.Set Name
-applyNameSubstSet subst = S.map (applyNameSubst subst)
-
 splitPathSegments :: String -> [String]
 splitPathSegments = filter (not . null) . splitOn "/"
 
