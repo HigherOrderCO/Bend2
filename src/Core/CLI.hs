@@ -156,8 +156,6 @@ processFileInternal file allowGeneration = do
   let metasPresent = bookHasMet bookAdj
   bookChk <- checkBook bookAdj
 
-  putStrLn $ show bookChk
-
   let mainFQN = extractMainFQN file bookChk
 
   if null genInfos
