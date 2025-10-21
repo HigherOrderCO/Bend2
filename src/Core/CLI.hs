@@ -93,17 +93,13 @@ checkBook book@(Book defs names m) = do
             return (inj, term', typ')
       case checkResult of
         Done (inj', term', typ') -> do
-          putStrLn $ "\x1b[32m✓ " ++ hideLabel name ++ "\x1b[0m"
+          putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
           return ((name, (inj', term', typ')) : accDefs, accSuccess)
         Fail e -> do
-          hPutStrLn stderr $ "\x1b[31m✗ " ++ hideLabel name ++ "\x1b[0m"
+          hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
           hPutStrLn stderr $ show e
           -- Keep original term when check fails
           return ((name, (inj, term, typ)) : accDefs, False)
-      where
-        hideLabel ('?':'0':rest) = rest
-        hideLabel ('?':'1':rest) = rest
-        hideLabel name = name
 
 -- | Parse a Bend file into a Book
 parseFile :: FilePath -> IO Book
@@ -159,6 +155,8 @@ processFileInternal file allowGeneration = do
     Fail e -> showErrAndDie e
   let metasPresent = bookHasMet bookAdj
   bookChk <- checkBook bookAdj
+
+  putStrLn $ show bookChk
 
   let mainFQN = extractMainFQN file bookChk
 

@@ -17,6 +17,7 @@ import qualified System.FilePath as FP
 import System.IO (hPutStrLn, stderr)
 import Data.Char (isUpper)
 import Data.Maybe (listToMaybe, isJust)
+import Debug.Trace
 
 import Core.Deps
 import Core.Parse.Book (doParseBook)
@@ -473,11 +474,8 @@ extractModuleName path =
   in withoutUnderscore
 
 extractMainFQN :: FilePath -> Book -> String
-extractMainFQN path book = do
+extractMainFQN path book =
   let moduleName = extractModuleName path
       mainName = moduleName ++ "::main"
-      candidates  = ['?':'0':mainName, '?':'1':mainName]
-  case [ n | n <- candidates, isJust (getDefn book n) ] of
-    (name:_) -> name
-    []       -> mainName
+  in mainName
   

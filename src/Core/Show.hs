@@ -217,12 +217,6 @@ showTerm book@(Book _ _ (refCounts,symCounts)) term = go 0 M.empty term
       Frk l a b    -> "fork " ++ go d vars l ++ ":" ++ go d vars a ++ " else:" ++ go d vars b
 
 shortName :: M.Map Name Int -> String -> String
--- shortName name@('?':'0':rest) = name
--- shortName name@('?':'1':rest) = case splitOn "::" rest of
---   [] -> rest
---   xs -> last xs
--- shortName name = name
-
 shortName count name =  case M.lookup (cutName name) count of
       Just n | n > 1 -> name
       _              -> cutName name
