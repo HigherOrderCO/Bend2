@@ -50,10 +50,13 @@ data CLIMode
   deriving Eq
 
 runCLI :: FilePath -> CLIMode -> IO ()
-runCLI path mode = runCLIGo path mode allowGen needCheck
-  where
-    allowGen  = mode `elem` [CLI_RUN]
-    needCheck = mode `elem` [CLI_RUN, CLI_TO_JAVASCRIPT, CLI_SHOW_CORE]
+runCLI path mode = do
+  let allowGen  = mode `elem` [CLI_RUN]
+      needCheck = mode `elem` [CLI_RUN, CLI_TO_JAVASCRIPT, CLI_SHOW_CORE]
+  result <- try @BendException (runCLIGo path mode allowGen needCheck)
+  case result of
+    Left (BendException err) -> showErrAndDie err
+    Right ()                 -> pure ()
 
 runCLIGo :: FilePath -> CLIMode -> Bool -> Bool -> IO ()
 runCLIGo path mode allowGen needCheck = do
