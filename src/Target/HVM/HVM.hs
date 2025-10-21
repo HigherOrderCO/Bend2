@@ -212,7 +212,7 @@ showError err = case err of
 
 -- Main compilation entry point
 compileBook :: Book -> String -> Either HCompileError (HBook, Nick)
-compileBook book@(Book defs _) mainFQN = do
+compileBook book@(Book defs _ _) mainFQN = do
   -- Pre-scan to collect all metavariable names
   let metas = S.fromList [name | (name, (_, term, _)) <- M.toList defs, isMet (cut term)]
   let hasMain = M.member mainFQN defs

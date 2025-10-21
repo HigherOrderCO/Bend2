@@ -26,7 +26,8 @@ def t(n:Nat) -> Nat:
 main :: IO ()
 main = testFile pat_match_undefined_gives_cant_infer
   "Pattern matchin on undefined gives cant infer instead of undefined val." $ \out err -> do
-    assert (err `has` "Unbound")
+    assert (err `has` "Undefined")
     assert (not (err `has` "Mismatch"))
+    assert (not (err `has` "CantInfer"))
 
 

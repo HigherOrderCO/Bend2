@@ -3,6 +3,7 @@ module Core.Import
   , autoImportWithExplicit
   , extractModuleName
   , ensureBendRoot
+  , extractMainFQN
   ) where
 
 import Control.Monad (when, unless)
@@ -15,6 +16,8 @@ import System.Directory (doesFileExist, getCurrentDirectory, canonicalizePath)
 import System.FilePath ((</>))
 import qualified System.FilePath as FP
 import Data.Char (isUpper)
+import Data.Maybe (listToMaybe, isJust)
+import Debug.Trace
 
 import Core.Deps
 import Core.Parse.Book (doParseBook)
@@ -184,8 +187,8 @@ substituteRefs subst = go S.empty
       Frk l a b   -> Frk (go bound l) (go bound a) (go bound b)
 
 substituteRefsInBook :: SubstMap -> Book -> Book
-substituteRefsInBook subst (Book defs names) =
-  Book (M.map (substituteInDef subst) defs) names
+substituteRefsInBook subst (Book defs names m) =
+  Book (M.map (substituteInDef subst) defs) names m
   where
     substituteInDef s (inj, term, typ) = (inj, substituteRefs s term, substituteRefs s typ)
 
@@ -205,7 +208,7 @@ buildAliasSubstMap = foldl' addAlias emptySubstMap
              in acc2
 
 buildLocalSubstMap :: FilePath -> Book -> SubstMap
-buildLocalSubstMap currentFile (Book defs _) =
+buildLocalSubstMap currentFile (Book defs _ _) =
   let filePrefix = modulePrefix ++ "::"
       localDefs = M.filterWithKey (\k _ -> filePrefix `prefixOf` k) defs
       fnMap = foldl' collect [] (M.toList localDefs)
@@ -220,7 +223,7 @@ buildLocalSubstMap currentFile (Book defs _) =
       in (withoutPrefix, fqn) : fs
 
 buildExportSubstMap :: FilePath -> Book -> Either String SubstMap
-buildExportSubstMap modulePath (Book defs _) =
+buildExportSubstMap modulePath (Book defs _ _) =
   let modulePrefix = extractModuleName modulePath
   in case lastPathSegment modulePrefix of
     Nothing -> Left $ "Error: invalid module path '" ++ modulePath ++ "'."
@@ -239,16 +242,16 @@ buildExportSubstMap modulePath (Book defs _) =
 -- Book helpers ----------------------------------------------------------------
 
 bookNames :: Book -> S.Set Name
-bookNames (Book defs _) = S.fromList (M.keys defs)
+bookNames (Book defs _ _) = S.fromList (M.keys defs)
 
 bookDefs :: Book -> M.Map Name Defn
-bookDefs (Book defs _) = defs
+bookDefs (Book defs _ _) = defs
 
 insertDefinition :: Book -> Name -> Defn -> Book
-insertDefinition (Book defs names) name defn =
+insertDefinition (Book defs names m) name defn =
   let defs' = M.insert name defn defs
       names' = if name `elem` names then names else names ++ [name]
-  in Book defs' names'
+  in Book defs' names' m
 
 definitionDepOrigins :: Defn -> M.Map Name Span
 definitionDepOrigins (_, term, typ) =
@@ -493,3 +496,10 @@ extractModuleName path =
                             then take (length withoutBend - 2) withoutBend
                             else withoutBend
   in withoutUnderscore
+
+extractMainFQN :: FilePath -> Book -> String
+extractMainFQN path book =
+  let moduleName = extractModuleName path
+      mainName = moduleName ++ "::main"
+  in mainName
+  

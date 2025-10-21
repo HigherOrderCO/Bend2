@@ -120,7 +120,7 @@ isConstructorSigma _ _ = False
 
 -- Infer the type of a term
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
-infer d span book@(Book defs names) ctx term =
+infer d span book@(Book defs names _) ctx term =
   case term of
 
     -- x : T in ctx
@@ -139,7 +139,7 @@ infer d span book@(Book defs names) ctx term =
     Ref k i -> do
       case getDefn book k of
         Just (_, _, typ) -> Done typ
-        Nothing          -> Fail $ Undefined span (normalCtx book ctx) k Nothing
+        Nothing          -> Fail $ Undefined span (normalCtx book ctx) (show $ Ref k i) Nothing
 
     -- ctx |- x : T
     -- ------------ infer-Sub
@@ -263,7 +263,7 @@ infer d span book@(Book defs names) ctx term =
       zT <- infer d span book ctx z
       sT <- case cut <$> infer d span book ctx s of
         Done (All (force book -> Nat) bT) -> return bT
-        Done sT' -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All Nat (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book sT') Nothing
+        Done sT' -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (All Nat (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book sT') Nothing
         Fail e   -> Fail e
       return $ All Nat (NatM zT sT)
 
@@ -298,7 +298,7 @@ infer d span book@(Book defs names) ctx term =
           case check d span book ctx c (All hT (Lam "_" (Just hT) (\_ -> All (Lst hT) (Lam "_" (Just (Lst hT)) (\_ -> nT))))) of
             Done _ -> return $ (hT, (Lam "_" (Just hT) (\_ -> Lam "_" (Just (Lst hT)) (\_ -> nT))))
             _      -> Fail $ CantInfer span (normalCtx book ctx) Nothing
-        Done cT' -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book cT') Nothing
+        Done cT' -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book cT') Nothing
         Fail e   -> Fail e
       return $ All (Lst hT) (LstM nT cT)
 
@@ -376,7 +376,7 @@ infer d span book@(Book defs names) ctx term =
           _ <- check d span book ctx x fA
           Done (App fB x)
         _ -> do
-          Fail $ TypeMismatch span (normalCtx book ctx) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book fT) Nothing
+          Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0)))) (normal book fT) Nothing
 
     -- ctx |- t : Set
     -- ctx |- a : t
@@ -408,7 +408,7 @@ infer d span book@(Book defs names) ctx term =
           let rewrittenCtx = rewriteCtx d book a b ctx
           infer d span book rewrittenCtx f
         _ ->
-          Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Eql (Var "_" 0) (Var "_" 0) (Var "_" 0))) (normal book eT) Nothing
+          Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (Eql (Var "_" 0) (Var "_" 0) (Var "_" 0))) (normal book eT) Nothing
 
     -- ctx |- t : T
     -- ------------ Loc
@@ -481,9 +481,9 @@ infer d span book@(Book defs names) ctx term =
       let bForced = force book tb
       case (aForced, bForced) of
         (ta', _) | not (isValidForOp2 ta') ->
-          Fail $ TypeMismatch (getLeftOperandSpan span) (normalCtx book ctx) (normal book (Var "Num/Bit/Nat" 0)) (normal book ta) Nothing
+          Fail $ TypeMismatch (getLeftOperandSpan span) book (normalCtx book ctx) (normal book (Var "Num/Bit/Nat" 0)) (normal book ta) Nothing
         (_, tb') | not (isValidForOp2 tb') ->
-          Fail $ TypeMismatch (getSpan span b) (normalCtx book ctx) (normal book (Var "Num/Bit/Nat" 0)) (normal book tb) Nothing
+          Fail $ TypeMismatch (getSpan span b) book (normalCtx book ctx) (normal book (Var "Num/Bit/Nat" 0)) (normal book tb) Nothing
         _ ->
           inferOp2Type d span book ctx op ta tb
 
@@ -603,27 +603,27 @@ inferOp2Type d span book ctx op ta tb = do
     numericOp ta tb = case (force book ta, force book tb) of
       (Num t1, Num t2) | t1 == t2 -> return (Num t1)
       (Nat, Nat) -> return Nat  -- Allow Nat arithmetic operations
-      _ -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Ref "Num" 1)) (normal book ta) Nothing
+      _ -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (Ref "Num" 1)) (normal book ta) Nothing
 
     comparisonOp ta tb = case (force book ta, force book tb) of
       (Num t1, Num t2) | t1 == t2 -> return Bit
       (Bit, Bit) -> return Bit  -- Allow Bool comparison
       (Nat, Nat) -> return Bit  -- Allow Nat comparison
-      _ -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book ta) (normal book tb) Nothing
+      _ -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book ta) (normal book tb) Nothing
 
     integerOp ta tb = case (force book ta, force book tb) of
       (Num U64_T, Num U64_T) -> return (Num U64_T)
       (Num I64_T, Num I64_T) -> return (Num U64_T)  -- Bitwise on I64 returns U64
       (Num F64_T, Num F64_T) -> return (Num U64_T)  -- Bitwise on F64 returns U64
-      (Num CHR_T, Num CHR_T) -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Ref "Num" 1)) (normal book ta)  Nothing -- Bitwise not supported for CHR
-      _ -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Ref "Num" 1)) (normal book ta) Nothing
+      (Num CHR_T, Num CHR_T) -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (Ref "Num" 1)) (normal book ta)  Nothing -- Bitwise not supported for CHR
+      _ -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (Ref "Num" 1)) (normal book ta) Nothing
 
     boolOrIntegerOp ta tb = case (force book ta, force book tb) of
       (Bit, Bit) -> return Bit  -- Logical operations on booleans
       (Num U64_T, Num U64_T) -> return (Num U64_T)  -- Bitwise operations on integers
       (Num I64_T, Num I64_T) -> return (Num U64_T)
       (Num F64_T, Num F64_T) -> return (Num U64_T)
-      _ -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book ta) (normal book tb) Nothing
+      _ -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book ta) (normal book tb) Nothing
 
 -- Infer the result type of a unary numeric operation
 inferOp1Type :: Int -> Span -> Book -> Ctx -> NOp1 -> Term -> Result Term
@@ -751,7 +751,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for Nil
     (Nil, goal) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book goal) Nothing
+      Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (Lst (Var "_" 0))) (normal book goal) Nothing
 
     -- ctx |- h : T
     -- ctx |- t : T[]
@@ -804,7 +804,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for EmpM
     (EmpM, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Emp (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+      Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book (All Emp (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- f : R({==})
     -- -------------------------------------- UniM-Eql
@@ -822,7 +822,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for UniM
     (UniM f, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Uni (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+      Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book (All Uni (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- f : R({==})
     -- ------------------------------------------------------ BitM-Eql-Bt0-Bt0
@@ -861,7 +861,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for BitM
     (BitM f t, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Bit (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+      Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book (All Bit (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- z : R({==})
     -- ------------------------------------------- NatM-Eql-Zer-Zer
@@ -900,7 +900,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for NatM
     (NatM z s, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All Nat (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+      Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book (All Nat (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- n : R({==})
     -- ------------------------------------------ LstM-Eql-Nil-Nil
@@ -940,7 +940,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for LstM
     (LstM n c, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+      Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book (All (Lst (Var "_" 0)) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- s ∈ tags
     -- ---------------------- Sym
@@ -948,7 +948,7 @@ check d span book ctx term      goal =
     (Sym s, Enu y) -> do
       if s `elem` y
         then return term
-        else Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Enu y)) (normal book (Sym s)) Nothing
+        else Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (Enu y)) (normal book (Sym s)) Nothing
 
     -- s ∈ tags, s == s1, s1 == s2
     -- -------------------------------- Sym-Eql
@@ -956,7 +956,7 @@ check d span book ctx term      goal =
     (Sym s, Eql (force book -> Enu syms) (force book -> Sym s1) (force book -> Sym s2)) -> do
       if s `elem` syms && s == s1 && s1 == s2
         then return term
-        else Fail $ TermMismatch span (normalCtx book ctx) (normal book (Sym s1)) (normal book (Sym s2)) Nothing
+        else Fail $ TermMismatch span book (normalCtx book ctx) (normal book (Sym s1)) (normal book (Sym s2)) Nothing
 
     -- s1 == s2, (s1,t) ∈ cs => ctx |- t : R({==})
     -- s1 != s2 => ctx |- 
@@ -992,11 +992,11 @@ check d span book ctx term      goal =
               return $ EnuM cs' df'
             else return (EnuM cs' (Lam "_" Nothing (\_ -> One)))
         (h:t) -> do
-          Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu [h, "..."]) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+          Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book (All (Enu [h, "..."]) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- Type mismatch for EnuM
     (EnuM cs df, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Enu ["..."]) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+      Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book (All (Enu ["..."]) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- f : ∀xp:A{x1==x2}. ∀yp:B(x1){y1==y2}. R((xp,yp))
     -- ------------------------------------------------------- SigM-Eql
@@ -1016,7 +1016,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for SigM
     (SigM f, _) -> do
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Sig (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0))) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+      Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book (All (Sig (Var "_" 0) (Lam "_" Nothing (\_ -> Var "_" 0))) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- a : A
     -- ctx |- b : B(a)
@@ -1044,7 +1044,7 @@ check d span book ctx term      goal =
         then return term
         else if equal d book a b
           then return term
-          else Fail $ TermMismatch span (normalCtx book ctx) (normal book a) (normal book b) Nothing
+          else Fail $ TermMismatch span book (normalCtx book ctx) (normal book a) (normal book b) Nothing
       where
         hasMetaEvidence term =
           termHasMet term
@@ -1099,7 +1099,7 @@ check d span book ctx term      goal =
     (Val v1, Eql (force book -> Num t) (force book -> Val v2) (force book -> Val v3)) -> do
       if v1 == v2 && v2 == v3
         then return term
-        else Fail $ TermMismatch span (normalCtx book ctx) (normal book (Val v2)) (normal book (Val v3)) Nothing
+        else Fail $ TermMismatch span book (normalCtx book ctx) (normal book (Val v2)) (normal book (Val v3)) Nothing
 
     -- ctx |- a : ta
     -- ctx |- b : tb
@@ -1114,7 +1114,7 @@ check d span book ctx term      goal =
       tr <- inferOp2Type d span book ctx op ta tb
       if equal d book tr goal
         then return term
-        else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book tr) Nothing
+        else Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book tr) Nothing
 
     -- ctx |- a : ta
     -- inferOp1Type op ta = tr
@@ -1126,7 +1126,7 @@ check d span book ctx term      goal =
       tr <- inferOp1Type d span book ctx op ta
       if equal d book tr goal
         then return term
-        else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book tr) Nothing
+        else Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book tr) Nothing
 
     -- ctx |- a : T
     -- ctx |- b : T
@@ -1148,7 +1148,7 @@ check d span book ctx term      goal =
                  All (Eql t b1 b2) (Lam "bp" Nothing (\bp -> 
                    App rT (Sup l ap bp))))))
           return $ SupM l f'
-        else Fail $ TermMismatch span (normalCtx book ctx) (normal book l1) (normal book l2) Nothing
+        else Fail $ TermMismatch span book (normalCtx book ctx) (normal book l1) (normal book l2) Nothing
 
     -- ctx |- l : U64
     -- ctx |- f : ∀p:T. ∀q:T. R(&l{p,q})
@@ -1160,7 +1160,7 @@ check d span book ctx term      goal =
         All xT rT -> do
           f' <- check d span book ctx f (All xT (Lam "p" Nothing (\p -> All xT (Lam "q" Nothing (\q -> App rT (Sup l p q))))))
           return $ SupM l' f'
-        _ -> Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
+        _ -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book (All (Var "_" 0) (Lam "_" Nothing (\_ -> (Var "?" 0))))) Nothing
 
     -- ctx |- l : U64
     -- ctx |- a : T
@@ -1187,7 +1187,7 @@ check d span book ctx term      goal =
           e' <- check d span book ctx e eT
           return $ Rwt e' f'
         _ ->
-          Fail $ TypeMismatch span (normalCtx book ctx) (normal book (Eql (Var "_" 0) (Var "_" 0) (Var "_" 0))) (normal book eT) Nothing
+          Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (Eql (Var "_" 0) (Var "_" 0) (Var "_" 0))) (normal book eT) Nothing
 
     -- Not supported
     (Pat _ _ _, _) -> do
@@ -1218,7 +1218,7 @@ check d span book ctx term      goal =
 
     -- Type mismatch for Lam
     (Lam f t x, _) ->
-      Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (Ref "Function" 1) Nothing
+      Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (Ref "Function" 1) Nothing
 
     -- ctx |- x : T
     -- ctx |- f : T -> T -> P
@@ -1283,7 +1283,7 @@ check d span book ctx term      goal =
           goal' <- check d span book ctx goal Set
           check d span book ctx (Let fn_name (Just (All (Lst hT) (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
         _      -> do
-          Fail $ TypeMismatch span (normalCtx book ctx) (All (Var "_" 0) (Lam "_" Nothing (\_ -> (Var "_" 0)))) (normal book xT) Nothing
+          Fail $ TypeMismatch span book (normalCtx book ctx) (All (Var "_" 0) (Lam "_" Nothing (\_ -> (Var "_" 0)))) (normal book xT) Nothing
     
     (App fn@(cut -> SigM g) x, _) ->
       do
@@ -1297,7 +1297,7 @@ check d span book ctx term      goal =
           goal' <- check d span book ctx goal Set
           check d span book ctx (Let fn_name (Just (All xT (Lam "_" Nothing (\_ -> goal')))) fn (\v -> App v x')) goal
         _       -> do
-          Fail $ TypeMismatch (getSpan span x) (normalCtx book ctx) (Var "Σ_:_._" 0) (normal book xT) Nothing
+          Fail $ TypeMismatch (getSpan span x) book (normalCtx book ctx) (Var "Σ_:_._" 0) (normal book xT) Nothing
         where
           derefADT trm = case cut trm of
             Ref k i ->
@@ -1325,4 +1325,4 @@ verify d span book ctx term goal = do
     -- trace ("-verify: " ++ show term ++ " :: " ++ show t ++ " == " ++ show goal) $
     equal d book t goal
     then return term
-    else Fail $ TypeMismatch span (normalCtx book ctx) (normal book goal) (normal book t) Nothing
+    else Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book t) Nothing

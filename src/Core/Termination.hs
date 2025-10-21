@@ -43,7 +43,7 @@ subterms d term = case term of
   _             -> []
 
 hasSelfRef :: Book -> S.Set String -> String -> Term -> Bool
-hasSelfRef book@(Book defs _) visited name (Ref n i)
+hasSelfRef book@(Book defs _ _) visited name (Ref n i)
   | name `elem` visited = True
   | otherwise = any (\(nam, trm) -> hasSelfRef book (S.insert nam visited) name trm) [(nam,trm) | (nam,(_,trm,typ)) <- M.toList defs, nam `elem` visited]
 hasSelfRef book visited name term = any (hasSelfRef book visited name) (subterms 0 term)
@@ -56,13 +56,13 @@ countVar vname vlevel term = case term of
 checkLinearity :: Int -> Term -> Result ()
 checkLinearity d term = case term of
   Lam k _ f -> let body = (f (Var k d))
-               in if (countVar k d body <= 1) then checkLinearity (d+1) body else Fail (UnknownTermination term) 
+               in if (countVar k d body <= 1) then checkLinearity (d+1) body else Fail (UnknownTermination (Book M.empty [] (M.empty,M.empty)) term) 
   Fix k b -> let body = b (Var k d)
-             in if (countVar k d body <= 1) then checkLinearity (d+1) body else Fail (UnknownTermination term) 
+             in if (countVar k d body <= 1) then checkLinearity (d+1) body else Fail (UnknownTermination (Book M.empty [] (M.empty,M.empty)) term) 
   _ -> sequence_ [checkLinearity d sub | sub <- subterms d term]
 
 isAffineNonRecursive :: Book -> String -> Term -> Map String Int -> Result ()
-isAffineNonRecursive book name term _ = if hasSelfRef book (S.insert name S.empty) name term then Fail (UnknownTermination term) else checkLinearity 0 term
+isAffineNonRecursive book name term _ = if hasSelfRef book (S.insert name S.empty) name term then Fail (UnknownTermination (Book M.empty [] (M.empty,M.empty)) term) else checkLinearity 0 term
 
 -- isInductive :: Term -> Bool
 -- isInductive Nat = True

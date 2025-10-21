@@ -171,7 +171,8 @@ data Term
 -- Book of Definitions
 type Inj  = Bool -- "is injective" flag. improves pretty printing
 type Defn = (Inj, Term, Type)
-data Book = Book (M.Map Name Defn) [Name]
+type CountMap = (M.Map Name Int,M.Map Name Int) -- counts names for sugared printing
+data Book = Book (M.Map Name Defn) [Name] CountMap
 
 -- Substitution Map
 type Subs = [(Term,Term)]
@@ -192,10 +193,10 @@ data Error
   = CantInfer Span Ctx (Maybe String)
   | Unsupported Span Ctx (Maybe String)
   | Undefined Span Ctx Name (Maybe String)
-  | TypeMismatch Span Ctx Term Term (Maybe String)
-  | TermMismatch Span Ctx Term Term (Maybe String)
+  | TypeMismatch Span Book Ctx Term Term (Maybe String)
+  | TermMismatch Span Book Ctx Term Term (Maybe String)
   | IncompleteMatch Span Ctx (Maybe String)
-  | UnknownTermination Term
+  | UnknownTermination Book Term
   | ImportError Span String
   | AmbiguousEnum Span Ctx String [String] (Maybe String)
   | CompilationError String
@@ -249,7 +250,7 @@ data LHS where
 -- -----
 
 getDefn :: Book -> Name -> Maybe Defn
-getDefn (Book defs _) name = M.lookup name defs
+getDefn (Book defs _ _) name = M.lookup name defs
 
 cut :: Term -> Term
 cut (Loc _ t) = cut t
@@ -278,6 +279,9 @@ collectArgs = go [] where
 collectApps :: Term -> [Term] -> (Term, [Term])
 collectApps (cut -> App f x) args = collectApps f (x:args)
 collectApps f                args = (f, args)
+
+emptyBook :: Book
+emptyBook = Book M.empty [] (M.empty,M.empty)
 
 noSpan :: Span
 noSpan = Span (0,0) (0,0) "" ""

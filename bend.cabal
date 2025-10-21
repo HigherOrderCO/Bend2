@@ -35,6 +35,7 @@ library
                       Core.Adjust.DesugarPats,
                       Core.Adjust.DesugarFrks,
                       Core.Adjust.ResolveEnums,
+                      Core.Adjust.SimplifyNames,
                       Core.FreeVars,
                       Core.Import,
                       Core.Parse.Parse,

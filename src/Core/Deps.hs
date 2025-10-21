@@ -8,7 +8,7 @@ import qualified Data.Map as M
 import Core.Type
 
 getBookDepOrigins :: Book -> M.Map Name Span
-getBookDepOrigins (Book defs _) = foldr collectDefs M.empty (M.toList defs)
+getBookDepOrigins (Book defs _ _) = foldr collectDefs M.empty (M.toList defs)
   where
     collectDefs :: (Name, Defn) -> M.Map Name Span -> M.Map Name Span
     collectDefs (_, (_, term, typ)) acc =
@@ -20,7 +20,7 @@ getDeps :: Term -> S.Set Name
 getDeps = collectDeps S.empty
 
 getBookDeps :: Book -> S.Set Name
-getBookDeps (Book defs _) = S.unions $ map getDefnDeps (M.toList defs) where
+getBookDeps (Book defs _ _) = S.unions $ map getDefnDeps (M.toList defs) where
   getDefnDeps :: (Name, Defn) -> S.Set Name
   getDefnDeps (name, (_, term, typ)) = S.union (getDeps term) (getDeps typ)
 

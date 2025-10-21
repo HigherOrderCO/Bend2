@@ -66,6 +66,7 @@ import Control.Monad (unless, foldM)
 import Data.Maybe (fromJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Debug.Trace
 
 import Control.Exception (throw)
 import Core.Adjust.DesugarFrks
@@ -73,6 +74,7 @@ import Core.Adjust.DesugarPats
 import Core.Adjust.FlattenPats
 import Core.Adjust.ResolveEnums
 import Core.Adjust.ReduceEtas
+import Core.Adjust.SimplifyNames
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -122,30 +124,30 @@ type AdjustState = (Book, S.Set Name)
 -- This is crucial for functions like `flatten` which may look up references.
 -- After adjusting all definitions, it checks for free variables.
 adjustBook :: Book -> Result Book
-adjustBook book@(Book defs names) = do
+adjustBook book@(Book defs names m) = do
   resolvedBook <- resolveEnumsInBook book
   let adjustFn b t = case adjust b t of
         Done t' -> t'
         Fail e  -> throw (BendException e)
-  let adjustedBook  = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
-  -- let (annSplitBook, success) = unsafePerformIO $ annotateSplitBook adjustedBook 
-  -- Done annSplitBook
-  Done adjustedBook
+  let adjustedBook@(Book newDefs nams _)  = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names m, S.empty)
+  let countMap = variationsMap adjustedBook
+  Done (Book newDefs nams countMap)
 
 -- | Adjusts the entire book, simplifying patterns but without removing Pat terms.
 adjustBookWithPats :: Book -> Result Book
-adjustBookWithPats book@(Book defs names) = do
+adjustBookWithPats book@(Book defs names m) = do
   resolvedBook <- resolveEnumsInBook book
   let adjustFn b t = case adjustWithPats b t of
         Done t' -> t'
         Fail e  -> throw (BendException e)
-  let adjustedBook = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names, S.empty)
-  Done adjustedBook -- checkFreeVarsInBook disabled: not in main branch
+  let adjustedBook@(Book newDefs nams _) = fst $ execState (mapM_ (adjustDef resolvedBook S.empty adjustFn) (M.keys defs)) (Book M.empty names m, S.empty)
+  let countMap = variationsMap adjustedBook
+  Done (Book newDefs nams countMap)
 
 -- | Checks all definitions in a book for free variables.
 -- This should be called after all adjustments are complete.
 checkFreeVarsInBook :: Book -> Book
-checkFreeVarsInBook book@(Book defs names) =
+checkFreeVarsInBook book@(Book defs names _) =
   case [ (name, frees) | 
          (name, (_, term, typ)) <- M.toList defs,
          let freeInTerm = freeVars S.empty term,
@@ -155,7 +157,7 @@ checkFreeVarsInBook book@(Book defs names) =
     [] -> book
     ((name, frees):_) -> 
       let freeName = S.elemAt 0 frees
-      in throw (BendException $ Undefined noSpan (Ctx []) freeName (Just $ "in definition '" ++ name ++ "'"))
+      in throw (BendException $ Undefined noSpan (Ctx []) (show $ Ref freeName 0) (Just $ "in definition '" ++ (show $ Ref name 0) ++ "'"))
 
 -- | The recursive worker function that adjusts a single definition.
 -- It takes a set of names currently in the recursion stack to detect cycles.
@@ -191,7 +193,7 @@ adjustDef book visiting adjustFn name = do
 
         -- 4. Update the state with the newly adjusted definition.
         -- The name is added to the `adjustedSet` to mark it as complete.
-        modify $ \(Book adjMap names, doneSet) ->
+        modify $ \(Book adjMap names m, doneSet) ->
           let newAdjMap  = M.insert name (inj, adjTerm, adjType) adjMap
               newDoneSet = S.insert name doneSet
-          in (Book newAdjMap names, newDoneSet)
+          in (Book newAdjMap names m, newDoneSet)

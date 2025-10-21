@@ -12,7 +12,7 @@ import qualified Data.Map as M
 
 -- Main compilation function
 compile :: Book -> String -> String
-compile book@(Book defs _) mainFQN =
+compile book@(Book defs _ _) mainFQN =
   let compiledFns = map (compileDefn book) (M.toList defs) in
   if mainIsAny then
     throw (Show.BendException $ CompilationError "The 'main' function returns a type which is not printable in Haskell. Tip: To compile to Haskell, 'main' can't return a dependent or non-primitive recursive type.")

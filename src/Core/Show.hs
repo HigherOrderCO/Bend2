@@ -17,8 +17,8 @@ import System.IO
 import System.IO.Unsafe (unsafePerformIO)
 
 -- Simple term display with no shadowing or prefix logic
-showTerm :: Bool -> Term -> String
-showTerm _ term = go 0 M.empty term
+showTerm :: Book -> Term -> String
+showTerm book@(Book _ _ (refCounts,symCounts)) term = go 0 M.empty term
   where
     showName vars k i = case M.lookup k vars of
       Just j | i < j -> k ++ "^" ++ show i
@@ -28,17 +28,17 @@ showTerm _ term = go 0 M.empty term
     go d vars term = case term of
       -- Variables
       Var k i      -> showName vars k i
-      Ref k _      -> k
+      Ref k _      -> shortName refCounts k
       Sub t        -> go d vars t
 
       -- IO type
       IO t         -> "IO<" ++ go d vars t ++ ">"
 
       -- Definitions
-      Fix k f      -> "μ" ++ k ++ ". " ++ go (d+1) vars (f (Var k d))
+      Fix k f      -> "μ" ++ k ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
       Let k mt v f -> case mt of
-        Just t  -> k ++ " : " ++ go d vars t ++ " = " ++ go d vars v ++ " " ++ go (d+1) vars (f (Var k d))
-        Nothing -> k ++                         " = " ++ go d vars v ++ " " ++ go (d+1) vars (f (Var k d))
+        Just t  -> k ++ " : " ++ go d vars t ++ " = " ++ go d vars v ++ " " ++ go (d+1) (M.insert k d vars) (f (Var k d))
+        Nothing -> k ++                         " = " ++ go d vars v ++ " " ++ go (d+1) (M.insert k d vars) (f (Var k d))
       Use k v f    -> "use " ++ k ++ " = " ++ go d vars v ++ " " ++ go (d+1) vars (f (Var k d))
 
       -- Universe
@@ -89,11 +89,11 @@ showTerm _ term = go 0 M.empty term
       LstM n c     -> "λ{[]:" ++ go d vars n ++ ";<>:" ++ go d vars c ++ "}"
 
       -- Enum
-      Enu s        -> "enum{" ++ intercalate "," (map (("&" ++) . shortName) s) ++ "}"
-      Sym s        -> "&" ++ shortName s
+      Enu s        -> "enum{" ++ intercalate "," (map (("&" ++) . shortName symCounts) s) ++ "}"
+      Sym s        -> "&" ++ shortName symCounts s
       EnuM cs d'   -> "λ{" ++ intercalate ";" cases ++ ";" ++ go d vars d' ++ "}"
         where
-          cases = map (\(s,t) -> "&" ++ shortName s ++ ":" ++ go d vars t) cs
+          cases = map (\(s,t) -> "&" ++ shortName symCounts s ++ ":" ++ go d vars t) cs
 
       -- Numbers
       Num t        -> case t of
@@ -123,22 +123,38 @@ showTerm _ term = go 0 M.empty term
 
       -- Pair
       Sig a b      -> case cut b of
-        Lam "_" _ f -> "(" ++ go (d+1) vars a ++ " & " ++ go (d+1) vars (f (Var "_" d)) ++ ")"
-        Lam k _ f   -> "Σ" ++ k ++ ":" ++ go d vars a ++ ". " ++ go (d+1) vars (f (Var k d))
-        _           -> "Σ" ++ go d vars a ++ ". " ++ go d vars b
+        Lam "_" t f -> "(" ++ showArg a ++ " & " ++ showCodomain (f (Var "_" d)) ++ ")"
+        Lam k t f   -> "Σ" ++ k ++ ":" ++ showArg a ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
+        _           -> "Σ"             ++ showArg a ++ ". " ++ go d vars b
+        where
+          showArg t = case cut t of
+            All{} -> "(" ++ go d vars t ++ ")"
+            Sig{} -> "(" ++ go d vars t ++ ")"
+            _     ->        go d vars t
+          showCodomain t = case t of
+            Sig _ (Lam k _ _) | k /= "_" -> "(" ++ go (d+1) vars t ++ ")"
+            _                           ->         go (d+1) vars t
       Tup _ _      -> case unsnoc (flattenTup term) of
-             Just ((Sym name : xs),One) -> "@" ++ shortName name ++ "{" ++ intercalate "," (map show xs) ++ "}"
+             Just ((Sym name : xs),One) -> "@" ++ shortName symCounts name ++ "{" ++ intercalate "," (map show xs) ++ "}"
              _                          -> "(" ++ intercalate "," (map (\t -> go d vars t) (flattenTup term)) ++ ")"
       SigM f       -> "λ{(,):" ++ go d vars f ++ "}"
 
       -- Function
       All a b      -> case b of
-        Lam "_" _ f -> go d vars a ++ " -> " ++ go (d+1) vars (f (Var "_" d))
-        Lam k _ f   -> "∀" ++ k ++ ":" ++ go d vars a ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
-        _           -> "∀" ++ go d vars a ++ ". " ++ go d vars b
+        Lam "_" t f -> showArg a ++ " -> " ++ showCodomain (f (Var "_" d))
+        Lam k t f   -> "∀" ++ k ++ ":" ++ showArg a ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
+        _           -> "∀" ++ showArg a ++ ". " ++ go d vars b
+        where
+          showArg t = case cut t of
+            All{} -> "(" ++ go d vars t ++ ")"
+            Sig{} -> "(" ++ go d vars t ++ ")"
+            _     ->        go d vars t
+          showCodomain t = case t of
+            All _ (Lam k _ _) | k /= "_" -> "(" ++ go (d+1) vars t ++ ")"
+            _                           ->         go (d+1) vars t
       Lam k mt f   -> case mt of
-        Just t  -> "λ" ++ k ++ "^" ++ show d ++ ":" ++ go d vars t ++ ". " ++ go (d+1) vars (f (Var k d))
-        Nothing -> "λ" ++ k ++  ". " ++ go (d+1) vars (f (Var k d))
+        Just t  -> "λ" ++ k ++ ":" ++ go d vars t ++ ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
+        Nothing -> "λ" ++ k ++                       ". " ++ go (d+1) (M.insert k d vars) (f (Var k d))
       App _ _      -> fnStr ++ "(" ++ intercalate "," (map (\arg -> go d vars arg) args) ++ ")"
         where
           (fn, args) = collectApps term []
@@ -200,21 +216,27 @@ showTerm _ term = go 0 M.empty term
           showPat' p       = "(" ++ go d vars p ++ ")"
       Frk l a b    -> "fork " ++ go d vars l ++ ":" ++ go d vars a ++ " else:" ++ go d vars b
 
-shortName :: String -> String
-shortName name = case splitOn "::" name of
+shortName :: M.Map Name Int -> String -> String
+shortName count name =  case M.lookup (cutName name) count of
+      Just n | n > 1 -> name
+      _              -> cutName name
+  where
+cutName :: String -> String
+cutName name = case splitOn "::" name of
   [] -> name
   xs -> last xs
+
 
 showHint :: Maybe String -> String
 showHint Nothing = ""
 showHint (Just h) = "\x1b[1mHint:\x1b[0m " ++ h ++ "\n"
 
 instance Show Term where
-  show = showTerm False
+  show = showTerm emptyBook 
 
 instance Show Book where
-  show (Book defs names) = unlines [showDefn name (defs M.! name) | name <- names]
-    where showDefn k (_, x, t) = k ++ " : " ++ show t ++ " = " ++ showTerm True x
+  show book@(Book defs names m) = unlines [showDefn name (defs M.! name) | name <- names]
+    where showDefn k (_, x, t) = k ++ " : " ++ show t ++ " = " ++ showTerm book x
 
 instance Show Span where
   show span = "\n\x1b[1mLocation:\x1b[0m \x1b[2m(line " ++ show (fst $ spanBeg span) ++ ", column " ++ show (snd $ spanBeg span) ++ ")\x1b[0m\n" ++ highlightError (spanBeg span) (spanEnd span) (spanSrc span)
@@ -224,10 +246,10 @@ instance Show Error where
     CantInfer span ctx hint       -> "\x1b[1mCantInfer:\x1b[0m\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     Unsupported span ctx hint     -> "\x1b[1mUnsupported:\x1b[0m\nCurrently, Bend doesn't support matching on non-var expressions.\nThis will be added later. For now, please split this definition.\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     Undefined span ctx name hint  -> "\x1b[1mUndefined:\x1b[0m " ++ name ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    TypeMismatch span ctx goal typ hint -> "\x1b[1mMismatch:\x1b[0m\n- Goal: " ++ showTerm True goal ++ "\n- Type: " ++ showTerm True typ ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    TermMismatch span ctx a b hint -> "\x1b[1mMismatch:\x1b[0m\n- " ++ showTerm True a ++ "\n- " ++ showTerm True b ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    TypeMismatch span book ctx goal typ hint -> "\x1b[1mMismatch:\x1b[0m\n- Goal: " ++ showTerm book goal ++ "\n- Type: " ++ showTerm book typ ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
+    TermMismatch span book ctx a b hint -> "\x1b[1mMismatch:\x1b[0m\n- " ++ showTerm book a ++ "\n- " ++ showTerm book b ++ "\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     IncompleteMatch span ctx hint -> "\x1b[1mIncompleteMatch:\x1b[0m\n" ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
-    UnknownTermination term       -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
+    UnknownTermination book term       -> "\x1b[1mUnknownTermination:\x1b[0m " ++ show term
     ImportError span msg          -> "\x1b[1mImportError:\x1b[0m " ++ msg ++ show span
     AmbiguousEnum span ctx ctor fqns hint -> "\x1b[1mAmbiguousEnum:\x1b[0m &" ++ ctor ++ "\nCould be:\n" ++ unlines ["  - &" ++ fqn | fqn <- fqns] ++ showHint hint ++ "\x1b[1mContext:\x1b[0m\n" ++ show ctx ++ show span
     CompilationError msg          -> "\x1b[1mCompilationError:\x1b[0m " ++ msg
