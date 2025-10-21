@@ -26,5 +26,5 @@ main =
     "private helpers cannot be imported from other files"
     $ \_ err -> do
       assert (err /= "")
-      assert (err `has` "Import error")
+      assert (err `has` "ImportError")
       assert (err `has` "is private to 'Nat/add'")
