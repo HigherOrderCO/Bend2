@@ -1,7 +1,8 @@
 module Main where
 
 import System.Environment (getArgs)
-import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, getGenDeps, processFileToCore, processFileToHS)
+-- import Core.CLI (processFile, processFileToJS, processFileToHVM, listDependencies, getGenDeps, processFileToCore, processFileToHS)
+import Core.CLI (runCLI, CLIMode (..))
 import Core.Adjust.ReduceEtas
 import Package.Publish (runPublishCommand, runBumpCommand, AuthMode(..))
 
@@ -26,22 +27,22 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    ("publish":rest)                     -> runPublish rest
-    ("bump":rest)                        -> runBump rest
-    [file, "--to-javascript"] | ".bend"    `isSuffixOf` file -> processFileToJS file
-    [file, "--to-javascript"] | ".bend.py" `isSuffixOf` file -> processFileToJS file
-    [file, "--to-hvm"] | ".bend"    `isSuffixOf` file -> processFileToHVM file
-    [file, "--to-hvm"] | ".bend.py" `isSuffixOf` file -> processFileToHVM file
-    [file, "--to-haskell"] | ".bend"    `isSuffixOf` file -> processFileToHS file
-    [file, "--to-haskell"] | ".bend.py" `isSuffixOf` file -> processFileToHS file
-    [file, "--list-dependencies"] | ".bend"    `isSuffixOf` file -> listDependencies file
-    [file, "--list-dependencies"] | ".bend.py" `isSuffixOf` file -> listDependencies file
-    [file, "--get-gen-deps"] | ".bend"    `isSuffixOf` file -> getGenDeps file
-    [file, "--get-gen-deps"] | ".bend.py" `isSuffixOf` file -> getGenDeps file
-    [file, "--show-core"] | ".bend"    `isSuffixOf` file -> processFileToCore file
-    [file, "--show-core"] | ".bend.py" `isSuffixOf` file -> processFileToCore file
-    [file] | ".bend"    `isSuffixOf` file -> processFile file
-    [file] | ".bend.py" `isSuffixOf` file -> processFile file
+    ("publish":rest)                                             -> runPublish rest
+    ("bump":rest)                                                -> runBump rest
+    [file, "--to-javascript"]     | ".bend"    `isSuffixOf` file -> runCLI file CLI_TO_JAVASCRIPT
+    [file, "--to-javascript"]     | ".bend.py" `isSuffixOf` file -> runCLI file CLI_TO_JAVASCRIPT
+    [file, "--to-hvm"]            | ".bend"    `isSuffixOf` file -> runCLI file CLI_TO_HVM
+    [file, "--to-hvm"]            | ".bend.py" `isSuffixOf` file -> runCLI file CLI_TO_HVM
+    [file, "--to-haskell"]        | ".bend"    `isSuffixOf` file -> runCLI file CLI_TO_HASKELL
+    [file, "--to-haskell"]        | ".bend.py" `isSuffixOf` file -> runCLI file CLI_TO_HASKELL
+    [file, "--list-dependencies"] | ".bend"    `isSuffixOf` file -> runCLI file CLI_LIST_DEPENDENCIES
+    [file, "--list-dependencies"] | ".bend.py" `isSuffixOf` file -> runCLI file CLI_LIST_DEPENDENCIES
+    [file, "--get-gen-deps"]      | ".bend"    `isSuffixOf` file -> runCLI file CLI_GET_GEN_DEPS 
+    [file, "--get-gen-deps"]      | ".bend.py" `isSuffixOf` file -> runCLI file CLI_GET_GEN_DEPS
+    [file, "--show-core"]         | ".bend"    `isSuffixOf` file -> runCLI file CLI_SHOW_CORE
+    [file, "--show-core"]         | ".bend.py" `isSuffixOf` file -> runCLI file CLI_SHOW_CORE
+    [file]                        | ".bend"    `isSuffixOf` file -> runCLI file CLI_RUN
+    [file]                        | ".bend.py" `isSuffixOf` file -> runCLI file CLI_RUN
     otherwise                             -> showUsage
   where isSuffixOf suffix str = reverse suffix == take (length suffix) (reverse str)
 
