@@ -22,7 +22,7 @@ import Core.Deps (getDeps)
 import Core.Type
 import Target.HVM.HVM (HCore)
 import qualified Target.HVM.HVM as HVM
-import Target.HVM.Parse (parseGeneratedTerm)
+import Target.HVM.Parse (parseGeneratedTerms)
 import Target.HVM.Pretty (prettyGenerated)
 
 -------------------------------------------------------------------------------
@@ -128,7 +128,7 @@ generateDefinitions _file book mainFQN genInfos = do
         Right txt -> Right (giSimpleName info, txt)
 
 parseGenerated :: String -> Either String [HCore]
-parseGenerated input = fmap pure (parseGeneratedTerm input)
+parseGenerated = parseGeneratedTerms
 
 applyGenerated :: String -> [GenInfo] -> M.Map String String -> Either String String
 applyGenerated content genInfos generated = do
