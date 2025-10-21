@@ -1,13 +1,6 @@
 module Core.CLI
-  ( parseFile
-  , runMain
-  , processFile
-  , processFileToCore
-  , processFileToJS
-  , processFileToHVM
-  , processFileToHS
-  , listDependencies
-  , getGenDeps
+  ( runCLI
+  , CLIMode(..)
   ) where
 
 import Control.Monad (unless, when, forM_, foldM)
@@ -34,7 +27,6 @@ import Core.Gen
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Adjust.SplitAnnotate (check, infer)
 import Core.Bind
--- import Core.Check
 import Core.Deps
 import Core.Import (autoImportWithExplicit, extractModuleName, extractMainFQN)
 import Core.Parse.Book (doParseBook)
@@ -47,8 +39,157 @@ import qualified Target.JavaScript as JS
 import qualified Target.HVM.HVM as HVM
 import qualified Target.Haskell as HS
 
--- IO Runtime
--- ==========
+data CLIMode
+  = CLI_RUN 
+  | CLI_SHOW_CORE
+  | CLI_TO_JAVASCRIPT
+  | CLI_TO_HVM
+  | CLI_TO_HASKELL
+  | CLI_LIST_DEPENDENCIES
+  | CLI_GET_GEN_DEPS
+  deriving Eq
+
+runCLI :: FilePath -> CLIMode -> IO ()
+runCLI path mode = runCLIGo path mode allowGen needCheck
+  where
+    allowGen  = mode `elem` [CLI_RUN]
+    needCheck = mode `elem` [CLI_RUN, CLI_TO_JAVASCRIPT, CLI_SHOW_CORE]
+
+runCLIGo :: FilePath -> CLIMode -> Bool -> Bool -> IO ()
+runCLIGo path mode allowGen needCheck = do
+  content <- readFile path
+  (rawBook, importedBook) <- case doParseBook path content of
+    Left err                  -> showErrAndDie err
+    Right (book, parserState) -> do
+      impBook <- autoImportWithExplicit path book parserState
+      return (book, impBook)
+  adjustedBook <- case adjustBook importedBook of
+    Done b -> return b
+    Fail e -> showErrAndDie e
+  checkedBook  <- case needCheck of
+    True  -> checkBook adjustedBook
+    False -> pure adjustedBook 
+
+  let mainFQN = extractMainFQN path checkedBook
+
+  case mode of
+    CLI_RUN -> do
+      let metasPresent = bookHasMet adjustedBook
+      let genInfos     = collectGenInfos path rawBook
+      if allowGen
+      then case (genInfos, metasPresent) of
+        ([], True ) -> showErrAndDie $ Unsupported noSpan (Ctx []) (Just "Meta variables remain after generation; run `bend verify` for detailed errors.")
+        ([], False) -> runMain path checkedBook
+        (_ , _    ) -> do
+          generatedDefsResult <- generateDefinitions path adjustedBook mainFQN genInfos
+          generatedDefs <- case generatedDefsResult of
+            Left err      -> showErrAndDie $ Unsupported noSpan (Ctx []) (Just err)
+            Right defs    -> pure defs
+          let updatedContentResult = applyGenerated content genInfos generatedDefs
+          updatedContent <- case updatedContentResult of
+            Left err      -> showErrAndDie $ Unsupported noSpan (Ctx []) (Just err)
+            Right updated -> pure updated
+          writeFile path updatedContent
+          runCLIGo path mode False needCheck
+      else case (genInfos, metasPresent) of
+        ([], _) -> runMain path checkedBook
+        (_, _ ) -> showErrAndDie $ Unsupported noSpan (Ctx []) (Just  "Meta variables remain after generation; generation already attempted.")
+    CLI_SHOW_CORE -> do 
+      putStrLn $ showBookWithFQN checkedBook
+        where
+          showBookWithFQN (Book defs names _) = unlines [showDefn name (defs M.! name) | name <- names]
+          showDefn k (_, x, t) = k ++ " : " ++ showTerm emptyBook t ++ " = " ++ showTerm emptyBook x
+    CLI_TO_JAVASCRIPT -> do
+      let jsCode = JS.compile checkedBook
+      formattedJS <- formatJavaScript jsCode
+      putStrLn formattedJS
+    CLI_TO_HVM -> do
+      let hvmCode = HVM.compile adjustedBook mainFQN
+      putStrLn hvmCode
+    CLI_TO_HASKELL -> do
+      let hsCode = HS.compile adjustedBook mainFQN
+      putStrLn hsCode
+    CLI_LIST_DEPENDENCIES -> do
+      let allRefs = collectAllRefs adjustedBook
+      mapM_ putStrLn (S.toList allRefs)
+      where
+        collectAllRefs (Book defs _ _) = 
+          S.unions $ map collectRefsFromDefn (M.elems defs)
+        collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)
+    CLI_GET_GEN_DEPS -> do
+      print $ buildGenDepsBook adjustedBook
+
+checkBook :: Book -> IO Book
+checkBook book@(Book defs names m) = do
+  let orderedDefs = [(name, fromJust (M.lookup name defs)) | name <- names]
+  (annotatedDefs, success) <- foldM checkAndAccumulate ([], True) orderedDefs
+  unless success exitFailure
+  return $ Book (M.fromList (reverse annotatedDefs)) names m
+  where
+    checkAndAccumulate (accDefs, accSuccess) (name, (inj, term, typ)) = do
+      let checkResult = do 
+            typ'  <- check 0 noSpan book (Ctx []) typ Set
+            term' <- check 0 noSpan book (Ctx []) term typ'
+            -- traceM $ "-chec: " ++ show term'
+            return (inj, term', typ')
+      case checkResult of
+        Done (inj', term', typ') -> do
+          putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
+          return ((name, (inj', term', typ')) : accDefs, accSuccess)
+        Fail e -> do
+          hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
+          hPutStrLn stderr $ show e
+          -- Keep original term when check fails
+          return ((name, (inj, term, typ)) : accDefs, False)
+
+-- | Run the main function from a book
+runMain :: FilePath -> Book -> IO ()
+runMain filePath book = do
+  let mainFQN = extractMainFQN filePath book
+  case getDefn book mainFQN of
+    Nothing -> do
+      return ()
+    Just _ -> do
+      let mainCall = Ref mainFQN 1
+      case infer 0 noSpan book (Ctx []) mainCall of
+        Fail e -> showErrAndDie e
+        Done typ -> do
+          -- Check if main has IO type and run it properly
+          case whnf book typ of
+            Core.Type.IO _ -> do
+              result <- executeIO book mainCall
+              -- Print the result if it's not Unit
+              case result of
+                One -> return ()  -- Unit type, don't print
+                _ -> print $ normal book result
+            _ -> print $ normal book mainCall
+
+-- | Try to format JavaScript code using prettier if available
+formatJavaScript :: String -> IO String
+formatJavaScript jsCode = do
+  -- Try npx prettier first
+  tryPrettier "npx" ["prettier", "--parser", "babel"] jsCode
+    `catch` (\(_ :: IOException) -> 
+      -- Try global prettier
+      tryPrettier "prettier" ["--parser", "babel"] jsCode
+        `catch` (\(_ :: IOException) -> return jsCode))
+  where
+    tryPrettier cmd args input = do
+      (exitCode, stdout, stderr) <- readProcessWithExitCode cmd args input
+      case exitCode of
+        ExitSuccess -> return stdout
+        _ -> return input
+
+showErrAndDie :: (Show a, Typeable a) => a -> IO b
+showErrAndDie err = do
+  let rendered = case readMaybe (show err) :: Maybe String of
+        Just txt -> txt
+        Nothing  -> show err
+  hPutStrLn stderr rendered
+  exitFailure
+
+-- IO Helper Functions
+-- ===================
 
 -- Execute an IO action term and return the result
 executeIO :: Book -> Term -> IO Term
@@ -77,242 +218,6 @@ executeIO book action = case whnf book action of
       result <- executeIO book action
       executeIO book (whnf book (App cont result))
     _ -> return One
-
-checkBook :: Book -> IO Book
-checkBook book@(Book defs names m) = do
-  let orderedDefs = [(name, fromJust (M.lookup name defs)) | name <- names]
-  (annotatedDefs, success) <- foldM checkAndAccumulate ([], True) orderedDefs
-  unless success exitFailure
-  return $ Book (M.fromList (reverse annotatedDefs)) names m
-  where
-    checkAndAccumulate (accDefs, accSuccess) (name, (inj, term, typ)) = do
-      let checkResult = do 
-            typ'  <- check 0 noSpan book (Ctx []) typ Set
-            term' <- check 0 noSpan book (Ctx []) term typ'
-            -- traceM $ "-chec: " ++ show term'
-            return (inj, term', typ')
-      case checkResult of
-        Done (inj', term', typ') -> do
-          putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
-          return ((name, (inj', term', typ')) : accDefs, accSuccess)
-        Fail e -> do
-          hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
-          hPutStrLn stderr $ show e
-          -- Keep original term when check fails
-          return ((name, (inj, term, typ)) : accDefs, False)
-
--- | Parse a Bend file into a Book
-parseFile :: FilePath -> IO Book
-parseFile file = do
-  content <- readFile file
-  case doParseBook file content of
-    Left err -> showErrAndDie err
-    Right (book, parserState) -> do
-      -- Auto-import unbound references with explicit import information
-      autoImportedBook <- autoImportWithExplicit file book parserState
-      return autoImportedBook
-  where
-    takeDirectory path = reverse . dropWhile (/= '/') . reverse $ path
-
--- | Run the main function from a book
-runMain :: FilePath -> Book -> IO ()
-runMain filePath book = do
-  let mainFQN = extractMainFQN filePath book
-  case getDefn book mainFQN of
-    Nothing -> do
-      return ()
-    Just _ -> do
-      let mainCall = Ref mainFQN 1
-      case infer 0 noSpan book (Ctx []) mainCall of
-        Fail e -> showErrAndDie e
-        Done typ -> do
-          -- Check if main has IO type and run it properly
-          case whnf book typ of
-            Core.Type.IO _ -> do
-              result <- executeIO book mainCall
-              -- Print the result if it's not Unit
-              case result of
-                One -> return ()  -- Unit type, don't print
-                _ -> print $ normal book result
-            _ -> print $ normal book mainCall
-
--- | Process a Bend file: parse, check, and run
-processFile :: FilePath -> IO ()
-processFile file = do
-  result <- try $ processFileInternal file True
-  case result of
-    Left (BendException e) -> showErrAndDie e
-    Right () -> return ()
-
-processFileInternal :: FilePath -> Bool -> IO ()
-processFileInternal file allowGeneration = do
-  content <- readFile file
-  (rawBook, importedBook) <- parseBookWithAuto file content
-  let genInfos = collectGenInfos file rawBook
-
-  bookAdj <- case adjustBook importedBook of
-    Done b -> return b
-    Fail e -> showErrAndDie e
-  let metasPresent = bookHasMet bookAdj
-  bookChk <- checkBook bookAdj
-
-  let mainFQN = extractMainFQN file bookChk
-
-  if null genInfos
-    then do
-      when metasPresent $
-        throwCliError "Meta variables remain after generation; run `bend verify` for detailed errors."
-      runMain file bookChk
-    else do
-      when (not allowGeneration) $
-        throwCliError "Meta variables remain after generation; generation already attempted."
-      bookForHVM <- case adjustBook importedBook of
-        Done b -> return b
-        Fail e -> showErrAndDie e
-      generatedDefsResult <- generateDefinitions file bookForHVM mainFQN genInfos
-      generatedDefs <- case generatedDefsResult of
-        Left err   -> throwCliError err
-        Right defs -> pure defs
-      let updatedContentResult = applyGenerated content genInfos generatedDefs
-      updatedContent <- case updatedContentResult of
-        Left err      -> throwCliError err
-        Right updated -> pure updated
-      writeFile file updatedContent
-      processFileInternal file False
-
-parseBookWithAuto :: FilePath -> String -> IO (Book, Book)
-parseBookWithAuto file content =
-  case doParseBook file content of
-    Left err -> showErrAndDie err
-    Right (book, parserState) -> do
-      autoImportedBook <- autoImportWithExplicit file book parserState
-      return (book, autoImportedBook)
-
-
-throwCliError :: String -> IO a
-throwCliError msg = throwIO (BendException $ Unsupported noSpan (Ctx []) (Just msg))
-
--- | Process a Bend file and return it's Core form
-processFileToCore :: FilePath -> IO ()
-processFileToCore file = do
-  book <- parseFile file
-  result <- try $ do
-    bookAdj <- case adjustBook book of
-      Done b -> return b
-      Fail e -> showErrAndDie e
-    bookChk <- checkBook bookAdj
-    putStrLn $ showBookWithFQN bookChk
-  case result of
-    Left (BendException e) -> showErrAndDie e
-    Right () -> return ()
-  where
-    showBookWithFQN (Book defs names _) = unlines [showDefn name (defs M.! name) | name <- names]
-    showDefn k (_, x, t) = k ++ " : " ++ showTerm emptyBook t ++ " = " ++ showTerm emptyBook x
-
--- | Try to format JavaScript code using prettier if available
-formatJavaScript :: String -> IO String
-formatJavaScript jsCode = do
-  -- Try npx prettier first
-  tryPrettier "npx" ["prettier", "--parser", "babel"] jsCode
-    `catch` (\(_ :: IOException) -> 
-      -- Try global prettier
-      tryPrettier "prettier" ["--parser", "babel"] jsCode
-        `catch` (\(_ :: IOException) -> return jsCode))
-  where
-    tryPrettier cmd args input = do
-      (exitCode, stdout, stderr) <- readProcessWithExitCode cmd args input
-      case exitCode of
-        ExitSuccess -> return stdout
-        _ -> return input
-
--- | Process a Bend file and compile to JavaScript
-processFileToJS :: FilePath -> IO ()
-processFileToJS file = do
-  book <- parseFile file
-  result <- try $ do
-    bookAdj <- case adjustBook book of
-      Done b -> return b
-      Fail e -> showErrAndDie e
-    bookChk <- checkBook bookAdj
-    let jsCode = JS.compile bookChk
-    formattedJS <- formatJavaScript jsCode
-    putStrLn formattedJS
-  case result of
-    Left (BendException e) -> showErrAndDie e
-    Right () -> return ()
-
--- | Process a Bend file and compile to HVM
-processFileToHVM :: FilePath -> IO ()
-processFileToHVM file = do
-  book <- parseFile file
-  result <- try $ do
-    bookAdj <- case adjustBook book of
-      Done b -> return b
-      Fail e -> showErrAndDie e
-    -- putStrLn $ show bookAdj
-    let mainFQN = extractMainFQN file bookAdj
-    let hvmCode = HVM.compile bookAdj mainFQN
-    putStrLn hvmCode
-  case result of
-    Left (BendException e) -> showErrAndDie e
-    Right () -> return ()
-
--- | Process a Bend file and compile to Haskell
-processFileToHS :: FilePath -> IO ()
-processFileToHS file = do
-  book <- parseFile file
-  result <- try $ do
-    bookAdj <- case adjustBook book of
-      Done b -> return b
-      Fail e -> showErrAndDie e
-    -- bookChk <- checkBook bookAdj
-    -- putStrLn $ show bookChk
-    let mainFQN = extractMainFQN file bookAdj
-    let hsCode = HS.compile bookAdj mainFQN
-    putStrLn hsCode
-  case result of
-    Left (BendException e) -> showErrAndDie e
-    Right () -> return ()
-
--- | List all dependencies of a Bend file (including transitive dependencies)
-listDependencies :: FilePath -> IO ()
-listDependencies file = do
-  -- Parse and auto-import the file
-  book <- parseFile file
-  bookAdj <- case adjustBook book of
-    Done b -> return b
-    Fail e -> showErrAndDie e
-  -- Collect all refs from the fully imported book
-  let allRefs = collectAllRefs bookAdj
-  -- Print all refs (these are all the dependencies)
-  mapM_ putStrLn (S.toList allRefs)
-
--- | Get all dependencies needed for one or more Met statements.
-getGenDeps :: FilePath -> IO ()
-getGenDeps file = do
-  book <- parseFile file
-  bookAdj <- case adjustBook book of
-    Done b -> return b
-    Fail e -> showErrAndDie e
-  print $ buildGenDepsBook bookAdj
-
--- | Collect all refs from a Book
-collectAllRefs :: Book -> S.Set Name
-collectAllRefs (Book defs _ _) = 
-  S.unions $ map collectRefsFromDefn (M.elems defs)
-  where
-    collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)
-
-showErrAndDie :: (Show a, Typeable a) => a -> IO b
-showErrAndDie err = do
-  let rendered = case readMaybe (show err) :: Maybe String of
-        Just txt -> txt
-        Nothing  -> show err
-  hPutStrLn stderr rendered
-  exitFailure
-
--- IO Helper Functions
--- ===================
 
 -- Convert a Bend string (character list) to a Haskell String
 termToString :: Book -> Term -> Maybe String
