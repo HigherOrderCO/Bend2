@@ -49,12 +49,15 @@ library
                       Target.HVM.Pretty,
                       Target.Haskell,
                       Target.JavaScript,
+                      Package.Auth,
+                      Package.Publish,
                       Package.Index
     other-modules:
     build-depends:    base ^>= 4.21.0.0,
                       hs-highlight == 1.0.5,
                       containers == 0.7,
                       http-conduit,
+                      http-client,
                       aeson,
                       bytestring,
                       text,

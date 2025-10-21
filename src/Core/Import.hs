@@ -2,9 +2,10 @@ module Core.Import
   ( autoImport
   , autoImportWithExplicit
   , extractModuleName
+  , ensureBendRoot
   ) where
 
-import Control.Monad (when)
+import Control.Monad (when, unless)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.List (intercalate, isSuffixOf, foldl')
@@ -358,7 +359,7 @@ resolveModuleFile root indexCfg modulePath = do
   case existing of
     Just (posixPath, systemPath) -> pure (posixPath, systemPath)
     Nothing -> do
-      _ <- mapM (attemptFetch indexCfg) candidates
+      fetchSequential indexCfg candidates
       existing' <- firstExisting candidates
       case existing' of
         Just (posixPath, systemPath) -> pure (posixPath, systemPath)
@@ -372,11 +373,16 @@ resolveModuleFile root indexCfg modulePath = do
       exists <- doesFileExist (root </> systemPath)
       if exists then pure (Just (p, systemPath)) else firstExisting ps
 
+    fetchSequential _ [] = pure ()
+    fetchSequential cfg (p:ps) = do
+      success <- attemptFetch cfg p
+      unless success (fetchSequential cfg ps)
+
     attemptFetch cfg p = do
       res <- PkgIndex.ensureFile cfg p
       case res of
-        Left errMessage -> hPutStrLn stderr ("Warning: failed to fetch '" ++ p ++ "': " ++ errMessage) >> pure ()
-        Right () -> pure ()
+        Left errMessage -> hPutStrLn stderr ("Warning: failed to fetch '" ++ p ++ "': " ++ errMessage) >> pure False
+        Right () -> pure True
 
 -- Entry points ---------------------------------------------------------------
 

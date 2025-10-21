@@ -67,6 +67,7 @@ parseTermIni = choice
   , parseLstLit
   , parseNil
   , parseRfl
+  , parseGlobalRef
   , parseEnu
   , parseSym
   , parseTupApp
@@ -661,6 +662,19 @@ parseRfl = label "reflexivity ({==} or finally)" $ choice
     parseFinally = do
       _ <- try $ keyword "finally"
       return Rfl
+
+-- | Syntax: @owner/package[/...][::def]
+-- Treated as a global definition reference rather than an enum constructor.
+parseGlobalRef :: Parser Term
+parseGlobalRef = label "global reference" $ try $ do
+  _ <- symbol "@"
+  notFollowedBy (char '{')
+  rest <- some (satisfy isGlobalChar)
+  guard ('/' `elem` rest)
+  let name = '@' : rest
+  return (Var name 0)
+  where
+    isGlobalChar c = isNameChar c || c == '=' || c == '#' || c == ':' || c == '$'
 
 -- | Syntax: rewrite expr body
 parseRewrite :: Parser Term
