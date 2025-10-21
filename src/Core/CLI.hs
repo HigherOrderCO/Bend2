@@ -36,8 +36,7 @@ import Core.Adjust.SplitAnnotate (check, infer)
 import Core.Bind
 -- import Core.Check
 import Core.Deps
--- import Core.Import (autoImportWithExplicit, extractModuleName)
-import Core.Import (extractModuleName)
+import Core.Import (autoImportWithExplicit, extractModuleName)
 import Core.Parse.Book (doParseBook)
 import Core.Parse.Parse (ParserState(..))
 import Core.Type
@@ -108,11 +107,10 @@ parseFile file = do
   content <- readFile file
   case doParseBook file content of
     Left err -> showErrAndDie err
-    Right (book, _parserState) -> do
+    Right (book, parserState) -> do
       -- Auto-import unbound references with explicit import information
-      -- autoImportedBook <- autoImportWithExplicit file book parserState
-      -- return autoImportedBook
-      return book
+      autoImportedBook <- autoImportWithExplicit file book parserState
+      return autoImportedBook
   where
     takeDirectory path = reverse . dropWhile (/= '/') . reverse $ path
 
@@ -187,10 +185,9 @@ parseBookWithAuto :: FilePath -> String -> IO (Book, Book)
 parseBookWithAuto file content =
   case doParseBook file content of
     Left err -> showErrAndDie err
-    Right (book, _parserState) -> do
-      -- autoImportedBook <- autoImportWithExplicit file book parserState
-      -- return (book, autoImportedBook)
-      return (book, book)
+    Right (book, parserState) -> do
+      autoImportedBook <- autoImportWithExplicit file book parserState
+      return (book, autoImportedBook)
 
 
 throwCliError :: String -> IO a

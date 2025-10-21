@@ -1,6 +1,6 @@
 {-./../Type.hs-}
 
-module Core.Parse.Book 
+module Core.Parse.Book
   ( parseBook
   , doParseBook
   , doReadBook
@@ -83,11 +83,13 @@ addImport imp = do
 -- | Syntax: import <target> as <alias>
 parseImport :: Parser ()
 parseImport = do
-  _ <- symbol "import"
-  target <- parseImportTarget
-  _ <- symbol "as"
-  alias <- name
-  addImport (ImportAlias target alias)
+  (sp, (target, alias)) <- withSpan $ do
+    _ <- symbol "import"
+    tgt <- parseImportTarget
+    _ <- symbol "as"
+    als <- name
+    pure (tgt, als)
+  addImport (ImportAlias target alias sp)
 
 -- | Parse the import target, allowing both path-only and FQN forms.
 parseImportTarget :: Parser String

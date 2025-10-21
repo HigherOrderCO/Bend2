@@ -6,21 +6,21 @@ module Core.Import
   ) where
 
 import Control.Monad (when, unless)
+import Control.Exception (throwIO)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.List (intercalate, isSuffixOf, foldl')
 import Data.List.Split (splitOn)
 import System.Directory (doesFileExist, getCurrentDirectory, canonicalizePath)
-import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import qualified System.FilePath as FP
-import System.IO (hPutStrLn, stderr)
 import Data.Char (isUpper)
 
 import Core.Deps
 import Core.Parse.Book (doParseBook)
 import Core.Parse.Parse (ParserState(..), Import(..))
 import Core.Type
+import Core.Show (BendException(..))
 import qualified Package.Index as PkgIndex
 
 -- Substitution structures ----------------------------------------------------
@@ -98,6 +98,22 @@ combineAliasPath target rest =
                      _ -> restSegs
       combined   = targetSegs ++ restSegs'
   in intercalate "/" combined
+
+type DepOrigin = Maybe Span
+
+insertPending :: Name -> DepOrigin -> M.Map Name DepOrigin -> M.Map Name DepOrigin
+insertPending name origin = M.insertWith keepExisting name origin
+  where
+    keepExisting existing _ = existing
+
+throwImportError :: DepOrigin -> String -> IO a
+throwImportError origin msg =
+  case origin of
+    Just sp -> throwIO $ BendException (ImportError sp msg)
+    Nothing -> throwIO $ BendException (CompilationError msg)
+
+throwCompilationError :: String -> IO a
+throwCompilationError msg = throwIO $ BendException (CompilationError msg)
 
 -- Substitution on terms ------------------------------------------------------
 
@@ -178,7 +194,7 @@ substituteRefsInBook subst (Book defs names) =
 buildAliasSubstMap :: [Import] -> SubstMap
 buildAliasSubstMap = foldl' addAlias emptySubstMap
   where
-    addAlias acc (ImportAlias target alias) =
+    addAlias acc (ImportAlias target alias _) =
       let accWithPrefix = insertPrefix alias target acc
       in case lastPathSegment target of
            Nothing -> accWithPrefix
@@ -234,8 +250,11 @@ insertDefinition (Book defs names) name defn =
       names' = if name `elem` names then names else names ++ [name]
   in Book defs' names'
 
-definitionDeps :: Defn -> S.Set Name
-definitionDeps (_, term, typ) = S.union (getDeps term) (getDeps typ)
+definitionDepOrigins :: Defn -> M.Map Name Span
+definitionDepOrigins (_, term, typ) =
+  let termDeps = collectDepSpans S.empty Nothing term
+      typeDeps = collectDepSpans S.empty Nothing typ
+  in M.union termDeps typeDeps
 
 -- Import resolution -----------------------------------------------------------
 
@@ -243,7 +262,7 @@ data ImporterState = ImporterState
   { isRoot        :: FilePath
   , isIndex       :: PkgIndex.IndexConfig
   , isBook        :: Book
-  , isPending     :: S.Set Name
+  , isPending     :: M.Map Name DepOrigin
   , isLoaded      :: S.Set Name
   , isModuleCache :: M.Map String (Book, SubstMap)
   , isSubst       :: SubstMap
@@ -251,109 +270,105 @@ data ImporterState = ImporterState
 
 resolveAll :: ImporterState -> IO ImporterState
 resolveAll st =
-  case S.minView (isPending st) of
+  case M.minViewWithKey (isPending st) of
     Nothing -> pure st
-    Just (dep, rest) -> do
-      st' <- resolveDependency st { isPending = rest } dep
+    Just ((dep, origin), rest) -> do
+      let stWithout = st { isPending = rest }
+      st' <- resolveDependency stWithout dep origin
       resolveAll st'
 
-resolveDependency :: ImporterState -> Name -> IO ImporterState
-resolveDependency st dep
+resolveDependency :: ImporterState -> Name -> DepOrigin -> IO ImporterState
+resolveDependency st dep origin
   | dep `S.member` isLoaded st = pure st
   | otherwise = do
       let resolved = applyNameSubst (isSubst st) dep
       if resolved /= dep
-        then pure st { isPending = S.insert resolved (isPending st) }
+        then pure st { isPending = insertPending resolved origin (isPending st) }
         else case splitFQN dep of
-          Just _  -> ensureDefinition dep st
+          Just _  -> ensureDefinition origin dep st
           Nothing ->
             if not (isModuleCandidate dep)
             then pure st { isLoaded = S.insert dep (isLoaded st) }
             else do
-              st' <- ensureModuleFor dep st
+              st' <- ensureModuleFor origin dep st
               let resolved' = applyNameSubst (isSubst st') dep
               if resolved' == dep
-                then do
-                  hPutStrLn stderr $ "Import error: could not resolve reference '" ++ dep ++ "'."
-                  exitFailure
-                else pure st' { isPending = S.insert resolved' (isPending st') }
+                then throwImportError origin $ "could not resolve reference '" ++ dep ++ "'."
+                else pure st' { isPending = insertPending resolved' origin (isPending st') }
 
 isModuleCandidate :: Name -> Bool
 isModuleCandidate [] = False
 isModuleCandidate name = '/' `elem` name || isUpper (head name)
 
-ensureDefinition :: Name -> ImporterState -> IO ImporterState
-ensureDefinition name st
+ensureDefinition :: DepOrigin -> Name -> ImporterState -> IO ImporterState
+ensureDefinition origin name st
   | name `S.member` isLoaded st = pure st
   | otherwise =
       case M.lookup name (bookDefs (isBook st)) of
         Just _ -> pure st { isLoaded = S.insert name (isLoaded st) }
         Nothing ->
           case splitFQN name of
-            Nothing -> do
-              hPutStrLn stderr $ "Import error: invalid fully qualified name '" ++ name ++ "'."
-              exitFailure
+            Nothing -> throwImportError origin $ "invalid fully qualified name '" ++ name ++ "'."
             Just (modulePath, defName) -> do
               let publicName = lastPathSegment modulePath
                   moduleAlreadyCached = M.member modulePath (isModuleCache st)
               case publicName of
-                Nothing -> do
-                  hPutStrLn stderr $ "Import error: invalid module path '" ++ modulePath ++ "'."
-                  exitFailure
-                Just pub | defName /= pub && not moduleAlreadyCached -> do
-                  hPutStrLn stderr $ "Import error: '" ++ name ++ "' is private to '" ++ modulePath ++ "'."
-                  exitFailure
+                Nothing -> throwImportError origin $ "invalid module path '" ++ modulePath ++ "'."
+                Just pub | defName /= pub && not moduleAlreadyCached ->
+                  throwImportError origin $ "'" ++ name ++ "' is private to '" ++ modulePath ++ "'."
                 _ -> pure ()
-              ((moduleBook, moduleExportSubst), st1) <- loadModule modulePath st
+              ((moduleBook, moduleExportSubst), st1) <- loadModule origin modulePath st
               let subst' = unionSubstMap (isSubst st1) moduleExportSubst
                   st2 = st1 { isSubst = subst' }
               case M.lookup name (bookDefs moduleBook) of
-                Nothing -> do
-                  hPutStrLn stderr $ "Error: definition '" ++ name ++ "' not found in module '" ++ modulePath ++ "'."
-                  exitFailure
+                Nothing -> throwImportError origin $ "definition '" ++ name ++ "' not found in module '" ++ modulePath ++ "'."
                 Just defn -> do
                   let book' = insertDefinition (isBook st2) name defn
-                      depsForDef = S.delete name (definitionDeps defn)
-                      resolvedDeps = applyNameSubstSet subst' depsForDef
+                      depOrigins = M.delete name (definitionDepOrigins defn)
+                      resolvedDeps =
+                        [ (resolved, Just sp)
+                        | (depName, sp) <- M.toList depOrigins
+                        , let resolved = applyNameSubst subst' depName
+                        , resolved /= name
+                        ]
                       alreadyKnown = S.union (bookNames book') (isLoaded st2)
-                      newPending = S.union (isPending st2) (S.difference resolvedDeps alreadyKnown)
+                      filteredDeps = filter (\(depName, _) -> depName `S.notMember` alreadyKnown) resolvedDeps
+                      pending' = foldr (uncurry insertPending) (isPending st2) filteredDeps
                   pure st2
                     { isBook = book'
                     , isLoaded = S.insert name (isLoaded st2)
-                    , isPending = newPending
+                    , isPending = pending'
                     }
 
-ensureModuleFor :: Name -> ImporterState -> IO ImporterState
-ensureModuleFor modulePath st = do
-  ((_, moduleExportSubst), st1) <- loadModule modulePath st
+ensureModuleFor :: DepOrigin -> Name -> ImporterState -> IO ImporterState
+ensureModuleFor origin modulePath st = do
+  ((_, moduleExportSubst), st1) <- loadModule origin modulePath st
   let subst' = unionSubstMap (isSubst st1) moduleExportSubst
   pure st1 { isSubst = subst' }
 
-loadModule :: String -> ImporterState -> IO ((Book, SubstMap), ImporterState)
-loadModule modulePath st =
+loadModule :: DepOrigin -> String -> ImporterState -> IO ((Book, SubstMap), ImporterState)
+loadModule origin modulePath st =
   case M.lookup modulePath (isModuleCache st) of
     Just cached -> pure (cached, st)
     Nothing -> do
-      (posixPath, systemPath) <- resolveModuleFile (isRoot st) (isIndex st) modulePath
+      (posixPath, systemPath) <- resolveModuleFile origin (isRoot st) (isIndex st) modulePath
       content <- readFile (isRoot st </> systemPath)
       case doParseBook posixPath content of
-        Left err -> do
-          hPutStrLn stderr err
-          exitFailure
+        Left err -> throwCompilationError err
         Right (book, parserState) -> do
           let aliasSubst = buildAliasSubstMap (parsedImports parserState)
               localSubst = buildLocalSubstMap posixPath book
               combined = unionSubstMap aliasSubst localSubst
               substituted = substituteRefsInBook combined book
           exportSubst <- case buildExportSubstMap posixPath substituted of
-                           Left errMsg -> hPutStrLn stderr errMsg >> exitFailure
+                           Left errMsg -> throwCompilationError errMsg
                            Right subst -> pure subst
           let cacheEntry = (substituted, exportSubst)
               cache' = M.insert modulePath cacheEntry (isModuleCache st)
           pure (cacheEntry, st { isModuleCache = cache' })
 
-resolveModuleFile :: FilePath -> PkgIndex.IndexConfig -> String -> IO (String, FilePath)
-resolveModuleFile root indexCfg modulePath = do
+resolveModuleFile :: DepOrigin -> FilePath -> PkgIndex.IndexConfig -> String -> IO (String, FilePath)
+resolveModuleFile origin root indexCfg modulePath = do
   let candidates = [modulePath ++ ".bend", modulePath ++ "/_.bend"]
   existing <- firstExisting candidates
   case existing of
@@ -363,9 +378,7 @@ resolveModuleFile root indexCfg modulePath = do
       existing' <- firstExisting candidates
       case existing' of
         Just (posixPath, systemPath) -> pure (posixPath, systemPath)
-        Nothing -> do
-          hPutStrLn stderr $ "Error: unable to locate module '" ++ modulePath ++ "'."
-          exitFailure
+        Nothing -> throwImportError origin $ "unable to locate module '" ++ modulePath ++ "'."
   where
     firstExisting [] = pure Nothing
     firstExisting (p:ps) = do
@@ -381,7 +394,7 @@ resolveModuleFile root indexCfg modulePath = do
     attemptFetch cfg p = do
       res <- PkgIndex.ensureFile cfg p
       case res of
-        Left errMessage -> hPutStrLn stderr ("Warning: failed to fetch '" ++ p ++ "': " ++ errMessage) >> pure False
+        Left _  -> pure False
         Right () -> pure True
 
 -- Entry points ---------------------------------------------------------------
@@ -392,7 +405,7 @@ autoImport currentFile book = do
   indexCfg <- PkgIndex.defaultIndexConfig root
   relFile <- normalizeRelativePath root currentFile
   let localSubst = buildLocalSubstMap relFile book
-  runAutoImport root indexCfg book localSubst emptySubstMap
+  runAutoImport root indexCfg book localSubst emptySubstMap []
 
 autoImportWithExplicit :: FilePath -> Book -> ParserState -> IO Book
 autoImportWithExplicit currentFile book parserState = do
@@ -401,19 +414,27 @@ autoImportWithExplicit currentFile book parserState = do
   relFile <- normalizeRelativePath root currentFile
   let aliasSubst = buildAliasSubstMap (parsedImports parserState)
       localSubst = buildLocalSubstMap relFile book
-  runAutoImport root indexCfg book localSubst aliasSubst
+  runAutoImport root indexCfg book localSubst aliasSubst (parsedImports parserState)
 
-runAutoImport :: FilePath -> PkgIndex.IndexConfig -> Book -> SubstMap -> SubstMap -> IO Book
-runAutoImport root indexCfg base localSubst aliasSubst = do
+runAutoImport :: FilePath -> PkgIndex.IndexConfig -> Book -> SubstMap -> SubstMap -> [Import] -> IO Book
+runAutoImport root indexCfg base localSubst aliasSubst imports = do
   let combinedSubst = unionSubstMap aliasSubst localSubst
       substitutedBase = substituteRefsInBook combinedSubst base
       initialLoaded = bookNames substitutedBase
-      initialPending = S.difference (getBookDeps substitutedBase) initialLoaded
+      depOrigins = getBookDepOrigins substitutedBase
+      addDepOrigin (dep, sp) acc =
+        if dep `S.member` initialLoaded
+          then acc
+          else insertPending dep (Just sp) acc
+      basePending = foldr addDepOrigin M.empty (M.toList depOrigins)
+      addImportOrigin (ImportAlias target _ sp) acc =
+        insertPending target (Just sp) acc
+      pendingWithImports = foldr addImportOrigin basePending imports
       initialState = ImporterState
         { isRoot = root
         , isIndex = indexCfg
         , isBook = substitutedBase
-        , isPending = initialPending
+        , isPending = pendingWithImports
         , isLoaded = initialLoaded
         , isModuleCache = M.empty
         , isSubst = combinedSubst
@@ -430,9 +451,7 @@ ensureBendRoot = do
   let base = FP.takeFileName (FP.normalise cwd)
   if base == "BendRoot"
     then pure cwd
-    else do
-      hPutStrLn stderr "Error: bend must be executed from the BendRoot directory."
-      exitFailure
+    else throwCompilationError "bend must be executed from the BendRoot directory."
 
 normalizeRelativePath :: FilePath -> FilePath -> IO FilePath
 normalizeRelativePath root path = do
@@ -440,8 +459,7 @@ normalizeRelativePath root path = do
   absPath <- canonicalizePath path
   let rel = FP.makeRelative absRoot absPath
   when (takesParent rel) $ do
-    hPutStrLn stderr $ "Error: file '" ++ path ++ "' is outside BendRoot."
-    exitFailure
+    throwCompilationError $ "file '" ++ path ++ "' is outside BendRoot."
   pure (toPosixPath rel)
   where
     takesParent p = ".." `elem` FP.splitDirectories p

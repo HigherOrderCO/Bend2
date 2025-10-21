@@ -35,10 +35,10 @@ module Core.Parse.Parse
 
   -- * Error formatting
   , formatError
-  
+
   -- * Error recovery
   , expectBody
-  
+
   -- * FQN generation
   , qualifyName
   ) where
@@ -58,6 +58,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 
 import Core.Bind
 import Core.Type
+import Core.Show ()
 import qualified Core.Parse.WithSpan as WithSpan
 
 -- Parser state
@@ -65,6 +66,7 @@ data Import
   = ImportAlias
       { importTarget :: String
       , importAlias  :: String
+      , importSpan   :: Span
       }
   deriving (Show, Eq)
 
@@ -170,12 +172,12 @@ located p = do
   return (Loc sp t)
 
 -- | Parse a body expression (of '=', 'rewrite', etc.) with nice errors.
-expectBody :: String -> Parser a -> Parser a  
+expectBody :: String -> Parser a -> Parser a
 expectBody where' parser = do
   pos <- getOffset
   tld <- optional $ lookAhead $ choice
     [ void $ try $ keyword "def"
-    , void $ try $ keyword "type" 
+    , void $ try $ keyword "type"
     , void $ try $ keyword "import"
     , void eof
     ]
@@ -213,7 +215,7 @@ qualifyName defName = do
   where
     -- Convert file path to module path (preserve directory structure, remove .bend extension and /_ suffix)
     toModulePath :: FilePath -> String
-    toModulePath path = 
+    toModulePath path =
       let withoutBend = if ".bend" `isSuffixOf` path
                         then take (length path - 5) path  -- Remove .bend extension
                         else path
