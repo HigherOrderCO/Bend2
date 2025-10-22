@@ -24,7 +24,7 @@ import Core.Gen
   , collectGenInfos
   , generateDefinitions
   )
-import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
+import Core.Adjust.Adjust (adjustBook, adjustBookWithPats, checkBook)
 import Core.Adjust.SplitAnnotate (check, infer)
 import Core.Bind
 import Core.Deps
@@ -121,29 +121,6 @@ runCLIGo path mode allowGen needCheck = do
         collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)
     CLI_GET_GEN_DEPS -> do
       print $ buildGenDepsBook adjustedBook
-
-checkBook :: Book -> IO Book
-checkBook book@(Book defs names m) = do
-  let orderedDefs = [(name, fromJust (M.lookup name defs)) | name <- names]
-  (annotatedDefs, success) <- foldM checkAndAccumulate ([], True) orderedDefs
-  unless success exitFailure
-  return $ Book (M.fromList (reverse annotatedDefs)) names m
-  where
-    checkAndAccumulate (accDefs, accSuccess) (name, (inj, term, typ)) = do
-      let checkResult = do 
-            typ'  <- check 0 noSpan book (Ctx []) typ Set
-            term' <- check 0 noSpan book (Ctx []) term typ'
-            -- traceM $ "-chec: " ++ show term'
-            return (inj, term', typ')
-      case checkResult of
-        Done (inj', term', typ') -> do
-          putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
-          return ((name, (inj', term', typ')) : accDefs, accSuccess)
-        Fail e -> do
-          hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
-          hPutStrLn stderr $ show e
-          -- Keep original term when check fails
-          return ((name, (inj, term, typ)) : accDefs, False)
 
 -- | Run the main function from a book
 runMain :: FilePath -> Book -> IO ()

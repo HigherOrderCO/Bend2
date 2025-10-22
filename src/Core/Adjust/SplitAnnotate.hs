@@ -28,9 +28,11 @@
 
 module Core.Adjust.SplitAnnotate where
 
+import Control.Exception (throw)
 import Control.Monad (unless)
 import Control.Monad (unless, foldM)
 import Data.List (find)
+import Data.List.Split (splitOn)
 import Data.Maybe (fromJust, fromMaybe, listToMaybe)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
@@ -121,7 +123,7 @@ isConstructorSigma _ _ = False
 -- Infer the type of a term
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
 infer d span book@(Book defs names _) ctx term =
-  case term of
+    case term of
 
     -- x : T in ctx
     -- ------------ infer-Var
@@ -580,19 +582,19 @@ inferOp2Type :: Int -> Span -> Book -> Ctx -> NOp2 -> Term -> Term -> Result Ter
 inferOp2Type d span book ctx op ta tb = do
   -- For arithmetic ops, both operands must have the same numeric type
   case op of
-    ADD -> numericOp ta tb
-    SUB -> numericOp ta tb
-    MUL -> numericOp ta tb
-    DIV -> numericOp ta tb
-    MOD -> numericOp ta tb
-    POW -> numericOp ta tb
+    ADD -> numericOp op ta tb
+    SUB -> numericOp op ta tb
+    MUL -> numericOp op ta tb
+    DIV -> numericOp op ta tb
+    MOD -> numericOp op ta tb
+    POW -> numericOp op ta tb
     -- Comparison ops return Bool
-    EQL -> comparisonOp ta tb
-    NEQ -> comparisonOp ta tb
-    LST -> comparisonOp ta tb
-    GRT -> comparisonOp ta tb
-    LEQ -> comparisonOp ta tb
-    GEQ -> comparisonOp ta tb
+    EQL -> comparisonOp op ta tb
+    NEQ -> comparisonOp op ta tb
+    LST -> comparisonOp op ta tb
+    GRT -> comparisonOp op ta tb
+    LEQ -> comparisonOp op ta tb
+    GEQ -> comparisonOp op ta tb
     -- Bitwise/logical ops work on both integers and booleans
     AND -> boolOrIntegerOp ta tb
     OR  -> boolOrIntegerOp ta tb
@@ -600,15 +602,22 @@ inferOp2Type d span book ctx op ta tb = do
     SHL -> integerOp ta tb
     SHR -> integerOp ta tb
   where
-    numericOp ta tb = case (force book ta, force book tb) of
+
+    numericOp op ta tb = case (force book ta, force book tb) of
       (Num t1, Num t2) | t1 == t2 -> return (Num t1)
-      (Nat, Nat) -> return Nat  -- Allow Nat arithmetic operations
+      (Nat, Nat) -> case getDefn book (op2ToNameNat op) of
+        Just _ -> return Nat
+        _      -> Fail $ Undefined span (normalCtx book ctx) (op2ToNameNat op) 
+                  (Just $ "To make '" ++ op2ToStr op ++ "' available for Nat operands, import '" ++ head (splitOn "::" (op2ToNameNat op)) ++ "' manually.")
       _ -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (Ref "Num" 1)) (normal book ta) Nothing
 
-    comparisonOp ta tb = case (force book ta, force book tb) of
+    comparisonOp op ta tb = case (force book ta, force book tb) of
       (Num t1, Num t2) | t1 == t2 -> return Bit
       (Bit, Bit) -> return Bit  -- Allow Bool comparison
-      (Nat, Nat) -> return Bit  -- Allow Nat comparison
+      (Nat, Nat) -> case getDefn book (op2ToNameNat op) of
+        Just _ -> return Bit  -- Allow Nat comparison
+        _      -> Fail $ Undefined span (normalCtx book ctx) (op2ToNameNat op) 
+                  (Just $ "To make '" ++ op2ToStr op ++ "' available for Nat operands, import '" ++ head (splitOn "::" (op2ToNameNat op)) ++ "' manually.")
       _ -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book ta) (normal book tb) Nothing
 
     integerOp ta tb = case (force book ta, force book tb) of
@@ -640,6 +649,41 @@ inferOp1Type d span book ctx op ta = case op of
     Num F64_T -> return (Num F64_T)
     Num CHR_T -> Fail $ CantInfer span (normalCtx book ctx) Nothing -- Negation not supported for CHR
     _         -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+
+op2ToStr :: NOp2 -> String
+op2ToStr op = case op of
+  -- numeric
+  ADD -> "+"
+  SUB -> "-"
+  MUL -> "*"
+  DIV -> "/"
+  MOD -> "%"
+  POW -> "**"
+  -- comparison
+  EQL -> "==="
+  NEQ -> "!=="
+  LST -> "<"
+  GRT -> ">"
+  LEQ -> "<="
+  GEQ -> ">="
+  _ -> ""
+op2ToNameNat :: NOp2 -> String
+op2ToNameNat op = case op of
+  -- numeric
+  ADD -> "Nat/add::add"
+  SUB -> "Nat/sub::sub"
+  MUL -> "Nat/mul::mul"
+  DIV -> "Nat/div::div"
+  MOD -> "Nat/mod::mod"
+  POW -> "Nat/pow::pow"
+  -- comparison
+  EQL -> "Nat/eql::eql" 
+  NEQ -> "Nat/neq::neq" 
+  LST -> "Nat/lst::lst" 
+  GRT -> "Nat/grt::grt" 
+  LEQ -> "Nat/leq::leq" 
+  GEQ -> "Nat/geq::geq" 
+  _ -> ""
 
 ---- Bidirectional type checking with term transformation
 -- 1) Verifies term has expected type 'goal'
@@ -1036,6 +1080,12 @@ check d span book ctx term      goal =
       b' <- check d span book ctx b (Eql (App bT a1) b1 b2)
       return $ Tup a' b'
 
+    (Eql t a b, Set) -> do
+      t' <- check d span book ctx t Set
+      a' <- check d span book ctx a t'
+      b' <- check d span book ctx b t'
+      return $ Eql t' a' b'
+
     -- equal a b
     -- --------------------- Rfl
     -- ctx |- {==} : T{a==b}
@@ -1107,14 +1157,27 @@ check d span book ctx term      goal =
     -- equal tr goal
     -- --------------------------- Op2
     -- ctx |- a op b : goal
-    (Op2 op a b, _) -> do
+    (Op2 op a b, ngoal) -> do
       ta <- infer d span book ctx a
       tb <- infer d span book ctx b
       b' <- check d (getSpan span b) book ctx b ta
       tr <- inferOp2Type d span book ctx op ta tb
       if equal d book tr goal
-        then return term
+        then case cut ta of
+          Nat -> return (App (App (Ref (op2ToNameNat op) 1) a) b)
+          _   -> return term
         else Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book tr) Nothing
+      
+      -- case (cut ta, cut tb) of
+      --   (Nat, Nat) -> check d span book ctx (App (App (Ref (op2ToNameNat op) 1) a) b) ngoal
+      --   _ -> do
+      --     tr <- inferOp2Type d span book ctx op ta tb
+      --     if equal d book tr goal
+      --       then case cut ta of
+      --         Nat -> return (App (App (Ref (op2ToNameNat op) 1) a) b)
+      --         _   -> return term
+      --       else Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book tr) Nothing
+        
 
     -- ctx |- a : ta
     -- inferOp1Type op ta = tr

@@ -283,27 +283,6 @@ whnfOp2 book op a b =
       GEQ -> if x >= y then Bt1 else Bt0
       POW -> Val (CHR_V (toEnum ((fromEnum x) ^ (fromEnum y))))
       _   -> Op2 op a' b'
-    -- Nat operations: normalize to Nat/op calls
-    (a'@Zer, b')     -> natOp op a' b'
-    (a'@(Suc _), b') -> natOp op a' b'
-    (a', b'@Zer)     -> natOp op a' b'
-    (a', b'@(Suc _)) -> natOp op a' b'
-    _                -> Op2 op a' b'
-  where
-    natOp op a b = case op of
-      ADD -> whnf book $ App (App (Ref "Nat/add" 1) a) b
-      SUB -> whnf book $ App (App (Ref "Nat/sub" 1) a) b
-      MUL -> whnf book $ App (App (Ref "Nat/mul" 1) a) b
-      DIV -> whnf book $ App (App (Ref "Nat/div" 1) a) b
-      MOD -> whnf book $ App (App (Ref "Nat/mod" 1) a) b
-      POW -> whnf book $ App (App (Ref "Nat/pow" 1) a) b
-      EQL -> whnf book $ App (App (Ref "Nat/eql" 1) a) b
-      NEQ -> whnf book $ App (App (Ref "Nat/neq" 1) a) b
-      LST -> whnf book $ App (App (Ref "Nat/lst" 1) a) b
-      GRT -> whnf book $ App (App (Ref "Nat/grt" 1) a) b
-      LEQ -> whnf book $ App (App (Ref "Nat/leq" 1) a) b
-      GEQ -> whnf book $ App (App (Ref "Nat/geq" 1) a) b
-      _   -> Op2 op a b
 
 whnfOp1 :: Book -> NOp1 -> Term -> Term
 whnfOp1 book op a =
