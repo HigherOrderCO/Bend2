@@ -201,19 +201,6 @@ whnfOp2 book op a b =
   let a' = whnf book a in
   let b' = whnf book b in
   case (a', b') of
-    -- Bool operations
-    (Bt0, Bt0) -> case op of
-      AND -> Bt0; OR  -> Bt0; XOR -> Bt0; EQL -> Bt1; NEQ -> Bt0
-      _   -> Op2 op a' b'
-    (Bt0, Bt1) -> case op of
-      AND -> Bt0; OR  -> Bt1; XOR -> Bt1; EQL -> Bt0; NEQ -> Bt1
-      _   -> Op2 op a' b'
-    (Bt1, Bt0) -> case op of
-      AND -> Bt0; OR  -> Bt1; XOR -> Bt1; EQL -> Bt0; NEQ -> Bt1
-      _   -> Op2 op a' b'
-    (Bt1, Bt1) -> case op of
-      AND -> Bt1; OR  -> Bt1; XOR -> Bt0; EQL -> Bt1; NEQ -> Bt0
-      _   -> Op2 op a' b'
     -- Numeric operations
     (Val (U64_V x), Val (U64_V y)) -> case op of
       ADD -> Val (U64_V (x + y))
@@ -283,6 +270,7 @@ whnfOp2 book op a b =
       GEQ -> if x >= y then Bt1 else Bt0
       POW -> Val (CHR_V (toEnum ((fromEnum x) ^ (fromEnum y))))
       _   -> Op2 op a' b'
+    _   -> Op2 op a' b'
 
 whnfOp1 :: Book -> NOp1 -> Term -> Term
 whnfOp1 book op a =
