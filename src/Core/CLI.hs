@@ -52,7 +52,7 @@ data CLIMode
 runCLI :: FilePath -> CLIMode -> IO ()
 runCLI path mode = do
   let allowGen  = mode `elem` [CLI_RUN]
-      needCheck = mode `elem` [CLI_RUN, CLI_TO_JAVASCRIPT, CLI_SHOW_CORE]
+      needCheck = mode `elem` [CLI_RUN, CLI_TO_JAVASCRIPT, CLI_TO_HVM, CLI_SHOW_CORE]
   result <- try @BendException (runCLIGo path mode allowGen needCheck)
   case result of
     Left (BendException err) -> showErrAndDie err
@@ -77,14 +77,14 @@ runCLIGo path mode allowGen needCheck = do
 
   case mode of
     CLI_RUN -> do
-      let metasPresent = bookHasMet adjustedBook
+      let metasPresent = bookHasMet checkedBook
       let genInfos     = collectGenInfos path rawBook
       if allowGen
       then case (genInfos, metasPresent) of
         ([], True ) -> showErrAndDie $ Unsupported noSpan (Ctx []) (Just "Meta variables remain after generation; run `bend verify` for detailed errors.")
         ([], False) -> runMain path checkedBook
         (_ , _    ) -> do
-          generatedDefsResult <- generateDefinitions path adjustedBook mainFQN genInfos
+          generatedDefsResult <- generateDefinitions path checkedBook mainFQN genInfos
           generatedDefs <- case generatedDefsResult of
             Left err      -> showErrAndDie $ Unsupported noSpan (Ctx []) (Just err)
             Right defs    -> pure defs
@@ -107,7 +107,7 @@ runCLIGo path mode allowGen needCheck = do
       formattedJS <- formatJavaScript jsCode
       putStrLn formattedJS
     CLI_TO_HVM -> do
-      let hvmCode = HVM.compile adjustedBook mainFQN
+      let hvmCode = HVM.compile checkedBook mainFQN
       putStrLn hvmCode
     CLI_TO_HASKELL -> do
       let hsCode = HS.compile adjustedBook mainFQN

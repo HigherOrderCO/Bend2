@@ -737,6 +737,10 @@ check d span book ctx term      goal =
     (Era, _) -> do
       return term
 
+    (Met n t ct, _) -> do
+      t' <- check d span book ctx t Set
+      return $ Met n t' ct
+
     -- ctx |- t : Set
     -- ctx |- v : t
     -- ctx, x:t |- f : T
