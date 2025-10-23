@@ -23,7 +23,7 @@ variationsMap book@(Book defs nams _) = (refCounts, symCounts)
     condense :: S.Set Name -> M.Map Name Int
     condense names = foldl (\counts name -> M.unionWith (\c1 c2 -> c1+c2) counts (M.singleton name 1)) M.empty (map cutName (S.toList names))
 
-    -- Collects all fully qualified Sym strings in a term
+    -- Collects all fully qualified Sym strings declared in Enu's of a term
     go :: S.Set Name -> Term -> S.Set Name 
     go seen term = case term of
       -- Variables
