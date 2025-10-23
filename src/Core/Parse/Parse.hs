@@ -63,7 +63,11 @@ import qualified Core.Parse.WithSpan as WithSpan
 
 -- Parser state
 data Import
-  = ImportAlias
+  = ImportModule
+      { importTarget :: String
+      , importSpan   :: Span
+      }
+  | ImportAlias
       { importTarget :: String
       , importAlias  :: String
       , importSpan   :: Span
@@ -124,7 +128,7 @@ isNameChar c = isAsciiLower c || isAsciiUpper c || isDigit c || c == '_' || c ==
 
 reserved :: [Name]
 -- The 'lambda' keyword is removed as part of the refactoring to expression-based matches.
-reserved = ["match","case","else","elif","if","end","all","any","finally","log","gen","enum","assert","trust"]
+reserved = ["match","case","else","elif","if","end","all","any","finally","log","gen","enum","assert","trust","import","alias"]
 
 -- | Parse a raw name without import resolution
 parseRawName :: Parser Name
