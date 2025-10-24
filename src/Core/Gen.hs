@@ -113,12 +113,8 @@ applyGenerated original genInfos generated = do
     toReplacement info =
       case M.lookup (giSimpleName info) generated of
         Nothing     -> Left $ "Missing generated definition for " ++ giSimpleName info
-        Just result -> Right (giSpan info, ensureTrailingNewline result)
-
-    ensureTrailingNewline txt
-      | null txt         = txt
-      | last txt == '\n' = txt
-      | otherwise        = txt ++ "\n"
+        Just result -> Right (giSpan info, stripTrailingSpaces result)
+    stripTrailingSpaces = (++ "\n") . reverse . dropWhile (`elem` " \t\r\n") . reverse
 
 applyGeneratedGo :: String -> [(Span, String)] -> Either String String
 applyGeneratedGo original replacements = do
@@ -163,7 +159,7 @@ applyGeneratedGo original replacements = do
     
     applyOne acc (start, end, txt) =
       let (prefix, rest) = splitAt start acc
-          (_,    suffix) = splitAt (end - start) rest
+          (_,    suffix) = splitAt (end - start + 1) rest
       in prefix ++ txt ++ suffix
 
 
