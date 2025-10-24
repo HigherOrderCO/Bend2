@@ -14,7 +14,7 @@ module Core.Import
   ) where
 
 import Control.Exception (throwIO)
-import Control.Monad (unless, when)
+import Control.Monad (foldM, unless, when)
 import Data.Char (isUpper)
 import Data.List (foldl', intercalate, isSuffixOf)
 import Data.List.Split (splitOn)
@@ -56,6 +56,16 @@ data ImporterState = ImporterState
   , isSubst       :: !SubstMap
   }
 
+data ModuleImport = ModuleImport
+  { miTarget :: !Name
+  , miSpan   :: !Span
+  } deriving (Show, Eq)
+
+data ImportPlan = ImportPlan
+  { planAliasSubst   :: !SubstMap
+  , planModuleImports :: ![ModuleImport]
+  } deriving (Show, Eq)
+
 -- Entry points ----------------------------------------------------------------
 
 -- | Resolve every implicit dependency starting from a parsed book. This variant
@@ -76,12 +86,14 @@ autoImportWithExplicit currentFile book parserState = do
   root <- ensureBendRoot
   indexCfg <- PkgIndex.defaultIndexConfig root
   relFile <- normalizeRelativePath root currentFile
-  let aliasSubst = buildAliasSubstMap (parsedImports parserState)
+  plan <- importPlanOrThrow (parsedImports parserState)
+  let aliasSubst = planAliasSubst plan
+      moduleImports = planModuleImports plan
       localSubst = buildLocalSubstMap relFile book
-  runAutoImport root indexCfg book localSubst aliasSubst (parsedImports parserState)
+  runAutoImport root indexCfg book localSubst aliasSubst moduleImports
 
 -- | Core resolver loop shared by both entry points.
-runAutoImport :: FilePath -> PkgIndex.IndexConfig -> Book -> SubstMap -> SubstMap -> [Import] -> IO Book
+runAutoImport :: FilePath -> PkgIndex.IndexConfig -> Book -> SubstMap -> SubstMap -> [ModuleImport] -> IO Book
 runAutoImport root indexCfg base localSubst aliasSubst imports = do
   let combinedSubst = aliasSubst <> localSubst
       substitutedBase = substituteRefsInBook combinedSubst base
@@ -107,10 +119,9 @@ accumulateDep loaded acc (dep, sp) =
     then acc
     else insertPending dep (Just sp) acc
 
-accumulateImport :: PendingDeps -> Import -> PendingDeps
-accumulateImport acc (ImportAlias target _ sp) =
+accumulateImport :: PendingDeps -> ModuleImport -> PendingDeps
+accumulateImport acc (ModuleImport target sp) =
   insertPending target (Just sp) acc
-accumulateImport acc _ = acc
 
 -- | Ensure that the current working directory is BendRoot.
 ensureBendRoot :: IO FilePath
@@ -140,6 +151,51 @@ extractMainFQN :: FilePath -> Book -> String
 extractMainFQN path _ =
   let moduleName = extractModuleName path
   in moduleName ++ "::main"
+
+-- Import planning ------------------------------------------------------------
+
+importPlanOrThrow :: [Import] -> IO ImportPlan
+importPlanOrThrow directives =
+  case buildImportPlan directives of
+    Left (sp, msg) -> throwImportError (Just sp) msg
+    Right plan     -> pure plan
+
+buildImportPlan :: [Import] -> Either (Span, String) ImportPlan
+buildImportPlan rawDirectives = do
+  let ordered = reverse rawDirectives
+  (aliasSubst, moduleRev) <- foldM step (mempty, []) ordered
+  pure ImportPlan
+        { planAliasSubst = aliasSubst
+        , planModuleImports = reverse moduleRev
+        }
+  where
+    step :: (SubstMap, [ModuleImport]) -> Import -> Either (Span, String) (SubstMap, [ModuleImport])
+    step (subst, mods) directive =
+      case directive of
+        ImportAlias target alias sp -> do
+          resolved <- withSpan sp (resolveImportPath subst target)
+          let aliasDirective = ImportAlias resolved alias sp
+          let subst' = addAlias subst aliasDirective
+          pure (subst', mods)
+        ImportModule target sp -> do
+          resolved <- withSpan sp (resolveImportPath subst target)
+          pure (subst, ModuleImport resolved sp : mods)
+
+    withSpan :: Span -> Either String a -> Either (Span, String) a
+    withSpan sp =
+      either (\msg -> Left (sp, msg)) Right
+
+resolveImportPath :: SubstMap -> String -> Either String String
+resolveImportPath subst start = go S.empty start
+  where
+    go seen current
+      | current `S.member` seen =
+          Left ("cyclic alias detected while resolving '" ++ start ++ "'.")
+      | otherwise =
+          let next = applyPrefixSubst subst current
+          in if next == current
+               then Right current
+               else go (S.insert current seen) next
 
 -- Substitution utilities ------------------------------------------------------
 
@@ -286,10 +342,6 @@ lastPathSegment path =
 
 -- Substitution map builders ---------------------------------------------------
 
--- | Collect substitution entries introduced by explicit alias imports.
-buildAliasSubstMap :: [Import] -> SubstMap
-buildAliasSubstMap = foldl' addAlias mempty
-
 addAlias :: SubstMap -> Import -> SubstMap
 addAlias acc (ImportAlias target alias _) =
   let withPrefix = insertPrefix alias target acc
@@ -299,6 +351,7 @@ addAlias acc (ImportAlias target alias _) =
          let fqn = target ++ "::" ++ public
              withPrimary = insertFunction alias fqn withPrefix
          in insertFunction (alias ++ "/" ++ public) fqn withPrimary
+addAlias acc _ = acc
 
 -- | Collect substitution entries that allow referring to local definitions by
 -- their short names.
@@ -376,6 +429,10 @@ markLoaded name st = st { isLoaded = S.insert name (isLoaded st) }
 enqueueDependency :: Name -> DepOrigin -> ImporterState -> ImporterState
 enqueueDependency name origin st =
   st { isPending = insertPending name origin (isPending st) }
+
+enqueueModuleImports :: [ModuleImport] -> ImporterState -> ImporterState
+enqueueModuleImports imports st =
+  foldl' (\acc (ModuleImport target sp) -> enqueueDependency target (Just sp) acc) st imports
 
 mergeSubst :: SubstMap -> ImporterState -> ImporterState
 mergeSubst subst st = st { isSubst = isSubst st <> subst }
@@ -477,7 +534,9 @@ loadModule origin modulePath st =
       case doParseBook posixPath content of
         Left err -> throwCompilationError err
         Right (book, parserState) -> do
-          let aliasSubst = buildAliasSubstMap (parsedImports parserState)
+          plan <- importPlanOrThrow (parsedImports parserState)
+          let aliasSubst = planAliasSubst plan
+              moduleImports = planModuleImports plan
               localSubst = buildLocalSubstMap posixPath book
               combined = aliasSubst <> localSubst
               substituted = substituteRefsInBook combined book
@@ -486,7 +545,9 @@ loadModule origin modulePath st =
                            Right subst -> pure subst
           let cacheEntry = (substituted, exportSubst)
               cache' = M.insert modulePath cacheEntry (isModuleCache st)
-          pure (cacheEntry, st { isModuleCache = cache' })
+              stCached = st { isModuleCache = cache' }
+              stQueued = enqueueModuleImports moduleImports stCached
+          pure (cacheEntry, stQueued)
 
 -- | Resolve a module path into POSIX and system paths, fetching from the index
 -- when not available locally.

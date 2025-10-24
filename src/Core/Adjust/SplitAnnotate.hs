@@ -28,9 +28,11 @@
 
 module Core.Adjust.SplitAnnotate where
 
+import Control.Exception (throw)
 import Control.Monad (unless)
 import Control.Monad (unless, foldM)
 import Data.List (find)
+import Data.List.Split (splitOn)
 import Data.Maybe (fromJust, fromMaybe, listToMaybe)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
@@ -121,7 +123,7 @@ isConstructorSigma _ _ = False
 -- Infer the type of a term
 infer :: Int -> Span -> Book -> Ctx -> Term -> Result Term
 infer d span book@(Book defs names _) ctx term =
-  case term of
+    case term of
 
     -- x : T in ctx
     -- ------------ infer-Var
@@ -600,15 +602,16 @@ inferOp2Type d span book ctx op ta tb = do
     SHL -> integerOp ta tb
     SHR -> integerOp ta tb
   where
+
     numericOp ta tb = case (force book ta, force book tb) of
       (Num t1, Num t2) | t1 == t2 -> return (Num t1)
-      (Nat, Nat) -> return Nat  -- Allow Nat arithmetic operations
+      (Nat, Nat) -> return Nat
       _ -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (Ref "Num" 1)) (normal book ta) Nothing
 
     comparisonOp ta tb = case (force book ta, force book tb) of
       (Num t1, Num t2) | t1 == t2 -> return Bit
-      (Bit, Bit) -> return Bit  -- Allow Bool comparison
-      (Nat, Nat) -> return Bit  -- Allow Nat comparison
+      (Bit, Bit) -> return Bit
+      (Nat, Nat) -> return Bit
       _ -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book ta) (normal book tb) Nothing
 
     integerOp ta tb = case (force book ta, force book tb) of
@@ -619,7 +622,7 @@ inferOp2Type d span book ctx op ta tb = do
       _ -> Fail $ TypeMismatch span book (normalCtx book ctx) (normal book (Ref "Num" 1)) (normal book ta) Nothing
 
     boolOrIntegerOp ta tb = case (force book ta, force book tb) of
-      (Bit, Bit) -> return Bit  -- Logical operations on booleans
+      (Bit, Bit) -> return Bit
       (Num U64_T, Num U64_T) -> return (Num U64_T)  -- Bitwise operations on integers
       (Num I64_T, Num I64_T) -> return (Num U64_T)
       (Num F64_T, Num F64_T) -> return (Num U64_T)
@@ -640,6 +643,59 @@ inferOp1Type d span book ctx op ta = case op of
     Num F64_T -> return (Num F64_T)
     Num CHR_T -> Fail $ CantInfer span (normalCtx book ctx) Nothing -- Negation not supported for CHR
     _         -> Fail $ CantInfer span (normalCtx book ctx) Nothing
+
+op2ToStr :: NOp2 -> String
+op2ToStr op = case op of
+  -- numeric
+  ADD -> "+"
+  SUB -> "-"
+  MUL -> "*"
+  DIV -> "/"
+  MOD -> "%"
+  POW -> "**"
+  -- comparison
+  EQL -> "==="
+  NEQ -> "!=="
+  LST -> "<"
+  GRT -> ">"
+  LEQ -> "<="
+  GEQ -> ">="
+  AND -> "and"
+  OR  -> "or"
+  XOR -> "xor" 
+  _ -> ""
+op2ToNameNat :: NOp2 -> String
+op2ToNameNat op = case op of
+  -- numeric
+  ADD -> "Nat/add::add"
+  SUB -> "Nat/sub::sub"
+  MUL -> "Nat/mul::mul"
+  DIV -> "Nat/div::div"
+  MOD -> "Nat/mod::mod"
+  POW -> "Nat/pow::pow"
+  -- comparison
+  EQL -> "Nat/eql::eql" 
+  NEQ -> "Nat/neq::neq" 
+  LST -> "Nat/lst::lst" 
+  GRT -> "Nat/grt::grt" 
+  LEQ -> "Nat/leq::leq" 
+  GEQ -> "Nat/geq::geq" 
+  _ -> ""
+
+op2ToNameBit :: NOp2 -> String
+op2ToNameBit op = case op of
+  -- comparison
+  EQL -> "Bool/eql::eql" 
+  NEQ -> "Bool/neq::neq" 
+  LST -> "Bool/lst::lst" 
+  GRT -> "Bool/grt::grt" 
+  LEQ -> "Bool/leq::leq" 
+  GEQ -> "Bool/geq::geq" 
+  -- logical
+  AND -> "Bool/and::and" 
+  OR  -> "Bool/or::or" 
+  XOR -> "Bool/xor::xor" 
+  _ -> ""
 
 ---- Bidirectional type checking with term transformation
 -- 1) Verifies term has expected type 'goal'
@@ -680,6 +736,10 @@ check d span book ctx term      goal =
     -- ctx |- * : T
     (Era, _) -> do
       return term
+
+    (Met n t ct, _) -> do
+      t' <- check d span book ctx t Set
+      return $ Met n t' ct
 
     -- ctx |- t : Set
     -- ctx |- v : t
@@ -1036,6 +1096,12 @@ check d span book ctx term      goal =
       b' <- check d span book ctx b (Eql (App bT a1) b1 b2)
       return $ Tup a' b'
 
+    (Eql t a b, Set) -> do
+      t' <- check d span book ctx t Set
+      a' <- check d span book ctx a t'
+      b' <- check d span book ctx b t'
+      return $ Eql t' a' b'
+
     -- equal a b
     -- --------------------- Rfl
     -- ctx |- {==} : T{a==b}
@@ -1107,13 +1173,22 @@ check d span book ctx term      goal =
     -- equal tr goal
     -- --------------------------- Op2
     -- ctx |- a op b : goal
-    (Op2 op a b, _) -> do
+    (Op2 op a b, ngoal) -> do
       ta <- infer d span book ctx a
       tb <- infer d span book ctx b
       b' <- check d (getSpan span b) book ctx b ta
       tr <- inferOp2Type d span book ctx op ta tb
       if equal d book tr goal
-        then return term
+        then case cut ta of
+          Nat -> case getDefn book (op2ToNameNat op) of
+            Just _ -> return (App (App (Ref (op2ToNameNat op) 1) a) b)
+            _      -> Fail $ Undefined span (normalCtx book ctx) (op2ToNameNat op) 
+                      (Just $ "To make infix '" ++ op2ToStr op ++ "' available for Nat operands, import '" ++ head (splitOn "::" (op2ToNameNat op)) ++ "' manually.")
+          Bit -> case getDefn book (op2ToNameBit op) of
+            Just _ -> return (App (App (Ref (op2ToNameBit op) 1) a) b)
+            _      -> Fail $ Undefined span (normalCtx book ctx) (op2ToNameBit op) 
+                      (Just $ "To make infix '" ++ op2ToStr op ++ "' available for Bool operands, import '" ++ head (splitOn "::" (op2ToNameBit op)) ++ "' manually.")
+          _   -> return term
         else Fail $ TypeMismatch span book (normalCtx book ctx) (normal book goal) (normal book tr) Nothing
 
     -- ctx |- a : ta

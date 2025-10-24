@@ -75,6 +75,7 @@ import Core.Adjust.FlattenPats
 import Core.Adjust.ResolveEnums
 import Core.Adjust.ReduceEtas
 import Core.Adjust.SimplifyNames
+import Core.Adjust.SplitAnnotate
 import Core.Bind
 import Core.Deps
 import Core.FreeVars
@@ -83,6 +84,7 @@ import Core.Type
 import Core.WHNF
 import GHC.IO (unsafePerformIO)
 import System.IO (hPutStrLn, stderr)
+import System.Exit (exitFailure)
 
 -- | Adjusts a single term, simplifying pattern matching and other constructs.
 -- It uses a book of already-adjusted definitions for context during flattening.
@@ -197,3 +199,42 @@ adjustDef book visiting adjustFn name = do
           let newAdjMap  = M.insert name (inj, adjTerm, adjType) adjMap
               newDoneSet = S.insert name doneSet
           in (Book newAdjMap names m, newDoneSet)
+
+checkBook :: Book -> IO Book
+checkBook (Book defs names m) = do
+  (defsFinal, success) <- foldM checkAndAccumulate (defs, True) names
+  unless success exitFailure
+  return $ Book defsFinal names m
+  where
+    checkAndAccumulate :: (M.Map Name (Inj, Term, Term), Bool) -> Name
+                       -> IO (M.Map Name (Inj, Term, Term), Bool)
+    checkAndAccumulate (defsCur, accSuccess) name = do
+      -- always read the *current* view of this def (deps may have updated earlier ones)
+      let (inj, term, typ) = fromJust (M.lookup name defsCur)
+          bookPrev         = Book defsCur names m
+
+      -- 1) check the type under the partial book so far
+      case check 0 noSpan bookPrev (Ctx []) typ Set of
+        Fail e -> do
+          hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
+          hPutStrLn stderr $ show e
+          -- keep original on failure
+          return (defsCur, False)
+
+        Done typ' -> do
+          -- 2) check the term using a book where THIS name already has typ'
+          let defsWithTyp = M.insert name (inj, term, typ') defsCur
+              bookWithTyp = Book defsWithTyp names m
+          case check 0 noSpan bookWithTyp (Ctx []) term typ' of
+            Fail e -> do
+              hPutStrLn stderr $ "\x1b[31m✗ " ++ name ++ "\x1b[0m"
+              hPutStrLn stderr $ show e
+              -- keep original on failure
+              return (defsCur, False)
+
+            Done term' -> do
+              -- traceM $ "[chec] " ++ show term' ++ " :: " ++ show typ'
+              putStrLn $ "\x1b[32m✓ " ++ name ++ "\x1b[0m"
+              -- 3) commit the updated (inj, term', typ') into the partial map
+              let defsNext = M.insert name (inj, term', typ') defsCur
+              return (defsNext, accSuccess)

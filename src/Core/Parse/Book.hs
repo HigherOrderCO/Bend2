@@ -6,7 +6,9 @@ module Core.Parse.Book
   , doReadBook
   ) where
 
+import Control.Applicative (optional)
 import Control.Monad (when)
+import Data.Foldable (for_)
 import Control.Monad.State.Strict (State, get, put, evalState, runState)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isAlphaNum)
 import Data.List (intercalate)
@@ -83,13 +85,19 @@ addImport imp = do
 -- | Syntax: import <target> as <alias>
 parseImport :: Parser ()
 parseImport = do
-  (sp, (target, alias)) <- withSpan $ do
+  (sp, (target, maybeAlias)) <- withSpan $ do
     _ <- symbol "import"
     tgt <- parseImportTarget
-    _ <- symbol "as"
-    als <- name
+    als <- optionalAlias
     pure (tgt, als)
-  addImport (ImportAlias target alias sp)
+  addImport (ImportModule target sp)
+  for_ maybeAlias $ \als ->
+    addImport (ImportAlias target als sp)
+  where
+    optionalAlias :: Parser (Maybe String)
+    optionalAlias = optional $ do
+      _ <- symbol "as"
+      name
 
 -- | Parse the import target, allowing both path-only and FQN forms.
 parseImportTarget :: Parser String
@@ -104,16 +112,34 @@ parseImportTarget = lexeme $ do
     isSegmentChar c =
       isAsciiLower c || isAsciiUpper c || isDigit c || c == '_' || c == '@' || c == '-' || c == '=' || c == '$'
 
+-- | Syntax: alias <target> as <alias>
+parseAlias :: Parser ()
+parseAlias = do
+  (sp, (target, aliasName)) <- withSpan $ do
+    _ <- symbol "alias"
+    tgt <- parseImportTarget
+    _ <- symbol "as"
+    als <- name
+    pure (tgt, als)
+  addImport (ImportAlias target aliasName sp)
+
 
 -- | Syntax: import statements followed by definitions
 parseBook :: Parser Book
 parseBook = do
   -- Parse all import statements first
-  _ <- many (try parseImport)
+  _ <- many parseDirective
   -- Then parse definitions
   defs <- many parseDefinition
   let names = map fst defs
   return $ Book (M.fromList defs) names (M.empty, M.empty)
+
+parseDirective :: Parser ()
+parseDirective =
+  choice
+    [ parseImport
+    , parseAlias
+    ]
 
 -- | Syntax: type Name<T, U>(i: Nat) -> Type: case @Tag1: field1: T1 case @Tag2: field2: T2
 parseType :: Parser (Name, Defn)
