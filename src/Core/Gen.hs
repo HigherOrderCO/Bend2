@@ -6,6 +6,7 @@ module Core.Gen
   , generateDefinitions
   , applyGenerated
   , buildGenDepsBook
+  , fillBook
   ) where
 
 import qualified Data.Map as M
@@ -60,6 +61,18 @@ collectGenInfos file (Book defs names _) = mapMaybe lookupGen names
 -- Generation pipeline
 -------------------------------------------------------------------------------
 
+fillBook :: FilePath -> String -> String -> Book -> Book -> IO (Result String)
+fillBook path mainFQN content rawBook adjustedBook = do
+  let genInfos = collectGenInfos path rawBook
+  eDefs <- generateDefinitions path adjustedBook mainFQN genInfos
+  pure $ do
+    defs    <- eitherToResult eDefs
+    updated <- eitherToResult (applyGenerated content genInfos defs)
+    pure updated
+  where
+    eitherToResult :: Either String a -> Result a
+    eitherToResult = either (\msg -> Fail (Unsupported noSpan (Ctx []) (Just msg))) Done
+
 generateDefinitions :: FilePath -> Book -> Name -> [GenInfo] -> IO (Either String (M.Map String String))
 generateDefinitions _file book mainFQN genInfos = do
   let hvmCode = HVM.compile book mainFQN
@@ -70,17 +83,15 @@ generateDefinitions _file book mainFQN genInfos = do
     hClose tmpHandle
     timeout (5 * 1000000) (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
 
-  return (processHvmResult hvmResult genInfos)
-  where
-    processHvmResult :: Maybe (ExitCode, String, String) -> [GenInfo] -> Either String (M.Map String String)
-    processHvmResult hvmResult genInfos = do
-      -- Handle HVM execution result
-      stdoutStr <- case hvmResult of
-        Nothing                                  -> Left $ "hvm4 timed out while generating code."
-        Just (ExitFailure code,    _, stderrStr) -> Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
-        Just (ExitSuccess, stdoutStr, stderrStr) -> if not (null stderrStr)
-                                                    then Left  $ "hvm4 reported an error: " ++ stderrStr
-                                                    else Right $ stdoutStr
+  return (generateDefinitionsGo hvmResult genInfos)
+
+generateDefinitionsGo :: Maybe (ExitCode, String, String) -> [GenInfo] -> Either String (M.Map String String)
+generateDefinitionsGo hvmResult genInfos = do
+  case hvmResult of
+    Nothing                                                   -> Left $ "hvm4 timed out while generating code."
+    Just (ExitFailure code,    _, stderrStr)                  -> Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
+    Just (ExitSuccess, stdoutStr, stderrStr) | null stdoutStr -> Left $ "hvm4 reported an error: " ++ stderrStr
+    Just (ExitSuccess, stdoutStr, stderrStr)                  -> do
       terms <- parseGeneratedTerms stdoutStr
 
       -- If not all terms have been synthesized, interrupt 
@@ -88,14 +99,11 @@ generateDefinitions _file book mainFQN genInfos = do
         Left $ "hvm4 returned " ++ show (length terms) ++ " definitions, expected " ++ show (length genInfos)
 
       -- Render definitions into final map
-      renderedTerms <- traverse renderDef (zip genInfos terms)
-      return $ M.fromList renderedTerms
-
-      where 
-        renderDef (info, term) = case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
-            Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
-            Right txt -> Right (giSimpleName info, txt)
-
+      M.fromList <$> traverse renderDef (zip genInfos terms)
+  where
+    renderDef (info, term) = case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
+        Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
+        Right txt -> Right (giSimpleName info, txt)
 
 applyGenerated :: String -> [GenInfo] -> M.Map String String -> Either String String
 applyGenerated original genInfos generated = do
@@ -164,8 +172,7 @@ applyGeneratedGo original replacements = do
 -------------------------------------------------------------------------------
 
 buildGenDepsBook :: Book -> Book
-buildGenDepsBook book@(Book defs names m) =
-  Book finalDefs finalNames m
+buildGenDepsBook book@(Book defs names m) = Book finalDefs finalNames m
   where
     genDefs = M.filter (\(_, term, _) -> hasMet term) defs
     genNames = M.keysSet genDefs
