@@ -50,15 +50,14 @@ data CLIMode
 
 runCLI :: FilePath -> CLIMode -> IO ()
 runCLI path mode = do
-  let allowGen  = mode `elem` [CLI_RUN]
-      needCheck = mode `elem` [CLI_RUN, CLI_GEN_RUN, CLI_TO_HVM, CLI_TO_JAVASCRIPT, CLI_SHOW_CORE]
-  result <- try @BendException (runCLIGo path mode allowGen needCheck)
+  let needCheck = mode `elem` [CLI_RUN, CLI_GEN_RUN, CLI_TO_HVM, CLI_TO_JAVASCRIPT, CLI_SHOW_CORE]
+  result <- try @BendException (runCLIGo path mode needCheck)
   case result of
     Left (BendException err) -> showErrAndDie err
     Right ()                 -> pure ()
 
-runCLIGo :: FilePath -> CLIMode -> Bool -> Bool -> IO ()
-runCLIGo path mode allowGen needCheck = do
+runCLIGo :: FilePath -> CLIMode -> Bool -> IO ()
+runCLIGo path mode needCheck = do
   content <- readFile path
   (rawBook, importedBook) <- case doParseBook path content of
     Left err                  -> showErrAndDie err
@@ -82,7 +81,7 @@ runCLIGo path mode allowGen needCheck = do
         case filledBookTxt of
           Done txt -> writeFile path txt
           Fail e   -> showErrAndDie e
-        runCLIGo path CLI_RUN False needCheck
+        runCLIGo path CLI_RUN needCheck
       else runMain path checkedBook
     CLI_RUN ->
       if bookHasMet adjustedBook

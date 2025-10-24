@@ -19,11 +19,27 @@ import Test
 
 nat_op2 :: String
 nat_op2 = """
+import Nat/add as add
+
 def f(a:Nat, b:Nat) -> Nat:
   a+b
 
 def main : Nat = f(1n,2n)
 """
 
+nat_add :: String
+nat_add = """
+def add(a:Nat, b:Nat) -> Nat:
+  match a:
+    case 0n: b
+    case 1n+p: 1n+add(p,b)
+"""
+
 main :: IO ()
-main = testFileChecks nat_op2
+main =
+  test "bend main.bend"
+    [ ("main.bend", nat_op2)
+    , ("Nat/add.bend", nat_add)
+    ]
+    "using infix '+' for nats works if Nat/add is in context"
+    $ \_ err -> assert (err == "")
