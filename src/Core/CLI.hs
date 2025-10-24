@@ -51,7 +51,7 @@ data CLIMode
 runCLI :: FilePath -> CLIMode -> IO ()
 runCLI path mode = do
   let allowGen  = mode `elem` [CLI_RUN]
-      needCheck = mode `elem` [CLI_RUN, CLI_TO_JAVASCRIPT, CLI_SHOW_CORE]
+      needCheck = mode `elem` [CLI_RUN, CLI_GEN_RUN, CLI_TO_JAVASCRIPT, CLI_SHOW_CORE]
   result <- try @BendException (runCLIGo path mode allowGen needCheck)
   case result of
     Left (BendException err) -> showErrAndDie err
