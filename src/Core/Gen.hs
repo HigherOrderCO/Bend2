@@ -108,32 +108,26 @@ generateDefinitionsGo hvmResult genInfos = do
 
 applyGenerated :: String -> [GenInfo] -> M.Map String String -> Either String String
 applyGenerated original genInfos generated = do
-  replacements <- traverse toReplacement genInfos
-  applyGeneratedGo original replacements
-  where
-    toReplacement info =
-      case M.lookup (giSimpleName info) generated of
-        Nothing     -> Left $ "Missing generated definition for " ++ giSimpleName info
-        Just result -> Right (giSpan info, stripTrailingSpaces result)
-    stripTrailingSpaces = (++ "\n") . reverse . dropWhile (`elem` " \t\r\n") . reverse
+  replacementSpans  <- traverse toReplacement genInfos
+  replacementOffets <- traverse spanToOffset replacementSpans
 
-applyGeneratedGo :: String -> [(Span, String)] -> Either String String
-applyGeneratedGo original replacements = do
-  converted <- traverse toOffsets replacements
-  let sortedAsc  = sortOn (\(s,_,_) ->  s) converted
+  let sortedAsc  = sortOn (\(s,_,_) ->  s) replacementOffets
   let sortedDesc = reverse sortedAsc
 
-  when (overlapping sortedAsc) $ 
+  when (hasOverlaps sortedAsc) $ 
     Left "Generator definitions overlap; cannot rewrite file."
 
   return $ foldl' applyOne original sortedDesc
 
   where
-    overlapping offsets = case offsets of
-      ((_, e1, _): (s2, e2, t2) : rest) -> e1 > s2 || overlapping ((s2, e2, t2) : rest)
-      _                                 -> False
+    toReplacement info =
+      case M.lookup (giSimpleName info) generated of
+        Nothing     -> Left $ "Missing generated definition for " ++ giSimpleName info
+        Just result -> Right (giSpan info, ensureOneTrailingSpace result)
 
-    toOffsets (sp, txt) = do
+    ensureOneTrailingSpace = (++ "\n") . reverse . dropWhile (`elem` " \t\r\n") . reverse
+
+    spanToOffset (sp, txt) = do
       let src       = spanSrc sp
           reference = if null src then original else src
           start     = positionToOffset reference (spanBeg sp)
@@ -142,22 +136,12 @@ applyGeneratedGo original replacements = do
         Left "Invalid span information for generator replacement."
       return (start, end, txt)
 
-    positionToOffset src (line, col) = (col - 1) + foldl (\acc l -> acc + length l + 1) 0 (take (line - 1) $ splitOn "\n" src)
-    -- positionToOffset src (line, col)
-    --   | line <= 0 || col <= 0 = 0
-    --   | otherwise             = lineStartOffset src (line - 1) + (col - 1)
-    --
-    -- lineStartOffset :: String -> Int -> Int
-    -- lineStartOffset src linesToSkip = go src linesToSkip 0
-    --   where
-    --     go remaining 0 acc = acc
-    --     go [] _ acc = acc
-    --     go s n acc =
-    --       let (before, after) = break (== '\n') s
-    --           consumed = acc + length before
-    --       in case after of
-    --            []       -> consumed
-    --            (_:rest) -> go rest (n - 1) (consumed + 1)
+    -- chars in a col before `col` + chars in every line before `line`, avoiding negative contributions
+    positionToOffset src (line, col) = (max 0 (col - 1)) + foldl (\acc l -> acc + length l + 1) 0 (take (max 0 (line - 1)) $ splitOn "\n" src)
+
+    hasOverlaps offsets = case offsets of
+      ((_, e1, _): (s2, e2, t2) : rest) -> e1 > s2 || hasOverlaps ((s2, e2, t2) : rest)
+      _                                 -> False
     
     applyOne acc (start, end, txt) =
       let (prefix, rest) = splitAt start acc
