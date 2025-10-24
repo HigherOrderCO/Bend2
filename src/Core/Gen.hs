@@ -12,7 +12,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.List (foldl', isPrefixOf, sortOn)
 import Data.Maybe (mapMaybe)
-import Control.Monad (when)
+import Control.Monad (when, unless)
 import System.Exit (ExitCode(..))
 import System.IO (hClose, hPutStr)
 import System.IO.Temp (withSystemTempFile)
@@ -60,42 +60,6 @@ collectGenInfos file (Book defs names _) = mapMaybe lookupGen names
 -- Generation pipeline
 -------------------------------------------------------------------------------
 
--- generateDefinitions :: FilePath -> Book -> Name -> [GenInfo] -> IO (Either String (M.Map String String))
--- generateDefinitions _file book mainFQN genInfos = do
---   let hvmCode = HVM.compile book mainFQN
---   withSystemTempFile "bend-gen.hvm4" $ \tmpPath tmpHandle -> do
---     hPutStr tmpHandle hvmCode
---     hClose tmpHandle
---     result <- timeout (5 * 1000000) (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
---     case result of
---       Nothing -> pure $ Left "hvm4 timed out while generating code."
---       Just (exitCode, stdoutStr, stderrStr) -> case exitCode of
---         ExitSuccess ->
---           if not (null stderrStr)
---             then pure $ Left $ "hvm4 reported an error: " ++ stderrStr
---             else case parseGeneratedTerms stdoutStr of
---               Left err -> pure (Left err)
---               Right terms ->
---                 if length terms < length genInfos
---                   then pure $ Left $ "hvm4 did not return enough definitions. Expected "
---                                     ++ show (length genInfos) ++ ", received " ++ show (length terms)
---                   else if length terms > length genInfos
---                     then pure $ Left $ "hvm4 returned extra definitions. Expected "
---                                       ++ show (length genInfos) ++ ", received " ++ show (length terms)
---                   else do
---                     let paired = zip genInfos terms
---                     case traverse renderDefinition paired of
---                       Left err -> pure (Left err)
---                       Right rendered ->
---                         pure (Right (M.fromList rendered))
---         ExitFailure code ->
---           pure $ Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
---   where
---     renderDefinition (info, term) =
---       case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
---         Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
---         Right txt -> Right (giSimpleName info, txt)
-
 generateDefinitions :: FilePath -> Book -> Name -> [GenInfo] -> IO (Either String (M.Map String String))
 generateDefinitions _file book mainFQN genInfos = do
   let hvmCode = HVM.compile book mainFQN
@@ -106,9 +70,7 @@ generateDefinitions _file book mainFQN genInfos = do
     hClose tmpHandle
     timeout (5 * 1000000) (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
 
-  let result = (processHvmResult hvmResult genInfos)
-  -- return (processHvmResult hvmResult genInfos)
-  return result
+  return (processHvmResult hvmResult genInfos)
   where
     processHvmResult :: Maybe (ExitCode, String, String) -> [GenInfo] -> Either String (M.Map String String)
     processHvmResult hvmResult genInfos = do
@@ -117,85 +79,85 @@ generateDefinitions _file book mainFQN genInfos = do
         Nothing                                  -> Left $ "hvm4 timed out while generating code."
         Just (ExitFailure code,    _, stderrStr) -> Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
         Just (ExitSuccess, stdoutStr, stderrStr) -> if not (null stderrStr)
-                                                    then Left $ "hvm4 reported an error: " ++ stderrStr
-                                                    else Right stdoutStr
+                                                    then Left  $ "hvm4 reported an error: " ++ stderrStr
+                                                    else Right $ stdoutStr
       terms <- parseGeneratedTerms stdoutStr
 
       -- If not all terms have been synthesized, interrupt 
-      when (length terms /= length genInfos) $ Left $ "hvm4 returned " ++ show (length terms) ++ " definitions, expected " ++ show (length genInfos)
+      when (length terms /= length genInfos) $
+        Left $ "hvm4 returned " ++ show (length terms) ++ " definitions, expected " ++ show (length genInfos)
 
       -- Render definitions into final map
-      case traverse renderDef (zip genInfos terms) of
-            Left err       -> Left err
-            Right rendered -> Right (M.fromList rendered)
-          where
-            renderDef (info, term) = case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
-                Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
-                Right txt -> Right (giSimpleName info, txt)
+      renderedTerms <- traverse renderDef (zip genInfos terms)
+      return $ M.fromList renderedTerms
+
+      where 
+        renderDef (info, term) = case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
+            Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
+            Right txt -> Right (giSimpleName info, txt)
 
 
 applyGenerated :: String -> [GenInfo] -> M.Map String String -> Either String String
-applyGenerated content genInfos generated = do
+applyGenerated original genInfos generated = do
   replacements <- traverse toReplacement genInfos
-  applySpanReplacements content replacements
+  applyGeneratedGo original replacements
   where
     toReplacement info =
       case M.lookup (giSimpleName info) generated of
         Nothing     -> Left $ "Missing generated definition for " ++ giSimpleName info
         Just result -> Right (giSpan info, ensureTrailingNewline result)
 
-    ensureTrailingNewline :: String -> String
     ensureTrailingNewline txt
-      | null txt = txt
+      | null txt         = txt
       | last txt == '\n' = txt
-      | otherwise = txt ++ "\n"
+      | otherwise        = txt ++ "\n"
 
-applySpanReplacements :: String -> [(Span, String)] -> Either String String
-applySpanReplacements original replacements = do
+applyGeneratedGo :: String -> [(Span, String)] -> Either String String
+applyGeneratedGo original replacements = do
   converted <- traverse toOffsets replacements
-  let sortedAsc = sortOn (\(s,_,_) -> s) converted
-  if not (nonOverlapping sortedAsc)
-    then Left "Generator definitions overlap; cannot rewrite file."
-    else
-      let sortedDesc = sortOn (\(s,_,_) -> negate s) converted
-      in pure $ foldl' applyOne original sortedDesc
+  let sortedAsc  = sortOn (\(s,_,_) ->  s) converted
+  let sortedDesc = reverse sortedAsc
+
+  when (overlapping sortedAsc) $ 
+    Left "Generator definitions overlap; cannot rewrite file."
+
+  return $ foldl' applyOne original sortedDesc
+
   where
+    overlapping offsets = case offsets of
+      ((_, e1, _): (s2, e2, t2) : rest) -> e1 > s2 || overlapping ((s2, e2, t2) : rest)
+      _                                 -> False
+
     toOffsets (sp, txt) = do
-      let src = spanSrc sp
+      let src       = spanSrc sp
           reference = if null src then original else src
-          start = positionToOffset reference (spanBeg sp)
-          end   = positionToOffset reference (spanEnd sp)
-      if start <= end && end <= length reference
-        then Right (start, end, txt)
-        else Left "Invalid span information for generator replacement."
+          start     = positionToOffset reference (spanBeg sp)
+          end       = positionToOffset reference (spanEnd sp)
+      unless (start <= end && end <= length reference) $
+        Left "Invalid span information for generator replacement."
+      return (start, end, txt)
 
-    nonOverlapping [] = True
-    nonOverlapping [_] = True
-    nonOverlapping ((_,e1,_):(s2,e2,t2):rest) =
-      e1 <= s2 && nonOverlapping ((s2,e2,t2):rest)
-
+    positionToOffset src (line, col)
+      | line <= 0 || col <= 0 = 0
+      | otherwise             = lineStartOffset src (line - 1) + (col - 1)
+    
+    lineStartOffset :: String -> Int -> Int
+    lineStartOffset src linesToSkip = go src linesToSkip 0
+      where
+        go remaining 0 acc = acc
+        go [] _ acc = acc
+        go s n acc =
+          let (before, after) = break (== '\n') s
+              consumed = acc + length before
+          in case after of
+               []       -> consumed
+               (_:rest) -> go rest (n - 1) (consumed + 1)
+    
     applyOne acc (start, end, txt) =
       let (prefix, rest) = splitAt start acc
-          (_, suffix) = splitAt (end - start) rest
+          (_,    suffix) = splitAt (end - start) rest
       in prefix ++ txt ++ suffix
 
-positionToOffset :: String -> (Int, Int) -> Int
-positionToOffset src (line, col)
-  | line <= 0 || col <= 0 = 0
-  | otherwise =
-      lineStartOffset src (line - 1) + (col - 1)
-
-lineStartOffset :: String -> Int -> Int
-lineStartOffset src linesToSkip = go src linesToSkip 0
-  where
-    go remaining 0 acc = acc
-    go [] _ acc = acc
-    go s n acc =
-      let (before, after) = break (== '\n') s
-          consumed = acc + length before
-      in case after of
-           []       -> consumed
-           (_:rest) -> go rest (n - 1) (consumed + 1)
 
 -------------------------------------------------------------------------------
 -- Dependency closure for generator books
