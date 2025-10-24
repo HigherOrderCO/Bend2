@@ -12,6 +12,7 @@ module Core.Gen
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.List (foldl', isPrefixOf, sortOn)
+import Data.List.Split (splitOn)
 import Data.Maybe (mapMaybe)
 import Control.Monad (when, unless)
 import System.Exit (ExitCode(..))
@@ -141,21 +142,22 @@ applyGeneratedGo original replacements = do
         Left "Invalid span information for generator replacement."
       return (start, end, txt)
 
-    positionToOffset src (line, col)
-      | line <= 0 || col <= 0 = 0
-      | otherwise             = lineStartOffset src (line - 1) + (col - 1)
-    
-    lineStartOffset :: String -> Int -> Int
-    lineStartOffset src linesToSkip = go src linesToSkip 0
-      where
-        go remaining 0 acc = acc
-        go [] _ acc = acc
-        go s n acc =
-          let (before, after) = break (== '\n') s
-              consumed = acc + length before
-          in case after of
-               []       -> consumed
-               (_:rest) -> go rest (n - 1) (consumed + 1)
+    positionToOffset src (line, col) = (col - 1) + foldl (\acc l -> acc + length l + 1) 0 (take (line - 1) $ splitOn "\n" src)
+    -- positionToOffset src (line, col)
+    --   | line <= 0 || col <= 0 = 0
+    --   | otherwise             = lineStartOffset src (line - 1) + (col - 1)
+    --
+    -- lineStartOffset :: String -> Int -> Int
+    -- lineStartOffset src linesToSkip = go src linesToSkip 0
+    --   where
+    --     go remaining 0 acc = acc
+    --     go [] _ acc = acc
+    --     go s n acc =
+    --       let (before, after) = break (== '\n') s
+    --           consumed = acc + length before
+    --       in case after of
+    --            []       -> consumed
+    --            (_:rest) -> go rest (n - 1) (consumed + 1)
     
     applyOne acc (start, end, txt) =
       let (prefix, rest) = splitAt start acc
