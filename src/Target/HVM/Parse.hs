@@ -14,6 +14,7 @@ import Text.Megaparsec
   , choice
   , eof
   , many
+  , some
   , optional
   , runParser
   , sepBy
@@ -158,7 +159,8 @@ atomP = do
 
 atomPrimaryP :: Parser HCore
 atomPrimaryP = choice
-  [ parens termP
+  [ try parensAppP
+  , parens termP
   , tupleP
   , listLiteralP
   , unitTermP
@@ -182,6 +184,15 @@ atomPrimaryP = choice
 
 parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
+
+-- | Parse application written as `(f a b)` to mirror `f(a,b)` form.
+parensAppP :: Parser HCore
+parensAppP = try $ do
+  _ <- symbol "("
+  headTerm <- termP
+  args <- some termP
+  _ <- symbol ")"
+  pure (foldl' HApp headTerm args)
 
 tupleP :: Parser HCore
 tupleP = do

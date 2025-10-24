@@ -1,7 +1,7 @@
 module Core.Gen
   ( GenInfo(..)
   , collectGenInfos
-  , extractSimpleName
+  , cutName
   , bookHasMet
   , generateDefinitions
   , applyGenerated
@@ -12,13 +12,16 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.List (foldl', isPrefixOf, sortOn)
 import Data.Maybe (mapMaybe)
+import Control.Monad (when)
 import System.Exit (ExitCode(..))
 import System.IO (hClose, hPutStr)
 import System.IO.Temp (withSystemTempFile)
 import System.Process (readProcessWithExitCode)
 import System.Timeout (timeout)
+import Debug.Trace
 
 import Core.Deps (getDeps)
+import Core.Show (cutName)
 import Core.Type
 import Target.HVM.HVM (HCore)
 import qualified Target.HVM.HVM as HVM
@@ -39,96 +42,97 @@ data GenInfo = GenInfo
   }
 
 collectGenInfos :: FilePath -> Book -> [GenInfo]
-collectGenInfos file (Book defs names _) =
-  mapMaybe lookupGen names
+collectGenInfos file (Book defs names _) = mapMaybe lookupGen names
   where
     lookupGen name = do
       (_, term, typ) <- M.lookup name defs
       case term of
-        Loc sp inner
-          | spanPth sp == file ->
-              case stripLoc inner of
-                met@(Met _ metType metCtx) ->
-                  let simple = extractSimpleName name
-                  in Just (GenInfo name simple sp met metType metCtx)
-                _ -> Nothing
+        Loc sp inner | spanPth sp == file -> 
+          case stripLoc inner of
+            met@(Met _ metType metCtx) -> Just (GenInfo name (cutName name) sp met metType metCtx)
+            _                          -> Nothing
         _ -> Nothing
-
     stripLoc t = case t of
       Loc _ inner -> stripLoc inner
       other       -> other
-
-extractSimpleName :: Name -> String
-extractSimpleName name =
-  case reverse (splitOnSep "::" name) of
-    (simple:_) -> simple
-    []         -> name
-
-splitOnSep :: String -> String -> [String]
-splitOnSep sep str = go str
-  where
-    go [] = [""]
-    go s =
-      case breakOnSep s of
-        (chunk, Nothing)    -> [chunk]
-        (chunk, Just rest') -> chunk : go rest'
-
-    breakOnSep s
-      | sep `isPrefixOf` s = ("", Just (drop (length sep) s))
-      | otherwise = case s of
-          []     -> ("", Nothing)
-          (c:cs) ->
-            let (chunk, rest) = breakOnSep cs
-            in (c:chunk, rest)
 
 -------------------------------------------------------------------------------
 -- Generation pipeline
 -------------------------------------------------------------------------------
 
-bookHasMet :: Book -> Bool
-bookHasMet (Book defs _ _) =
-  any (\(_, term, _) -> hasMet term) (M.elems defs)
+-- generateDefinitions :: FilePath -> Book -> Name -> [GenInfo] -> IO (Either String (M.Map String String))
+-- generateDefinitions _file book mainFQN genInfos = do
+--   let hvmCode = HVM.compile book mainFQN
+--   withSystemTempFile "bend-gen.hvm4" $ \tmpPath tmpHandle -> do
+--     hPutStr tmpHandle hvmCode
+--     hClose tmpHandle
+--     result <- timeout (5 * 1000000) (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
+--     case result of
+--       Nothing -> pure $ Left "hvm4 timed out while generating code."
+--       Just (exitCode, stdoutStr, stderrStr) -> case exitCode of
+--         ExitSuccess ->
+--           if not (null stderrStr)
+--             then pure $ Left $ "hvm4 reported an error: " ++ stderrStr
+--             else case parseGeneratedTerms stdoutStr of
+--               Left err -> pure (Left err)
+--               Right terms ->
+--                 if length terms < length genInfos
+--                   then pure $ Left $ "hvm4 did not return enough definitions. Expected "
+--                                     ++ show (length genInfos) ++ ", received " ++ show (length terms)
+--                   else if length terms > length genInfos
+--                     then pure $ Left $ "hvm4 returned extra definitions. Expected "
+--                                       ++ show (length genInfos) ++ ", received " ++ show (length terms)
+--                   else do
+--                     let paired = zip genInfos terms
+--                     case traverse renderDefinition paired of
+--                       Left err -> pure (Left err)
+--                       Right rendered ->
+--                         pure (Right (M.fromList rendered))
+--         ExitFailure code ->
+--           pure $ Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
+--   where
+--     renderDefinition (info, term) =
+--       case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
+--         Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
+--         Right txt -> Right (giSimpleName info, txt)
 
-generateDefinitions :: FilePath -> Book -> Name -> [GenInfo]
-                    -> IO (Either String (M.Map String String))
+generateDefinitions :: FilePath -> Book -> Name -> [GenInfo] -> IO (Either String (M.Map String String))
 generateDefinitions _file book mainFQN genInfos = do
   let hvmCode = HVM.compile book mainFQN
-  withSystemTempFile "bend-gen.hvm4" $ \tmpPath tmpHandle -> do
+
+  -- Run HVM compilation
+  hvmResult <- withSystemTempFile "bend-gen.hvm4" $ \tmpPath tmpHandle -> do
     hPutStr tmpHandle hvmCode
     hClose tmpHandle
-    result <- timeout (5 * 1000000)
-      (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
-    case result of
-      Nothing -> pure $ Left "hvm4 timed out while generating code."
-      Just (exitCode, stdoutStr, stderrStr) -> case exitCode of
-        ExitSuccess ->
-          if not (null stderrStr)
-            then pure $ Left $ "hvm4 reported an error: " ++ stderrStr
-            else case parseGenerated stdoutStr of
-              Left err -> pure (Left err)
-              Right terms ->
-                if length terms < length genInfos
-                  then pure $ Left $ "hvm4 did not return enough definitions. Expected "
-                                    ++ show (length genInfos) ++ ", received " ++ show (length terms)
-                  else if length terms > length genInfos
-                    then pure $ Left $ "hvm4 returned extra definitions. Expected "
-                                      ++ show (length genInfos) ++ ", received " ++ show (length terms)
-                  else do
-                    let paired = zip genInfos terms
-                    case traverse renderDefinition paired of
-                      Left err -> pure (Left err)
-                      Right rendered ->
-                        pure (Right (M.fromList rendered))
-        ExitFailure code ->
-          pure $ Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
-  where
-    renderDefinition (info, term) =
-      case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
-        Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
-        Right txt -> Right (giSimpleName info, txt)
+    timeout (5 * 1000000) (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
 
-parseGenerated :: String -> Either String [HCore]
-parseGenerated = parseGeneratedTerms
+  let result = (processHvmResult hvmResult genInfos)
+  -- return (processHvmResult hvmResult genInfos)
+  return result
+  where
+    processHvmResult :: Maybe (ExitCode, String, String) -> [GenInfo] -> Either String (M.Map String String)
+    processHvmResult hvmResult genInfos = do
+      -- Handle HVM execution result
+      stdoutStr <- case hvmResult of
+        Nothing                                  -> Left $ "hvm4 timed out while generating code."
+        Just (ExitFailure code,    _, stderrStr) -> Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
+        Just (ExitSuccess, stdoutStr, stderrStr) -> if not (null stderrStr)
+                                                    then Left $ "hvm4 reported an error: " ++ stderrStr
+                                                    else Right stdoutStr
+      terms <- parseGeneratedTerms stdoutStr
+
+      -- If not all terms have been synthesized, interrupt 
+      when (length terms /= length genInfos) $ Left $ "hvm4 returned " ++ show (length terms) ++ " definitions, expected " ++ show (length genInfos)
+
+      -- Render definitions into final map
+      case traverse renderDef (zip genInfos terms) of
+            Left err       -> Left err
+            Right rendered -> Right (M.fromList rendered)
+          where
+            renderDef (info, term) = case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
+                Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
+                Right txt -> Right (giSimpleName info, txt)
+
 
 applyGenerated :: String -> [GenInfo] -> M.Map String String -> Either String String
 applyGenerated content genInfos generated = do
@@ -140,11 +144,11 @@ applyGenerated content genInfos generated = do
         Nothing     -> Left $ "Missing generated definition for " ++ giSimpleName info
         Just result -> Right (giSpan info, ensureTrailingNewline result)
 
-ensureTrailingNewline :: String -> String
-ensureTrailingNewline txt
-  | null txt = txt
-  | last txt == '\n' = txt
-  | otherwise = txt ++ "\n"
+    ensureTrailingNewline :: String -> String
+    ensureTrailingNewline txt
+      | null txt = txt
+      | last txt == '\n' = txt
+      | otherwise = txt ++ "\n"
 
 applySpanReplacements :: String -> [(Span, String)] -> Either String String
 applySpanReplacements original replacements = do
@@ -228,6 +232,10 @@ buildGenDepsBook book@(Book defs names m) =
 -------------------------------------------------------------------------------
 -- Met detection
 -------------------------------------------------------------------------------
+--
+bookHasMet :: Book -> Bool
+bookHasMet (Book defs _ _) =
+  any (\(_, term, _) -> hasMet term) (M.elems defs) -- TODO: why not checkc the type?
 
 hasMet :: Term -> Bool
 hasMet term = case term of

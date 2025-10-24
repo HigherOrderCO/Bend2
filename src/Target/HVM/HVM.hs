@@ -904,7 +904,8 @@ showHCore i term = case term of
   HSet         -> "*"
 
   -- Functions (with arrow sugar)
-  HAll t b     -> showFunctionType t b
+  -- HAll t b     -> showFunctionType t b
+  HAll t b     -> "∀" ++ showHCore i t ++ " . " ++ showHCore i b
   HLam n b     -> "λ" ++ n ++ "." ++ showHCore i b
   -- Application with flattening for cleaner output
   HApp f x     ->
