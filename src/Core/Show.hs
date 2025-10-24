@@ -220,12 +220,11 @@ shortName :: M.Map Name Int -> String -> String
 shortName count name =  case M.lookup (cutName name) count of
       Just n | n > 1 -> name
       _              -> cutName name
-  where
+
 cutName :: String -> String
 cutName name = case splitOn "::" name of
   [] -> name
   xs -> last xs
-
 
 showHint :: Maybe String -> String
 showHint Nothing = ""

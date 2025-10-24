@@ -1,5 +1,5 @@
 module Target.HVM.Parse
-  ( parseGeneratedTerm
+  ( parseGeneratedTerms
   ) where
 
 import Target.HVM.HVM (HCore(..))
@@ -14,6 +14,7 @@ import Text.Megaparsec
   , choice
   , eof
   , many
+  , some
   , optional
   , runParser
   , sepBy
@@ -34,11 +35,11 @@ import qualified Text.Megaparsec.Char.Lexer as L
 -- Public API
 -------------------------------------------------------------------------------
 
-parseGeneratedTerm :: String -> Either String HCore
-parseGeneratedTerm input =
-  case runParser (sc *> termP <* eof) "<hvm4>" input of
-    Left err   -> Left (errorBundlePretty err)
-    Right term -> Right term
+parseGeneratedTerms :: String -> Either String [HCore]
+parseGeneratedTerms input =
+  case runParser (sc *> generatedP <* eof) "<hvm4>" input of
+    Left err  -> Left (errorBundlePretty err)
+    Right res -> Right res
 
 -------------------------------------------------------------------------------
 -- Parser basics
@@ -72,6 +73,15 @@ termP = choice
   , lambdaP
   , consExprP
   ]
+
+generatedP :: Parser [HCore]
+generatedP = listP <|> fmap pure termP
+  where
+    listP = do
+      _ <- symbol "["
+      terms <- termP `sepBy` symbol ","
+      _ <- symbol "]"
+      pure terms
 
 lambdaP :: Parser HCore
 lambdaP = do
@@ -149,7 +159,8 @@ atomP = do
 
 atomPrimaryP :: Parser HCore
 atomPrimaryP = choice
-  [ parens termP
+  [ try parensAppP
+  , parens termP
   , tupleP
   , listLiteralP
   , unitTermP
@@ -173,6 +184,15 @@ atomPrimaryP = choice
 
 parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
+
+-- | Parse application written as `(f a b)` to mirror `f(a,b)` form.
+parensAppP :: Parser HCore
+parensAppP = try $ do
+  _ <- symbol "("
+  headTerm <- termP
+  args <- some termP
+  _ <- symbol ")"
+  pure (foldl' HApp headTerm args)
 
 tupleP :: Parser HCore
 tupleP = do

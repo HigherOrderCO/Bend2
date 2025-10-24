@@ -41,8 +41,8 @@ main = do
     [file, "--get-gen-deps"]      | ".bend.py" `isSuffixOf` file -> runCLI file CLI_GET_GEN_DEPS
     [file, "--show-core"]         | ".bend"    `isSuffixOf` file -> runCLI file CLI_SHOW_CORE
     [file, "--show-core"]         | ".bend.py" `isSuffixOf` file -> runCLI file CLI_SHOW_CORE
-    [file]                        | ".bend"    `isSuffixOf` file -> runCLI file CLI_RUN
-    [file]                        | ".bend.py" `isSuffixOf` file -> runCLI file CLI_RUN
+    [file]                        | ".bend"    `isSuffixOf` file -> runCLI file CLI_GEN_RUN
+    [file]                        | ".bend.py" `isSuffixOf` file -> runCLI file CLI_GEN_RUN
     otherwise                             -> showUsage
   where isSuffixOf suffix str = reverse suffix == take (length suffix) (reverse str)
 

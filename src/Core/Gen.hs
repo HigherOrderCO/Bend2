@@ -1,28 +1,29 @@
 module Core.Gen
   ( GenInfo(..)
-  , collectGenInfos
-  , extractSimpleName
   , bookHasMet
-  , generateDefinitions
-  , applyGenerated
   , buildGenDepsBook
+  , fillBookMetas
   ) where
 
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.List (foldl', isPrefixOf, sortOn)
+import Data.List.Split (splitOn)
 import Data.Maybe (mapMaybe)
+import Control.Monad (when, unless)
 import System.Exit (ExitCode(..))
 import System.IO (hClose, hPutStr)
 import System.IO.Temp (withSystemTempFile)
 import System.Process (readProcessWithExitCode)
 import System.Timeout (timeout)
+import Debug.Trace
 
 import Core.Deps (getDeps)
+import Core.Show (cutName)
 import Core.Type
 import Target.HVM.HVM (HCore)
 import qualified Target.HVM.HVM as HVM
-import Target.HVM.Parse (parseGeneratedTerm)
+import Target.HVM.Parse (parseGeneratedTerms)
 import Target.HVM.Pretty (prettyGenerated)
 
 -------------------------------------------------------------------------------
@@ -39,167 +40,123 @@ data GenInfo = GenInfo
   }
 
 collectGenInfos :: FilePath -> Book -> [GenInfo]
-collectGenInfos file (Book defs names _) =
-  mapMaybe lookupGen names
+collectGenInfos file (Book defs names _) = mapMaybe lookupGen names
   where
     lookupGen name = do
       (_, term, typ) <- M.lookup name defs
       case term of
-        Loc sp inner
-          | spanPth sp == file ->
-              case stripLoc inner of
-                met@(Met _ metType metCtx) ->
-                  let simple = extractSimpleName name
-                  in Just (GenInfo name simple sp met metType metCtx)
-                _ -> Nothing
+        Loc sp inner | spanPth sp == file -> 
+          case stripLoc inner of
+            met@(Met _ metType metCtx) -> Just (GenInfo name (cutName name) sp met metType metCtx)
+            _                          -> Nothing
         _ -> Nothing
-
     stripLoc t = case t of
       Loc _ inner -> stripLoc inner
       other       -> other
-
-extractSimpleName :: Name -> String
-extractSimpleName name =
-  case reverse (splitOnSep "::" name) of
-    (simple:_) -> simple
-    []         -> name
-
-splitOnSep :: String -> String -> [String]
-splitOnSep sep str = go str
-  where
-    go [] = [""]
-    go s =
-      case breakOnSep s of
-        (chunk, Nothing)    -> [chunk]
-        (chunk, Just rest') -> chunk : go rest'
-
-    breakOnSep s
-      | sep `isPrefixOf` s = ("", Just (drop (length sep) s))
-      | otherwise = case s of
-          []     -> ("", Nothing)
-          (c:cs) ->
-            let (chunk, rest) = breakOnSep cs
-            in (c:chunk, rest)
 
 -------------------------------------------------------------------------------
 -- Generation pipeline
 -------------------------------------------------------------------------------
 
-bookHasMet :: Book -> Bool
-bookHasMet (Book defs _ _) =
-  any (\(_, term, _) -> hasMet term) (M.elems defs)
+fillBookMetas :: FilePath -> String -> String -> Book -> Book -> IO (Result String)
+fillBookMetas path mainFQN content rawBook adjustedBook = do
+  let genInfos = collectGenInfos path rawBook
+  eDefs <- genDefs adjustedBook mainFQN genInfos
+  pure $ do
+    defs    <- eitherToResult eDefs
+    updated <- eitherToResult (applyGenerated content genInfos defs)
+    pure updated
+  where
+    eitherToResult :: Either String a -> Result a
+    eitherToResult = either (\msg -> Fail (Unsupported noSpan (Ctx []) (Just msg))) Done
 
-generateDefinitions :: FilePath -> Book -> Name -> [GenInfo]
-                    -> IO (Either String (M.Map String String))
-generateDefinitions _file book mainFQN genInfos = do
+-- Synthesize Metas
+-- ------------------------------
+--
+genDefs :: Book -> Name -> [GenInfo] -> IO (Either String (M.Map String String))
+genDefs book mainFQN genInfos = do
   let hvmCode = HVM.compile book mainFQN
-  withSystemTempFile "bend-gen.hvm4" $ \tmpPath tmpHandle -> do
+
+  -- Run HVM compilation
+  hvmResult <- withSystemTempFile "bend-gen.hvm4" $ \tmpPath tmpHandle -> do
     hPutStr tmpHandle hvmCode
     hClose tmpHandle
-    result <- timeout (5 * 1000000)
-      (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
-    case result of
-      Nothing -> pure $ Left "hvm4 timed out while generating code."
-      Just (exitCode, stdoutStr, stderrStr) -> case exitCode of
-        ExitSuccess ->
-          if not (null stderrStr)
-            then pure $ Left $ "hvm4 reported an error: " ++ stderrStr
-            else case parseGenerated stdoutStr of
-              Left err -> pure (Left err)
-              Right terms ->
-                if length terms < length genInfos
-                  then pure $ Left $ "hvm4 did not return enough definitions. Expected "
-                                    ++ show (length genInfos) ++ ", received " ++ show (length terms)
-                  else if length terms > length genInfos
-                    then pure $ Left $ "hvm4 returned extra definitions. Expected "
-                                      ++ show (length genInfos) ++ ", received " ++ show (length terms)
-                  else do
-                    let paired = zip genInfos terms
-                    case traverse renderDefinition paired of
-                      Left err -> pure (Left err)
-                      Right rendered ->
-                        pure (Right (M.fromList rendered))
-        ExitFailure code ->
-          pure $ Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
+    timeout (5 * 1000000) (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
+
+  return (genDefsGo hvmResult genInfos)
+
+genDefsGo :: Maybe (ExitCode, String, String) -> [GenInfo] -> Either String (M.Map String String)
+genDefsGo hvmResult genInfos = do
+  case hvmResult of
+    Nothing                                                   -> Left $ "hvm4 timed out while generating code."
+    Just (ExitFailure code,    _, stderrStr)                  -> Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
+    Just (ExitSuccess, stdoutStr, stderrStr) | null stdoutStr -> Left $ "hvm4 reported an error: " ++ stderrStr
+    Just (ExitSuccess, stdoutStr, stderrStr)                  -> do
+      terms <- parseGeneratedTerms stdoutStr
+
+      -- If not all terms have been synthesized, interrupt 
+      when (length terms /= length genInfos) $
+        Left $ "hvm4 returned " ++ show (length terms) ++ " definitions, expected " ++ show (length genInfos)
+
+      -- Render definitions into final map
+      M.fromList <$> traverse renderDef (zip genInfos terms)
   where
-    renderDefinition (info, term) =
-      case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
+    renderDef (info, term) = case prettyGenerated (giSimpleName info) (giType info) (giCtxTerms info) term of
         Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
         Right txt -> Right (giSimpleName info, txt)
 
-parseGenerated :: String -> Either String [HCore]
-parseGenerated input = fmap pure (parseGeneratedTerm input)
-
+-- Substitute `gen` bend code by synthesize `def` bend code
+-- ------------------------------
+--
 applyGenerated :: String -> [GenInfo] -> M.Map String String -> Either String String
-applyGenerated content genInfos generated = do
-  replacements <- traverse toReplacement genInfos
-  applySpanReplacements content replacements
+applyGenerated original genInfos generated = do
+  replacementSpans   <- traverse toReplacement genInfos
+  replacementOffsets <- traverse spanToOffset replacementSpans
+
+  let sortedAsc  = sortOn (\(s,_,_) ->  s) replacementOffsets
+  let sortedDesc = reverse sortedAsc
+
+  when (hasOverlaps sortedAsc) $ 
+    Left "Generator definitions overlap; cannot rewrite file."
+
+  return $ foldl' applyOne original sortedDesc
+
   where
     toReplacement info =
       case M.lookup (giSimpleName info) generated of
         Nothing     -> Left $ "Missing generated definition for " ++ giSimpleName info
-        Just result -> Right (giSpan info, ensureTrailingNewline result)
+        Just result -> Right (giSpan info, ensureOneTrailingSpace result)
 
-ensureTrailingNewline :: String -> String
-ensureTrailingNewline txt
-  | null txt = txt
-  | last txt == '\n' = txt
-  | otherwise = txt ++ "\n"
+    ensureOneTrailingSpace = (++ "\n") . reverse . dropWhile (`elem` " \t\r\n") . reverse
 
-applySpanReplacements :: String -> [(Span, String)] -> Either String String
-applySpanReplacements original replacements = do
-  converted <- traverse toOffsets replacements
-  let sortedAsc = sortOn (\(s,_,_) -> s) converted
-  if not (nonOverlapping sortedAsc)
-    then Left "Generator definitions overlap; cannot rewrite file."
-    else
-      let sortedDesc = sortOn (\(s,_,_) -> negate s) converted
-      in pure $ foldl' applyOne original sortedDesc
-  where
-    toOffsets (sp, txt) = do
-      let src = spanSrc sp
+    spanToOffset (sp, txt) = do
+      let src       = spanSrc sp
           reference = if null src then original else src
-          start = positionToOffset reference (spanBeg sp)
-          end   = positionToOffset reference (spanEnd sp)
-      if start <= end && end <= length reference
-        then Right (start, end, txt)
-        else Left "Invalid span information for generator replacement."
+          start     = positionToOffset reference (spanBeg sp)
+          end       = positionToOffset reference (spanEnd sp)
+      unless (start <= end && end <= length reference) $
+        Left "Invalid span information for generator replacement."
+      return (start, end, txt)
 
-    nonOverlapping [] = True
-    nonOverlapping [_] = True
-    nonOverlapping ((_,e1,_):(s2,e2,t2):rest) =
-      e1 <= s2 && nonOverlapping ((s2,e2,t2):rest)
+    -- chars in a col before `col` + chars in every line before `line`, avoiding negative contributions
+    positionToOffset src (line, col) = (max 0 (col - 1)) + foldl (\acc l -> acc + length l + 1) 0 (take (max 0 (line - 1)) $ splitOn "\n" src)
 
+    hasOverlaps offsets = case offsets of
+      ((_, e1, _): (s2, e2, t2) : rest) -> e1 > s2 || hasOverlaps ((s2, e2, t2) : rest)
+      _                                 -> False
+    
     applyOne acc (start, end, txt) =
       let (prefix, rest) = splitAt start acc
-          (_, suffix) = splitAt (end - start) rest
+          (_,    suffix) = splitAt (end - start + 1) rest
       in prefix ++ txt ++ suffix
 
-positionToOffset :: String -> (Int, Int) -> Int
-positionToOffset src (line, col)
-  | line <= 0 || col <= 0 = 0
-  | otherwise =
-      lineStartOffset src (line - 1) + (col - 1)
-
-lineStartOffset :: String -> Int -> Int
-lineStartOffset src linesToSkip = go src linesToSkip 0
-  where
-    go remaining 0 acc = acc
-    go [] _ acc = acc
-    go s n acc =
-      let (before, after) = break (== '\n') s
-          consumed = acc + length before
-      in case after of
-           []       -> consumed
-           (_:rest) -> go rest (n - 1) (consumed + 1)
 
 -------------------------------------------------------------------------------
 -- Dependency closure for generator books
 -------------------------------------------------------------------------------
 
 buildGenDepsBook :: Book -> Book
-buildGenDepsBook book@(Book defs names m) =
-  Book finalDefs finalNames m
+buildGenDepsBook book@(Book defs names m) = Book finalDefs finalNames m
   where
     genDefs = M.filter (\(_, term, _) -> hasMet term) defs
     genNames = M.keysSet genDefs
@@ -228,6 +185,10 @@ buildGenDepsBook book@(Book defs names m) =
 -------------------------------------------------------------------------------
 -- Met detection
 -------------------------------------------------------------------------------
+--
+bookHasMet :: Book -> Bool
+bookHasMet (Book defs _ _) =
+  any (\(_, term, _) -> hasMet term) (M.elems defs) -- TODO: why not checkc the type?
 
 hasMet :: Term -> Bool
 hasMet term = case term of

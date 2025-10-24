@@ -18,11 +18,9 @@ import Data.Typeable (Typeable)
 import Text.Read (readMaybe)
 
 import Core.Gen
-  ( applyGenerated
-  , bookHasMet
+  ( bookHasMet
   , buildGenDepsBook
-  , collectGenInfos
-  , generateDefinitions
+  , fillBookMetas
   )
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Adjust.SplitAnnotate (check, infer)
@@ -41,6 +39,7 @@ import qualified Target.Haskell as HS
 
 data CLIMode
   = CLI_RUN 
+  | CLI_GEN_RUN 
   | CLI_SHOW_CORE
   | CLI_TO_JAVASCRIPT
   | CLI_TO_HVM
@@ -52,7 +51,7 @@ data CLIMode
 runCLI :: FilePath -> CLIMode -> IO ()
 runCLI path mode = do
   let allowGen  = mode `elem` [CLI_RUN]
-      needCheck = mode `elem` [CLI_RUN, CLI_TO_JAVASCRIPT, CLI_SHOW_CORE]
+      needCheck = mode `elem` [CLI_RUN, CLI_GEN_RUN, CLI_TO_JAVASCRIPT, CLI_SHOW_CORE]
   result <- try @BendException (runCLIGo path mode allowGen needCheck)
   case result of
     Left (BendException err) -> showErrAndDie err
@@ -76,27 +75,19 @@ runCLIGo path mode allowGen needCheck = do
   let mainFQN = extractMainFQN path checkedBook
 
   case mode of
-    CLI_RUN -> do
-      let metasPresent = bookHasMet adjustedBook
-      let genInfos     = collectGenInfos path rawBook
-      if allowGen
-      then case (genInfos, metasPresent) of
-        ([], True ) -> showErrAndDie $ Unsupported noSpan (Ctx []) (Just "Meta variables remain after generation; run `bend verify` for detailed errors.")
-        ([], False) -> runMain path checkedBook
-        (_ , _    ) -> do
-          generatedDefsResult <- generateDefinitions path adjustedBook mainFQN genInfos
-          generatedDefs <- case generatedDefsResult of
-            Left err      -> showErrAndDie $ Unsupported noSpan (Ctx []) (Just err)
-            Right defs    -> pure defs
-          let updatedContentResult = applyGenerated content genInfos generatedDefs
-          updatedContent <- case updatedContentResult of
-            Left err      -> showErrAndDie $ Unsupported noSpan (Ctx []) (Just err)
-            Right updated -> pure updated
-          writeFile path updatedContent
-          runCLIGo path mode False needCheck
-      else case (genInfos, metasPresent) of
-        ([], _) -> runMain path checkedBook
-        (_, _ ) -> showErrAndDie $ Unsupported noSpan (Ctx []) (Just  "Meta variables remain after generation; generation already attempted.")
+    CLI_GEN_RUN ->
+      if bookHasMet adjustedBook
+      then do
+        filledBookTxt <- fillBookMetas path mainFQN content rawBook adjustedBook
+        case filledBookTxt of
+          Done txt -> writeFile path txt
+          Fail e   -> showErrAndDie e
+        runCLIGo path CLI_RUN False needCheck
+      else runMain path checkedBook
+    CLI_RUN ->
+      if bookHasMet adjustedBook
+      then showErrAndDie $ Unsupported noSpan (Ctx []) (Just  "Meta variables remain after generation; generation already attempted.")
+      else runMain path checkedBook
     CLI_SHOW_CORE -> do 
       putStrLn $ showBookWithFQN checkedBook
         where

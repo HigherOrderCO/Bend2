@@ -212,7 +212,7 @@ showError err = case err of
 
 -- Main compilation entry point
 compileBook :: Book -> String -> Either HCompileError (HBook, Nick)
-compileBook book@(Book defs _ _) mainFQN = do
+compileBook book@(Book defs names _) mainFQN = do
   -- Pre-scan to collect all metavariable names
   let metas = S.fromList [name | (name, (_, term, _)) <- M.toList defs, isMet (cut term)]
   let hasMain = M.member mainFQN defs
@@ -221,15 +221,27 @@ compileBook book@(Book defs _ _) mainFQN = do
   -- Ensure we have an entry point unless generators will supply it
   unless (hasMain || hasGen) $
     Left $ UnknownReference $ "Main function not found: " ++ mainFQN
-  -- Compile all definitions
-  finalCtx <- foldM compileDefn ctx (M.toList defs)
+  -- Compile all definitions in declared order, followed by any extras
+  let nameSet = S.fromList names
+      orderedDefs =
+        [ (name, def)
+        | name <- names
+        , Just def <- [M.lookup name defs]
+        ]
+      extraDefs =
+        [ pair
+        | pair@(name, _) <- M.toList defs
+        , name `S.notMember` nameSet
+        ]
+  finalCtx <- foldM compileDefn ctx (orderedDefs ++ extraDefs)
   let gens = ctxGens finalCtx
   let mainNick = toNick mainFQN
   let finalDefs = case gens of
         [] -> ctxDefs finalCtx
         _  ->
-          let targetNick = map toUpper (last gens)
-              autoMain = HDefn mainNick Nothing (HRef targetNick)
+          let generatorRefs = map (HRef . map toUpper) gens
+              autoMainBody = foldr HCon HNil generatorRefs
+              autoMain = HDefn mainNick Nothing autoMainBody
           in M.insert mainNick autoMain (ctxDefs finalCtx)
   return (finalDefs, mainNick)
   where
@@ -892,7 +904,8 @@ showHCore i term = case term of
   HSet         -> "*"
 
   -- Functions (with arrow sugar)
-  HAll t b     -> showFunctionType t b
+  -- HAll t b     -> showFunctionType t b
+  HAll t b     -> "∀" ++ showHCore i t ++ " . " ++ showHCore i b
   HLam n b     -> "λ" ++ n ++ "." ++ showHCore i b
   -- Application with flattening for cleaner output
   HApp f x     ->
