@@ -77,7 +77,7 @@ runCLIGo path mode needCheck = do
     CLI_GEN_RUN ->
       if bookHasMet adjustedBook
       then do
-        filledBookTxt <- fillBookMetas path mainFQN content rawBook adjustedBook
+        filledBookTxt <- fillBookMetas path mainFQN content rawBook checkedBook
         case filledBookTxt of
           Done txt -> writeFile path txt
           Fail e   -> showErrAndDie e
@@ -110,7 +110,7 @@ runCLIGo path mode needCheck = do
           S.unions $ map collectRefsFromDefn (M.elems defs)
         collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)
     CLI_GET_GEN_DEPS -> do
-      print $ buildGenDepsBook adjustedBook
+      print $ buildGenDepsBook checkedBook
 
 -- | Run the main function from a book
 runMain :: FilePath -> Book -> IO ()
