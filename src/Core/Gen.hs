@@ -1,12 +1,8 @@
 module Core.Gen
   ( GenInfo(..)
-  , collectGenInfos
-  , cutName
   , bookHasMet
-  , generateDefinitions
-  , applyGenerated
   , buildGenDepsBook
-  , fillBook
+  , fillBookMetas
   ) where
 
 import qualified Data.Map as M
@@ -62,10 +58,10 @@ collectGenInfos file (Book defs names _) = mapMaybe lookupGen names
 -- Generation pipeline
 -------------------------------------------------------------------------------
 
-fillBook :: FilePath -> String -> String -> Book -> Book -> IO (Result String)
-fillBook path mainFQN content rawBook adjustedBook = do
+fillBookMetas :: FilePath -> String -> String -> Book -> Book -> IO (Result String)
+fillBookMetas path mainFQN content rawBook adjustedBook = do
   let genInfos = collectGenInfos path rawBook
-  eDefs <- generateDefinitions path adjustedBook mainFQN genInfos
+  eDefs <- genDefs adjustedBook mainFQN genInfos
   pure $ do
     defs    <- eitherToResult eDefs
     updated <- eitherToResult (applyGenerated content genInfos defs)
@@ -74,8 +70,11 @@ fillBook path mainFQN content rawBook adjustedBook = do
     eitherToResult :: Either String a -> Result a
     eitherToResult = either (\msg -> Fail (Unsupported noSpan (Ctx []) (Just msg))) Done
 
-generateDefinitions :: FilePath -> Book -> Name -> [GenInfo] -> IO (Either String (M.Map String String))
-generateDefinitions _file book mainFQN genInfos = do
+-- Synthesize Metas
+-- ------------------------------
+--
+genDefs :: Book -> Name -> [GenInfo] -> IO (Either String (M.Map String String))
+genDefs book mainFQN genInfos = do
   let hvmCode = HVM.compile book mainFQN
 
   -- Run HVM compilation
@@ -84,10 +83,10 @@ generateDefinitions _file book mainFQN genInfos = do
     hClose tmpHandle
     timeout (5 * 1000000) (readProcessWithExitCode "hvm4" [tmpPath, "-C1"] "")
 
-  return (generateDefinitionsGo hvmResult genInfos)
+  return (genDefsGo hvmResult genInfos)
 
-generateDefinitionsGo :: Maybe (ExitCode, String, String) -> [GenInfo] -> Either String (M.Map String String)
-generateDefinitionsGo hvmResult genInfos = do
+genDefsGo :: Maybe (ExitCode, String, String) -> [GenInfo] -> Either String (M.Map String String)
+genDefsGo hvmResult genInfos = do
   case hvmResult of
     Nothing                                                   -> Left $ "hvm4 timed out while generating code."
     Just (ExitFailure code,    _, stderrStr)                  -> Left $ "hvm4 exited with code " ++ show code ++ ": " ++ stderrStr
@@ -106,12 +105,15 @@ generateDefinitionsGo hvmResult genInfos = do
         Left err  -> Left $ "Failed to prettify " ++ giSimpleName info ++ ": " ++ show err
         Right txt -> Right (giSimpleName info, txt)
 
+-- Substitute `gen` bend code by synthesize `def` bend code
+-- ------------------------------
+--
 applyGenerated :: String -> [GenInfo] -> M.Map String String -> Either String String
 applyGenerated original genInfos generated = do
-  replacementSpans  <- traverse toReplacement genInfos
-  replacementOffets <- traverse spanToOffset replacementSpans
+  replacementSpans   <- traverse toReplacement genInfos
+  replacementOffsets <- traverse spanToOffset replacementSpans
 
-  let sortedAsc  = sortOn (\(s,_,_) ->  s) replacementOffets
+  let sortedAsc  = sortOn (\(s,_,_) ->  s) replacementOffsets
   let sortedDesc = reverse sortedAsc
 
   when (hasOverlaps sortedAsc) $ 

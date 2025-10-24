@@ -20,7 +20,7 @@ import Text.Read (readMaybe)
 import Core.Gen
   ( bookHasMet
   , buildGenDepsBook
-  , fillBook
+  , fillBookMetas
   )
 import Core.Adjust.Adjust (adjustBook, adjustBookWithPats)
 import Core.Adjust.SplitAnnotate (check, infer)
@@ -78,7 +78,7 @@ runCLIGo path mode allowGen needCheck = do
     CLI_GEN_RUN ->
       if bookHasMet adjustedBook
       then do
-        filledBookTxt <- fillBook path mainFQN content rawBook adjustedBook
+        filledBookTxt <- fillBookMetas path mainFQN content rawBook adjustedBook
         case filledBookTxt of
           Done txt -> writeFile path txt
           Fail e   -> showErrAndDie e
