@@ -32,12 +32,16 @@ type WTreeTag<A: Set>:
     value: A
   case @WNode:
 
+type Either:
+  case @lft:
+  case @rgt:
+
 def WTreeRec(tag: WTreeTag(Nat)) -> Set:
   match tag:
     case @WLeaf{value}:
       return Empty
     case @WNode:
-      return enum{&lft, &rgt}
+      return Either
 
 def WTree : Set =
   W(WTreeTag(Nat), WTreeRec)
@@ -46,15 +50,15 @@ def WLeaf(n: Nat) -> WTree:
   return @Sup{@WLeaf{n}, λe. absurd e}
 
 def WNode(l: WTree, r: WTree) -> WTree:
-  return @Sup{@WNode{}, λi. match i: case &lft: l case &rgt: r  }
+  return @Sup{@WNode{}, λi. match i: case @lft: l case @rgt: r  }
 
 def sum_wtree(w: WTree) -> Nat:
   match w:
     case @Sup{@WLeaf{value},f}:
       value
     case @Sup{@WNode{},f}:
-      a = f(&lft)
-      b = f(&rgt)
+      a = f(@lft)
+      b = f(@rgt)
       return add(sum_wtree(a), sum_wtree(b))
 
 def sum_wtree_fold(w: WTree) -> Nat:
@@ -64,7 +68,7 @@ def sum_wtree_fold(w: WTree) -> Nat:
       case @WLeaf{value}:
         value
       case @WNode:
-        add(f(&lft), f(&rgt)))
+        add(f(@lft), f(@rgt)))
 
 assert 5n == sum_wtree(WLeaf(5n)) : Nat
 assert 7n == sum_wtree(WNode(WLeaf(3n), WLeaf(4n))) : Nat

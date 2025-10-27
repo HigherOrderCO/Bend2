@@ -25,12 +25,16 @@ type WTreeTag<A: Set>:
     value: A
   case @WNode:
 
+type Either:
+  case @lft:
+  case @rgt:
+
 def WTreeRec(tag: WTreeTag(Nat)) -> Set:
   match tag:
     case @WLeaf{value}:
       return Empty
     case @WNode:
-      return enum{&lft, &rgt}
+      return Either
 
 def WTree : Set =
   W(WTreeTag(Nat), WTreeRec)
@@ -39,7 +43,7 @@ def WLeaf(n: Nat) -> WTree:
   return @Sup{@WLeaf{n}, λe. absurd e}
 
 def WNode(l: WTree, r: WTree) -> WTree:
-  return @Sup{@WNode{}, λi. match i: case &lft: l case &rgt: r  }
+  return @Sup{@WNode{}, λi. match i: case @lft: l case @rgt: r  }
 """
 
 main :: IO ()

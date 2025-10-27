@@ -68,7 +68,7 @@ parseTermIni = choice
   , parseNil
   , parseRfl
   , parseGlobalRef
-  , parseEnu
+  -- , parseEnu
   , parseSym
   , parseTupApp
   , parseView
@@ -295,31 +295,31 @@ parseAllSimple = do
 -- Enum Type Parsers
 -- -----------------
 
--- | Syntax: &{tag1, tag2, tag3}
-parseEnu :: Parser Term
-parseEnu = label "enum type" $ do
-  _ <- try $ do
-    _ <- symbol "enum"
-    _ <- symbol "{"
-    return ()
-  s <- sepBy parseSymbolName (symbol ",")
-  _ <- symbol "}"
-  return (Enu s)
+-- -- | Syntax: &{tag1, tag2, tag3}
+-- parseEnu :: Parser Term
+-- parseEnu = label "enum type" $ do
+--   _ <- try $ do
+--     _ <- symbol "enum"
+--     _ <- symbol "{"
+--     return ()
+--   s <- sepBy parseSymbolName (symbol ",")
+--   _ <- symbol "}"
+--   return (Enu s)
 
 -- | Syntax: &name
 -- Helper for parsing enum tag names
-parseSymbolName :: Parser String
-parseSymbolName = do
-  _ <- symbol "&"
-  n <- some (satisfy isNameChar)
-  return n
+-- parseSymbolName :: Parser String
+-- parseSymbolName = do
+--   _ <- symbol "&"
+--   n <- some (satisfy isNameChar)
+--   return n
 
 -- | Syntax: @tag | @tag{field1, field2} | &tag
 parseSym :: Parser Term
 parseSym = label "enum symbol / constructor" $ try $ do
   choice
     [ parseConstructor  -- @tag{...} -> (&tag,(fields...))
-    , parseNewSymbol    -- &tag
+    -- , parseNewSymbol    -- &tag
     , parseOldSymbol    -- @tag -> (&tag,())
     ]
   where
@@ -343,13 +343,13 @@ parseSym = label "enum symbol / constructor" $ try $ do
         pure (spTag, tag, fs)
       return $ buildCtorWithSpans spTag spCtor tag fields
     
-    -- Parse new &tag bare symbol syntax  
-    parseNewSymbol = try $ do
-      _ <- char '&'
-      notFollowedBy (char '{')  -- make sure we are not &{...} enum type
-      n <- some (satisfy isNameChar)
-      skip
-      return $ Sym n
+    -- -- Parse new &tag bare symbol syntax  
+    -- parseNewSymbol = try $ do
+    --   _ <- char '&'
+    --   notFollowedBy (char '{')  -- make sure we are not &{...} enum type
+    --   n <- some (satisfy isNameChar)
+    --   skip
+    --   return $ Sym n
     
     -- Parse old @tag bare symbol syntax and desugar to (&tag,()) with location on both
     parseOldSymbol = try $ do
