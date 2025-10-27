@@ -4,13 +4,13 @@ import Test
 
 -- fixed in commit: df355af377ca90afe8f2739e4f2d06b2d84992d2
 --
---  Now use annotated lambdas to help infer
--- Update: Let with HOAS made old error check too.
+-- Tup can't be inferred when there are dependent types.
+-- Solution: Annotate the Let
 
 annotated_lambda_help_infer :: String
 annotated_lambda_help_infer = """
 def thm_fixed(A:Set, B:Set) -> (∀C:Set. (A->B->C) -> C) -> Σa:A.B:
-  make_pair = λa1:A . λb1:B . (a1,b1)
+  make_pair : A -> B -> (Σa:A.B) = λa.λb.(a,b)
   λI.I(Σa:A.B, make_pair)
 
 # can't infer when aliasing (inline use checks):
@@ -31,5 +31,5 @@ def thm(A:Set, B:Set) -> (∀C:Set. (A->B->C) -> C) -> Σa:A.B:
 main :: IO ()
 main = testFile annotated_lambda_help_infer
   "Annotated lambda helps type checker inference" $ \out err -> do
-    assert (out `has` "✓ thm_fixed")
+    assert (out `has` "✓ main::thm_fixed")
     assert (err `has` "CantInfer:")
