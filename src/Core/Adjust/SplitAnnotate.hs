@@ -1110,7 +1110,7 @@ check d span book ctx term      goal =
         then return term
         else if equal d book a b
           then return term
-          else Fail $ TermMismatch span book (normalCtx book ctx) (normal book a) (normal book b) Nothing
+          else Fail $ TermMismatch span book (normalCtx book ctx) (normal book a) (normal book b) (Just $ "The goal is an equality: " ++ show (Eql t a b))
       where
         hasMetaEvidence term =
           termHasMet term
@@ -1165,7 +1165,9 @@ check d span book ctx term      goal =
     (Val v1, Eql (force book -> Num t) (force book -> Val v2) (force book -> Val v3)) -> do
       if v1 == v2 && v2 == v3
         then return term
-        else Fail $ TermMismatch span book (normalCtx book ctx) (normal book (Val v2)) (normal book (Val v3)) Nothing
+        else do
+          let v2' = if v2 == v1 then v3 else v2
+          Fail $ TermMismatch span book (normalCtx book ctx) (normal book (Val v1)) (normal book (Val v2')) (Just $ "The goal is an equality: " ++ show (Eql (Num t) (Val v2) (Val v3)))
 
     -- ctx |- a : ta
     -- ctx |- b : tb

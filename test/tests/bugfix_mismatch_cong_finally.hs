@@ -2,7 +2,7 @@
 
 import Test
 
--- fixed in commit (BendGen-align branch) 1f894d60578461a514bf9dacc3fc52ee6ac3e121
+-- fixed: error hint now mentions the goal
 --
 -- bug description:
 -- this gives an unhelpful error, that doesn't show Goal/Type
@@ -29,4 +29,9 @@ def cong(A: Set, B: Set, f: (A -> B), x: A, y: A, h: A{x==y}) -> B{f(x)==f(y)}:
 """
 
 main :: IO ()
-main = testFileChecks mismatch_cong
+-- main = testFileChecks mismatch_cong
+
+
+main = testFile mismatch_cong
+  "Mismatch in proving equality mentions the goal is Eql" $ \out err -> do
+    assert (err `has` "goal")
