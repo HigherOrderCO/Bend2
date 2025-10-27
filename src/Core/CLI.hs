@@ -6,6 +6,7 @@ module Core.CLI
 import Control.Monad (unless, when, forM_, foldM)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.List.Split (splitOn)
 import Data.Maybe (fromJust)
 import Debug.Trace
 import System.Environment (getArgs)
@@ -103,12 +104,10 @@ runCLIGo path mode needCheck = do
       let hsCode = HS.compile adjustedBook mainFQN
       putStrLn hsCode
     CLI_LIST_DEPENDENCIES -> do
-      let allRefs = collectAllRefs adjustedBook
-      mapM_ putStrLn (S.toList allRefs)
-      where
-        collectAllRefs (Book defs _ _) = 
-          S.unions $ map collectRefsFromDefn (M.elems defs)
-        collectRefsFromDefn (_, term, typ) = S.union (getDeps term) (getDeps typ)
+      case adjustedBook of
+        (Book _ nams _) -> do
+          let functionFile = head . splitOn "::"
+          mapM_ putStrLn (filter (\nam -> not $ functionFile nam == functionFile mainFQN) nams)
     CLI_GET_GEN_DEPS -> do
       print $ buildGenDepsBook checkedBook
 
