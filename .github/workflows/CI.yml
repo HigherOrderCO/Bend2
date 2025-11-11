@@ -50,3 +50,6 @@ jobs:
           
       - name: Build the project
         run: cabal build
+
+      - name: Test the project
+        run: cabal test
